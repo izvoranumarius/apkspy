@@ -1,0 +1,393 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{2583FC02-470D-4CB0-BE7D-F82433D8A980}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\app">
+      <UniqueIdentifier>{62AECF88-6CFA-4375-B4A4-4205470BFF06}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\core">
+      <UniqueIdentifier>{F21ECFD7-D07C-4357-9463-D3DACA1FF952}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\document">
+      <UniqueIdentifier>{3E060716-B848-49E2-8F88-173DF6F001A9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\image">
+      <UniqueIdentifier>{7FB7C1B9-DC83-4ABC-8D61-FE37D89A5B5D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\ui">
+      <UniqueIdentifier>{8759A4A3-AE22-48B0-9CFF-9D8AEB52FD77}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Libraries">
+      <UniqueIdentifier>{3695897C-D1BD-402B-A109-888A9BD5B80C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Libraries\imgui">
+      <UniqueIdentifier>{E1FE73EE-85AF-4B76-8965-10214B21D456}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Libraries\imgui\backends">
+      <UniqueIdentifier>{658BC1A4-7CFC-4C7A-B7A8-0B50784ED1F9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Libraries\libwebp">
+      <UniqueIdentifier>{60E75178-F5F2-476D-BEB0-35A72F8B8AF5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Libraries\libwebp\dec">
+      <UniqueIdentifier>{6B92E5E1-2629-49B2-BD5C-C8A1685115FC}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Libraries\libwebp\dsp">
+      <UniqueIdentifier>{E0EF09DC-C2C4-4E4F-BE65-EE4FC4B2AD0E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Libraries\libwebp\utils">
+      <UniqueIdentifier>{2CB47928-2B79-47E6-A9CF-CCBEFC3E518D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Libraries\miniz">
+      <UniqueIdentifier>{D6054228-62B3-442A-94B4-7ECA95811E15}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{478B54C6-C74C-4470-A742-414C7EFB4B77}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\app">
+      <UniqueIdentifier>{8D2A87F4-154D-400E-9A7F-E10EEA9651F8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\core">
+      <UniqueIdentifier>{D9E39410-78D4-448A-9C87-6C756C77AED2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\document">
+      <UniqueIdentifier>{CCA7BFCA-3B1C-4600-BC0C-7640FC333002}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\image">
+      <UniqueIdentifier>{C9AD22B9-276D-4DD0-AB03-3AB3D84505E5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\ui">
+      <UniqueIdentifier>{1DD236D3-3999-45BA-B092-269EEA1E99B1}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\app\Application.hpp">
+      <Filter>Header Files\app</Filter>
+    </ClInclude>
+    <ClInclude Include="src\app\Theme.hpp">
+      <Filter>Header Files\app</Filter>
+    </ClInclude>
+    <ClInclude Include="src\app\WindowFrame.hpp">
+      <Filter>Header Files\app</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\ApkArchive.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\AxmlDecoder.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\ContentSource.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\JadxRunner.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\SearchService.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\Settings.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\Project.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\TreeNode.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\Workspace.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\document\Document.hpp">
+      <Filter>Header Files\document</Filter>
+    </ClInclude>
+    <ClInclude Include="src\document\SyntaxHighlighter.hpp">
+      <Filter>Header Files\document</Filter>
+    </ClInclude>
+    <ClInclude Include="src\image\ImageDecoder.hpp">
+      <Filter>Header Files\image</Filter>
+    </ClInclude>
+    <ClInclude Include="src\image\Texture.hpp">
+      <Filter>Header Files\image</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\EditorPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\ExplorerPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\ShellIcons.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\FileBrowser.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\ImageViewer.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\OutputPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\Panel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\SearchPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\SettingsDialog.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\TitleBar.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\app\Application.cpp">
+      <Filter>Source Files\app</Filter>
+    </ClCompile>
+    <ClCompile Include="src\app\Theme.cpp">
+      <Filter>Source Files\app</Filter>
+    </ClCompile>
+    <ClCompile Include="src\app\WindowFrame.cpp">
+      <Filter>Source Files\app</Filter>
+    </ClCompile>
+    <ClCompile Include="src\app\main.cpp">
+      <Filter>Source Files\app</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\ApkArchive.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\AxmlDecoder.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\JadxRunner.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\Project.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\SearchService.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\Settings.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\Workspace.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\document\Document.cpp">
+      <Filter>Source Files\document</Filter>
+    </ClCompile>
+    <ClCompile Include="src\document\SyntaxHighlighter.cpp">
+      <Filter>Source Files\document</Filter>
+    </ClCompile>
+    <ClCompile Include="src\image\ImageDecoder.cpp">
+      <Filter>Source Files\image</Filter>
+    </ClCompile>
+    <ClCompile Include="src\image\Texture.cpp">
+      <Filter>Source Files\image</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\EditorPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\ExplorerPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\ShellIcons.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\FileBrowser.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\ImageViewer.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\OutputPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\SearchPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\SettingsDialog.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\TitleBar.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\imgui\imgui.cpp">
+      <Filter>Libraries\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\imgui\imgui_draw.cpp">
+      <Filter>Libraries\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\imgui\imgui_tables.cpp">
+      <Filter>Libraries\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\imgui\imgui_widgets.cpp">
+      <Filter>Libraries\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\imgui\backends\imgui_impl_glfw.cpp">
+      <Filter>Libraries\imgui\backends</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\imgui\backends\imgui_impl_opengl3.cpp">
+      <Filter>Libraries\imgui\backends</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\miniz\miniz.c">
+      <Filter>Libraries\miniz</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\miniz\miniz_tdef.c">
+      <Filter>Libraries\miniz</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\miniz\miniz_tinfl.c">
+      <Filter>Libraries\miniz</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\miniz\miniz_zip.c">
+      <Filter>Libraries\miniz</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\alpha_dec.c">
+      <Filter>Libraries\libwebp\dec</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\buffer_dec.c">
+      <Filter>Libraries\libwebp\dec</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\frame_dec.c">
+      <Filter>Libraries\libwebp\dec</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\idec_dec.c">
+      <Filter>Libraries\libwebp\dec</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\io_dec.c">
+      <Filter>Libraries\libwebp\dec</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\quant_dec.c">
+      <Filter>Libraries\libwebp\dec</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\tree_dec.c">
+      <Filter>Libraries\libwebp\dec</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\vp8_dec.c">
+      <Filter>Libraries\libwebp\dec</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\vp8l_dec.c">
+      <Filter>Libraries\libwebp\dec</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\webp_dec.c">
+      <Filter>Libraries\libwebp\dec</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing_neon.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing_sse2.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing_sse41.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\cpu.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\dec.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\dec_clip_tables.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\dec_neon.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\dec_sse2.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\dec_sse41.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\filters.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\filters_neon.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\filters_sse2.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\lossless.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\lossless_neon.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\lossless_sse2.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\lossless_sse41.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\rescaler.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\rescaler_neon.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\rescaler_sse2.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\upsampling.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\upsampling_neon.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\upsampling_sse2.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\upsampling_sse41.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\yuv.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\yuv_neon.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\yuv_sse2.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\yuv_sse41.c">
+      <Filter>Libraries\libwebp\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\bit_reader_utils.c">
+      <Filter>Libraries\libwebp\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\color_cache_utils.c">
+      <Filter>Libraries\libwebp\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\filters_utils.c">
+      <Filter>Libraries\libwebp\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\huffman_utils.c">
+      <Filter>Libraries\libwebp\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\palette.c">
+      <Filter>Libraries\libwebp\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\quant_levels_dec_utils.c">
+      <Filter>Libraries\libwebp\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\random_utils.c">
+      <Filter>Libraries\libwebp\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\rescaler_utils.c">
+      <Filter>Libraries\libwebp\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\thread_utils.c">
+      <Filter>Libraries\libwebp\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\utils.c">
+      <Filter>Libraries\libwebp\utils</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

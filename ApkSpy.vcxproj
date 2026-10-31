@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{8F3A2C41-5B7D-4E19-9A60-3C1D7E2B4F55}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>ApkSpy</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)build\obj\$(Configuration)\</IntDir>
+    <LinkIncremental Condition="'$(Configuration)'=='Debug'">true</LinkIncremental>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)include;$(ProjectDir)include\imgui;$(ProjectDir)include\imgui\backends;$(ProjectDir)include\miniz;$(ProjectDir)include\libwebp;$(ProjectDir)include\glfw;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)lib\glfw\lib-vc2022;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>glfw3.lib;dwmapi.lib;opengl32.lib;gdi32.lib;shell32.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>_ITERATOR_DEBUG_LEVEL=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="src\app\Application.hpp" />
+    <ClInclude Include="src\app\Theme.hpp" />
+    <ClInclude Include="src\app\WindowFrame.hpp" />
+    <ClInclude Include="src\core\ApkArchive.hpp" />
+    <ClInclude Include="src\core\AxmlDecoder.hpp" />
+    <ClInclude Include="src\core\ContentSource.hpp" />
+    <ClInclude Include="src\core\JadxRunner.hpp" />
+    <ClInclude Include="src\core\SearchService.hpp" />
+    <ClInclude Include="src\core\Settings.hpp" />
+    <ClInclude Include="src\core\Project.hpp" />
+    <ClInclude Include="src\core\TreeNode.hpp" />
+    <ClInclude Include="src\core\Workspace.hpp" />
+    <ClInclude Include="src\document\Document.hpp" />
+    <ClInclude Include="src\document\SyntaxHighlighter.hpp" />
+    <ClInclude Include="src\image\ImageDecoder.hpp" />
+    <ClInclude Include="src\image\Texture.hpp" />
+    <ClInclude Include="src\ui\EditorPanel.hpp" />
+    <ClInclude Include="src\ui\ExplorerPanel.hpp" />
+    <ClInclude Include="src\ui\ShellIcons.hpp" />
+    <ClInclude Include="src\ui\FileBrowser.hpp" />
+    <ClInclude Include="src\ui\ImageViewer.hpp" />
+    <ClInclude Include="src\ui\OutputPanel.hpp" />
+    <ClInclude Include="src\ui\Panel.hpp" />
+    <ClInclude Include="src\ui\SearchPanel.hpp" />
+    <ClInclude Include="src\ui\SettingsDialog.hpp" />
+    <ClInclude Include="src\ui\TitleBar.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\app\Application.cpp" />
+    <ClCompile Include="src\app\Theme.cpp" />
+    <ClCompile Include="src\app\WindowFrame.cpp" />
+    <ClCompile Include="src\app\main.cpp" />
+    <ClCompile Include="src\core\ApkArchive.cpp" />
+    <ClCompile Include="src\core\AxmlDecoder.cpp" />
+    <ClCompile Include="src\core\JadxRunner.cpp" />
+    <ClCompile Include="src\core\Project.cpp" />
+    <ClCompile Include="src\core\SearchService.cpp" />
+    <ClCompile Include="src\core\Settings.cpp" />
+    <ClCompile Include="src\core\Workspace.cpp" />
+    <ClCompile Include="src\document\Document.cpp" />
+    <ClCompile Include="src\document\SyntaxHighlighter.cpp" />
+    <ClCompile Include="src\image\ImageDecoder.cpp" />
+    <ClCompile Include="src\image\Texture.cpp" />
+    <ClCompile Include="src\ui\EditorPanel.cpp" />
+    <ClCompile Include="src\ui\ExplorerPanel.cpp" />
+    <ClCompile Include="src\ui\ShellIcons.cpp" />
+    <ClCompile Include="src\ui\FileBrowser.cpp" />
+    <ClCompile Include="src\ui\ImageViewer.cpp" />
+    <ClCompile Include="src\ui\OutputPanel.cpp" />
+    <ClCompile Include="src\ui\SearchPanel.cpp" />
+    <ClCompile Include="src\ui\SettingsDialog.cpp" />
+    <ClCompile Include="src\ui\TitleBar.cpp" />
+    <ClCompile Include="lib\imgui\imgui.cpp" />
+    <ClCompile Include="lib\imgui\imgui_draw.cpp" />
+    <ClCompile Include="lib\imgui\imgui_tables.cpp" />
+    <ClCompile Include="lib\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="lib\imgui\backends\imgui_impl_glfw.cpp" />
+    <ClCompile Include="lib\imgui\backends\imgui_impl_opengl3.cpp" />
+    <ClCompile Include="lib\miniz\miniz.c" />
+    <ClCompile Include="lib\miniz\miniz_tdef.c" />
+    <ClCompile Include="lib\miniz\miniz_tinfl.c" />
+    <ClCompile Include="lib\miniz\miniz_zip.c" />
+    <ClCompile Include="lib\libwebp\src\dec\alpha_dec.c" />
+    <ClCompile Include="lib\libwebp\src\dec\buffer_dec.c" />
+    <ClCompile Include="lib\libwebp\src\dec\frame_dec.c" />
+    <ClCompile Include="lib\libwebp\src\dec\idec_dec.c" />
+    <ClCompile Include="lib\libwebp\src\dec\io_dec.c" />
+    <ClCompile Include="lib\libwebp\src\dec\quant_dec.c" />
+    <ClCompile Include="lib\libwebp\src\dec\tree_dec.c" />
+    <ClCompile Include="lib\libwebp\src\dec\vp8_dec.c" />
+    <ClCompile Include="lib\libwebp\src\dec\vp8l_dec.c" />
+    <ClCompile Include="lib\libwebp\src\dec\webp_dec.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing_neon.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing_sse2.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing_sse41.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\cpu.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\dec.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\dec_clip_tables.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\dec_neon.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\dec_sse2.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\dec_sse41.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\filters.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\filters_neon.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\filters_sse2.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\lossless.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\lossless_neon.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\lossless_sse2.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\lossless_sse41.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\rescaler.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\rescaler_neon.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\rescaler_sse2.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\upsampling.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\upsampling_neon.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\upsampling_sse2.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\upsampling_sse41.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\yuv.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\yuv_neon.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\yuv_sse2.c" />
+    <ClCompile Include="lib\libwebp\src\dsp\yuv_sse41.c" />
+    <ClCompile Include="lib\libwebp\src\utils\bit_reader_utils.c" />
+    <ClCompile Include="lib\libwebp\src\utils\color_cache_utils.c" />
+    <ClCompile Include="lib\libwebp\src\utils\filters_utils.c" />
+    <ClCompile Include="lib\libwebp\src\utils\huffman_utils.c" />
+    <ClCompile Include="lib\libwebp\src\utils\palette.c" />
+    <ClCompile Include="lib\libwebp\src\utils\quant_levels_dec_utils.c" />
+    <ClCompile Include="lib\libwebp\src\utils\random_utils.c" />
+    <ClCompile Include="lib\libwebp\src\utils\rescaler_utils.c" />
+    <ClCompile Include="lib\libwebp\src\utils\thread_utils.c" />
+    <ClCompile Include="lib\libwebp\src\utils\utils.c" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
