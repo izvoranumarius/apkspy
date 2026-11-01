@@ -2,3 +2,12 @@ build/
 .vs/
 *.user
 *.ini
+apkspy.settings
+*.rar
+*.zip
+*.7z
+
+*.obj
+*.pdb
+*.ilk
+*.exe
