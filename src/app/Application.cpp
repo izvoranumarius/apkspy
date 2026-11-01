@@ -1,6 +1,8 @@
 #include "app/Application.hpp"
 #include <chrono>
+#include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <thread>
 #include <GLFW/glfw3.h>
@@ -10,21 +12,63 @@
 #include "ui/EditorPanel.hpp"
 #include "ui/ExplorerPanel.hpp"
 #include "ui/OutputPanel.hpp"
+#include "ui/OverviewPanel.hpp"
 #include "ui/SearchPanel.hpp"
+#include "ui/ShellIcons.hpp"
 #include "app/Theme.hpp"
+#include "core/IcoLoader.hpp"
+#include "core/Paths.hpp"
+#include "core/TextUtils.hpp"
+#include "image/Texture.hpp"
 
 namespace fs = std::filesystem;
 
-static const char* kSettingsFile = "apkspy.settings";
+namespace {
+// Config files live in the per-user config directory (see Paths.hpp); the
+// first start after the move imports the old files from the working
+// directory so nothing is lost.
+void migrateLegacyConfig(const char* name) {
+    const std::string config = pathutil::configFile(name);
+    std::error_code ec;
+    if (fs::exists(pathutil::fromUtf8(config), ec)) return;
+    if (fs::exists(name, ec)) fs::copy_file(name, pathutil::fromUtf8(config), ec);
+}
+
+// Snapshot of the open tabs to store in the project file.
+std::vector<Project::Tab> collectTabs(const Workspace& workspace) {
+    std::vector<Project::Tab> tabs;
+    for (const auto& doc : workspace.documents()) {
+        if (doc->isPreview() || !doc->node()) continue;
+        tabs.push_back({doc->rootKind(), doc->rootGroup(), doc->node()->path()});
+    }
+    return tabs;
+}
+
+// Snapshot of the APK references to store in the project file: the live
+// workspace (so add/remove is reflected), plus entries whose APK file is
+// currently missing - those stay in the project so the reference survives
+// instead of being silently dropped by the save.
+std::vector<ProjectApk> collectApks(const Workspace& workspace, const Project& project) {
+    std::vector<ProjectApk> apks;
+    for (const Root* root : workspace.apkRoots()) apks.push_back({root->apkPath, root->title});
+    std::error_code ec;
+    for (const ProjectApk& known : project.apks())
+        if (!fs::exists(pathutil::fromUtf8(known.path), ec)) apks.push_back(known);
+    return apks;
+}
+}  // namespace
 
 Application::Application()
     : settingsDialog_(workspace_, settings_) {
     initWindow();
     initImGui();
     panels_.push_back(std::make_unique<ExplorerPanel>(workspace_));
-    panels_.push_back(std::make_unique<EditorPanel>(workspace_, settings_));
+    auto editor = std::make_unique<EditorPanel>(workspace_, settings_);
+    editor_ = editor.get();
+    panels_.push_back(std::move(editor));
     panels_.push_back(std::make_unique<OutputPanel>(workspace_));
     panels_.push_back(std::make_unique<SearchPanel>(workspace_));
+    panels_.push_back(std::make_unique<OverviewPanel>(workspace_));
     loadSettings();
     initTitleBar();
 }
@@ -45,6 +89,40 @@ void Application::initWindow() {
     glfwSetWindowUserPointer(window_, this);
     glfwSetDropCallback(window_, &Application::onDrop);
     glfwSetWindowRefreshCallback(window_, &Application::onRefresh);
+    // The OS close (X / Alt+F4 / system menu) goes through the same
+    // confirmation as File > Exit instead of discarding unsaved work.
+    glfwSetWindowCloseCallback(window_, &Application::onCloseRequested);
+    glfwSetWindowContentScaleCallback(window_, &Application::onContentScale);
+    float sx = 1.f, sy = 1.f;
+    glfwGetWindowContentScale(window_, &sx, &sy);
+    contentScale_ = std::clamp(std::max(sx, sy), 0.75f, 3.f);
+    loadWindowIcon();
+}
+
+void Application::loadWindowIcon() {
+    const std::string icoPath = pathutil::assetsFile("favicon.ico");
+    if (icoPath.empty()) return;  // no asset: keep the platform default icon
+    std::vector<uint8_t> bytes;
+    {
+        std::ifstream in(pathutil::fromUtf8(icoPath), std::ios::binary);
+        bytes.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    }
+    std::vector<ico::Image> frames;
+    std::string err;
+    if (bytes.empty() || !ico::decode(bytes, frames, err) || frames.empty()) {
+        // The icon is decorative: never let a bad asset break the start-up.
+        if (!err.empty()) workspace_.log("favicon.ico could not be used: " + err);
+        return;
+    }
+    // OS window + taskbar icon: GLFW picks the size that fits each surface.
+    std::vector<GLFWimage> images;
+    images.reserve(frames.size());
+    for (const ico::Image& f : frames)
+        images.push_back({f.width, f.height, const_cast<unsigned char*>(f.rgba.data())});
+    glfwSetWindowIcon(window_, (int)images.size(), images.data());
+    // Best frame for the custom title bar (~32 logical px).
+    if (const ico::Image* pick = ico::bestFrame(frames, 32))
+        appIcon_ = std::make_unique<Texture>(pick->rgba.data(), pick->width, pick->height);
 }
 
 void Application::initTitleBar() {
@@ -55,8 +133,12 @@ void Application::initTitleBar() {
         return;
     }
     titleBar_ = std::make_unique<TitleBar>(*windowFrame_);
+    titleBar_->setCloseHandler([this] { requestAction(PendingAction::Exit); });
     titleBar_->addMenu("File", [this] { drawFileMenu(); });
     titleBar_->addMenu("View", [this] { drawViewMenu(); });
+    if (appIcon_)
+        titleBar_->setIcon((ImTextureID)(uintptr_t)appIcon_->id(), (float)appIcon_->width(),
+                           (float)appIcon_->height());
 }
 
 void Application::initImGui() {
@@ -64,15 +146,19 @@ void Application::initImGui() {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;
-    io.IniFilename = "apkspy.ini";  // dock layout persistence between sessions
-    Theme::loadFonts(io);
+    migrateLegacyConfig("apkspy.ini");
+    static const std::string iniPath = pathutil::configFile("apkspy.ini");
+    io.IniFilename = iniPath.c_str();  // dock layout persistence between sessions
+    Theme::loadFonts(io, contentScale_);
     Theme::apply();
+    Theme::scaleStyle(contentScale_);
     ImGui_ImplGlfw_InitForOpenGL(window_, true);
     ImGui_ImplOpenGL3_Init("#version 130");
 }
 
 void Application::loadSettings() {
-    settings_.load(kSettingsFile);
+    migrateLegacyConfig("apkspy.settings");
+    settings_.load(pathutil::configFile("apkspy.settings"));
     workspace_.setJadxPath(settings_.getString(Settings::kJadxPath, "jadx"));
     workspace_.setJadxArgs(settings_.getString(Settings::kJadxArgs, ""));
     for (auto& panel : panels_)
@@ -91,7 +177,7 @@ void Application::restoreSession() {
     std::string last = settings_.getString(Settings::kLastProject, "");
     if (last.empty()) return;
     std::error_code ec;
-    if (!fs::exists(last, ec)) {
+    if (!fs::exists(pathutil::fromUtf8(last), ec)) {
         workspace_.log("Last session: project no longer exists: " + last);
         return;
     }
@@ -106,16 +192,21 @@ void Application::saveSettings() {
     int n = std::min<size_t>(recents_.size(), 10);
     settings_.set(Settings::kRecentCount, n);
     for (int i = 0; i < n; ++i) settings_.set(Settings::recentKey(i), recents_[(size_t)i]);
-    settings_.save(kSettingsFile);
+    settings_.save(pathutil::configFile("apkspy.settings"));
 }
 
 void Application::shutdown() {
     if (!window_) return;
     saveSettings();
+    // Stop a running jadx immediately instead of letting an invisible
+    // process hold the exit hostage.
+    workspace_.cancelDecompile();
     workspace_.closeAll();
     panels_.clear();
     titleBar_.reset();
     windowFrame_.reset();
+    // Icon textures must be released while the GL context is still alive.
+    ShellIcons::shutdown();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -129,6 +220,21 @@ void Application::onRefresh(GLFWwindow* window) {
     if (app && app->window_) app->frame();
 }
 
+void Application::onCloseRequested(GLFWwindow* window) {
+    auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
+    if (!app) return;
+    // Cancel the OS close and take the File > Exit path instead: unsaved
+    // edits get their confirmation, a clean project closes immediately.
+    glfwSetWindowShouldClose(window, GLFW_FALSE);
+    app->requestAction(PendingAction::Exit);
+}
+
+void Application::onContentScale(GLFWwindow* window, float x, float y) {
+    auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
+    if (!app) return;
+    app->pendingContentScale_ = std::clamp(std::max(x, y), 0.75f, 3.f);
+}
+
 void Application::onDrop(GLFWwindow* window, int count, const char** paths) {
     if (count <= 0) return;
     auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
@@ -137,8 +243,7 @@ void Application::onDrop(GLFWwindow* window, int count, const char** paths) {
     if (!app->project_.isOpen()) app->project_.reset();
     std::vector<std::string> apks;
     for (int i = 0; i < count; ++i) {
-        std::string ext = fs::path(paths[i]).extension().string();
-        for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+        std::string ext = tex::asciiLower(fs::path(paths[i]).extension().string());
         if (ext == ".apk") apks.push_back(paths[i]);
     }
     if (!apks.empty()) {
@@ -149,7 +254,14 @@ void Application::onDrop(GLFWwindow* window, int count, const char** paths) {
 
 int Application::run() {
     while (!glfwWindowShouldClose(window_)) {
-        glfwPollEvents();
+        // Render continuously while something is in flight (jadx streaming
+        // results, a running search); otherwise wait for input, waking up
+        // ~10 times per second so the caret keeps blinking. Expose events
+        // (onRefresh) trigger frames on their own.
+        const bool busy = workspace_.jadx().state() == JadxRunner::State::Running ||
+                          workspace_.search().running() || ImGui::GetIO().WantTextInput;
+        if (busy) glfwPollEvents();
+        else glfwWaitEventsTimeout(0.10);
         if (glfwGetWindowAttrib(window_, GLFW_ICONIFIED)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             continue;
@@ -162,6 +274,22 @@ int Application::run() {
 void Application::frame() {
     if (inFrame_) return;
     inFrame_ = true;
+
+    // DPI change: rebuild the font atlas and rescale the style before
+    // anything renders with them.
+    if (pendingContentScale_ > 0.f) {
+        if (std::fabs(pendingContentScale_ - contentScale_) > 0.01f) {
+            contentScale_ = pendingContentScale_;
+            ImGuiIO& io = ImGui::GetIO();
+            io.Fonts->Clear();
+            Theme::loadFonts(io, contentScale_);
+            Theme::scaleStyle(contentScale_);
+            ImGui_ImplOpenGL3_DestroyFontsTexture();
+            ImGui_ImplOpenGL3_CreateFontsTexture();
+        }
+        pendingContentScale_ = 0.f;
+    }
+
     workspace_.update();
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
@@ -171,6 +299,13 @@ void Application::frame() {
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) requestAction(PendingAction::OpenProject);
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveRequested_ = true;
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Comma, false)) settingsRequested_ = true;
+    // Back/Forward (M2): Alt+Left / Alt+Right and mouse buttons 4/5. Alt+Arrow
+    // is not used by ImGui text input, so no WantTextInput guard is needed -
+    // adding one would block the legitimate case of focus in the editor.
+    if (io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) workspace_.navBack();
+    if (io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) workspace_.navForward();
+    if (ImGui::IsMouseClicked(3)) workspace_.navBack();
+    if (ImGui::IsMouseClicked(4)) workspace_.navForward();
 
     updateTitle();
     if (titleBar_) titleBar_->render();
@@ -190,9 +325,9 @@ void Application::frame() {
 
     // Modal file browsers ---------------------------------------------------
     std::string picked;
-    if (projOpenBrowser_.render("Open Project"), projOpenBrowser_.takeAccepted(picked))
+    if (projOpenBrowser_.render(), projOpenBrowser_.takeAccepted(picked))
         openProject(picked);
-    if (projSaveBrowser_.render("Save Project As"), projSaveBrowser_.takeAccepted(picked)) {
+    if (projSaveBrowser_.render(), projSaveBrowser_.takeAccepted(picked)) {
         if (saveProjectAs(picked) && pendingAction_ != PendingAction::None) {
             PendingAction action = pendingAction_;
             pendingAction_ = PendingAction::None;
@@ -207,7 +342,7 @@ void Application::frame() {
         pendingAction_ = PendingAction::None;
     }
     std::vector<std::string> apks;
-    if (apkBrowser_.render("Add APK Files"), apkBrowser_.takeAcceptedMulti(apks)) addApkPaths(apks);
+    if (apkBrowser_.render(), apkBrowser_.takeAcceptedMulti(apks)) addApkPaths(apks);
 
     if (settingsRequested_) {
         settingsRequested_ = false;
@@ -236,18 +371,27 @@ bool Application::projectHasUnsavedChanges() const {
     // Edited documents are part of the project (annotations).
     for (const auto& doc : workspace_.documents())
         if (doc->isDirty()) return true;
-    // The workspace APK set must match the project.
+    // The open APK set must match the project. Entries whose file is
+    // missing from disk are unresolved: they stay in the project (and in
+    // the saved file) and are excluded here, so a missing APK neither
+    // flags the project as dirty forever nor gets dropped by a save.
     std::vector<Root*> apks = workspace_.apkRoots();
-    if (apks.size() != project_.apks().size()) return true;
-    for (size_t i = 0; i < apks.size(); ++i)
-        if (apks[i]->apkPath != project_.apks()[i].path || apks[i]->title != project_.apks()[i].group)
-            return true;
-    // Permanently opened tabs must match the saved session.
-    std::vector<Project::Tab> tabs;
-    for (const auto& doc : workspace_.documents()) {
-        if (doc->isPreview() || !doc->node()) continue;
-        tabs.push_back({doc->rootKind(), doc->rootGroup(), doc->node()->path()});
+    size_t resolved = 0;
+    std::error_code ec;
+    for (const ProjectApk& apk : project_.apks()) {
+        if (!fs::exists(pathutil::fromUtf8(apk.path), ec)) continue;
+        ++resolved;
+        const Root* match = nullptr;
+        for (const Root* r : apks)
+            if (r->apkPath == apk.path) {
+                match = r;
+                break;
+            }
+        if (!match || match->title != apk.group) return true;
     }
+    if (apks.size() != resolved) return true;  // added or removed an APK
+    // Permanently opened tabs must match the saved session.
+    std::vector<Project::Tab> tabs = collectTabs(workspace_);
     const std::vector<Project::Tab>& saved = project_.tabs();
     if (tabs.size() != saved.size()) return true;
     for (size_t i = 0; i < tabs.size(); ++i)
@@ -256,35 +400,6 @@ bool Application::projectHasUnsavedChanges() const {
             return true;
     return false;
 }
-
-namespace {
-// Snapshot of the APK references to store in the project file: taken from
-// the live workspace (so add/remove is reflected), keeping the jadx output
-// directories already known for each APK.
-std::vector<ProjectApk> collectApks(const Workspace& workspace, Project& project) {
-    std::vector<ProjectApk> apks;
-    for (const Root* root : workspace.apkRoots()) {
-        // Prefer the live jadx output directory (set when the APK was added
-        // or decompiled); fall back to what the project already knows.
-        std::string jadxOut;
-        if (const Root* dec = workspace.rootByGroup(root->title, Root::Kind::Decompiled))
-            jadxOut = dec->outDir;
-        else if (const ProjectApk* known = project.findApkByPath(root->apkPath))
-            jadxOut = known->jadxOut;
-        apks.push_back({root->apkPath, root->title, jadxOut});
-    }
-    return apks;
-}
-
-std::vector<Project::Tab> collectTabs(const Workspace& workspace) {
-    std::vector<Project::Tab> tabs;
-    for (const auto& doc : workspace.documents()) {
-        if (doc->isPreview() || !doc->node()) continue;
-        tabs.push_back({doc->rootKind(), doc->rootGroup(), doc->node()->path()});
-    }
-    return tabs;
-}
-}  // namespace
 
 void Application::requestAction(PendingAction action, const std::string& path) {
     if (!project_.isOpen() || !projectHasUnsavedChanges()) {
@@ -402,15 +517,16 @@ bool Application::openProject(const std::string& path) {
     }
     workspace_.closeAll();
     project_ = std::move(loaded);
-    // Reopen every APK; saved jadx results are reattached from disk when the
-    // output directories still exist, otherwise jadx runs again.
+    // Reopen every APK. The jadx output directory is derived from each APK
+    // itself; a jadxOut key inside the project file is never trusted.
+    // Missing files are reported and their entries stay in the project.
     for (const ProjectApk& apk : project_.apks()) {
         std::error_code ec;
-        if (!fs::exists(apk.path, ec)) {
+        if (!fs::exists(pathutil::fromUtf8(apk.path), ec)) {
             workspace_.log("Missing APK file: " + apk.path);
             continue;
         }
-        workspace_.addApk(apk.path, apk.group, apk.jadxOut);
+        workspace_.addApk(apk.path, apk.group);
     }
     std::vector<PendingTab> pending;
     for (const Project::Tab& tab : project_.tabs()) {
@@ -429,9 +545,10 @@ bool Application::openProject(const std::string& path) {
 void Application::addApkPaths(const std::vector<std::string>& paths) {
     if (!project_.isOpen()) project_.reset();
     for (const std::string& path : paths) {
-        std::string group = project_.uniqueGroupName(fs::path(path).stem().string());
+        std::string group = project_.uniqueGroupName(
+            pathutil::toUtf8(fs::path(pathutil::fromUtf8(path)).stem()));
         if (!workspace_.addApk(path, group)) continue;
-        project_.addApk(fs::path(path).lexically_normal().string(), group);
+        project_.addApk(pathutil::normalize(path), group);
     }
 }
 
@@ -473,8 +590,8 @@ void Application::drawRecentProjects() {
         } else {
             for (const std::string& path : recents_) {
                 std::error_code ec;
-                bool exists = fs::exists(path, ec);
-                const std::string label = fs::path(path).filename().string();
+                bool exists = fs::exists(pathutil::fromUtf8(path), ec);
+                const std::string label = pathutil::toUtf8(fs::path(pathutil::fromUtf8(path)).filename());
                 if (ImGui::MenuItem(label.c_str(), nullptr, false, exists))
                     requestAction(PendingAction::OpenProject, path);
                 if (exists && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", path.c_str());
@@ -491,6 +608,15 @@ void Application::drawRecentProjects() {
 
 void Application::drawViewMenu() {
     for (auto& panel : panels_) ImGui::MenuItem(panel->title().c_str(), nullptr, panel->visiblePtr());
+    ImGui::Separator();
+    // Document commands live in the shared function so both menu bars (the
+    // ImGui main menu bar and the custom title bar) offer them.
+    const Document* active = workspace_.activeDocument();
+    const bool codeActive = active && active->mode() == Document::Mode::Code;
+    if (ImGui::MenuItem("Navigate Back", "Alt+Left", false, workspace_.canNavBack())) workspace_.navBack();
+    if (ImGui::MenuItem("Navigate Forward", "Alt+Right", false, workspace_.canNavForward())) workspace_.navForward();
+    if (ImGui::MenuItem("Find...", "Ctrl+F", false, codeActive)) editor_->requestFind();
+    if (ImGui::MenuItem("Go to Line...", "Ctrl+G", false, codeActive)) editor_->requestGoToLine();
     ImGui::Separator();
     if (ImGui::MenuItem("Reset Layout")) resetLayout_ = true;
 }
@@ -509,10 +635,18 @@ void Application::drawMenuBar() {
 }
 
 void Application::updateTitle() {
+    // The dirty check walks the documents and roots; run it only when the
+    // workspace, the project or a document actually changed.
+    const uint64_t version = workspace_.stateVersion() + Document::editSerial();
+    if (version != dirtyCheckVersion_ || project_.epoch() != dirtyCheckEpoch_) {
+        dirtyCheckVersion_ = version;
+        dirtyCheckEpoch_ = project_.epoch();
+        dirtyCheckResult_ = projectHasUnsavedChanges();
+    }
     std::string title = "ApkSpy";
     if (project_.isOpen()) {
         title = project_.name();
-        if (projectHasUnsavedChanges()) title += " *";
+        if (dirtyCheckResult_) title += " *";
         title += " - ApkSpy";
     }
     if (titleBar_) titleBar_->setTitle(title);
@@ -570,6 +704,7 @@ void Application::buildDefaultLayout(unsigned int dockId, ImVec2 size) {
     ImGuiID center = 0;
     ImGuiID bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 0.28f, nullptr, &center);
     ImGui::DockBuilderDockWindow("Explorer", left);
+    ImGui::DockBuilderDockWindow("Overview", left);
     ImGui::DockBuilderDockWindow("Editor", center);
     ImGui::DockBuilderDockWindow("Output", bottom);
     ImGui::DockBuilderDockWindow("Search", bottom);

@@ -1,9 +1,9 @@
 #pragma once
 #include <algorithm>
-#include <cctype>
 #include <memory>
 #include <string>
 #include <vector>
+#include "core/TextUtils.hpp"
 
 enum class NodeKind {
     Folder, Java, Kotlin, Xml, Json, Smali, Groovy, Yaml, Web,
@@ -63,8 +63,7 @@ public:
             if (fileName == n) return NodeKind::Text;
         size_t dot = fileName.find_last_of('.');
         if (dot == std::string::npos) return NodeKind::Binary;
-        std::string ext = fileName.substr(dot + 1);
-        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+        std::string ext = tex::asciiLower(fileName.substr(dot + 1));
         if (ext == "java") return NodeKind::Java;
         if (ext == "kt" || ext == "kts") return NodeKind::Kotlin;
         if (ext == "xml") return NodeKind::Xml;

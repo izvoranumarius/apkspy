@@ -17,6 +17,10 @@
 class ShellIcons {
 public:
     static ShellIcons& instance();
+    // Frees every cached icon texture. MUST be called while the GL context
+    // is still current (Application::shutdown does), because the singleton
+    // itself outlives the window otherwise.
+    static void shutdown();
 
     // ImGui texture id of the node's default shell icon, or 0 when
     // unavailable (non-Windows builds, extraction failure, no association).

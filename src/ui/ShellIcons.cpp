@@ -6,13 +6,20 @@ ShellIcons& ShellIcons::instance() {
     return s;
 }
 
+void ShellIcons::shutdown() {
+#ifdef _WIN32
+    ShellIcons& s = instance();
+    s.cache_.clear();
+    s.folder_ = 0;
+    s.generic_ = 0;
+    s.apk_ = 0;
+#endif
+}
+
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "gdi32.lib")
-#pragma comment(lib, "user32.lib")
 #include <cctype>
 #include <utility>
 #include <vector>

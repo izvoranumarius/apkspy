@@ -236,11 +236,9 @@ void SyntaxHighlighter::tokenizeSmali(const std::string& line, std::vector<Span>
             }
         }
         if (std::isdigit(c) || c == '-') {
+            // smali literals: -42, 0x1F, wide register pairs
             size_t j = i + 1;
-            while (j < n && (std::isdigit((unsigned char)line[j]) || line[j] == 'x' ||
-                             (std::isxdigit((unsigned char)line[j]) && line[j - 1] == 'x' && false) ||
-                             std::isalnum((unsigned char)line[j])))
-                ++j;
+            while (j < n && (std::isalnum((unsigned char)line[j]) || line[j] == '-')) ++j;
             push(out, i, j, kNumber);
             i = j;
             continue;
@@ -265,6 +263,11 @@ void SyntaxHighlighter::tokenizeYaml(const std::string& line, std::vector<Span>&
     while (i < n && (line[i] == ' ' || line[i] == '-')) {
         push(out, i, i + 1, kPunct);
         ++i;
+    }
+    // A '#' before the key starts a full-line comment.
+    if (i < n && line[i] == '#') {
+        push(out, i, n, kComment);
+        return;
     }
     size_t colon = line.find(':', i);
     size_t comment = line.find('#', i);
@@ -333,8 +336,6 @@ void SyntaxHighlighter::tokenizeCss(const std::string& line, bool& inBlock, std:
         }
         size_t j = i;
         while (j < n && line[j] != '{' && line[j] != '}' && line[j] != ';' && line[j] != ':' && line[j] != '#') ++j;
-        size_t end = j;
-        while (end > i && std::isspace((unsigned char)line[end - 1])) --end;
         bool beforeBrace = j < n && line[j] == '{';
         push(out, i, j, beforeBrace ? kKeyword : kAttr);  // selector vs property
         i = j;

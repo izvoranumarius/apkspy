@@ -17,7 +17,6 @@ constexpr float kButtonWidth = 46.f;
 constexpr float kMenuPadding = 11.f;
 
 ImVec2 center(const Rect& r) { return ImVec2(std::floor((r.left + r.right) * 0.5f), std::floor((r.top + r.bottom) * 0.5f)); }
-ImVec2 corner(float x, float y) { return ImVec2(x, y); }
 }
 
 void TitleBar::addMenu(std::string label, std::function<void()> contents) {
@@ -30,34 +29,42 @@ void TitleBar::addMenu(std::string label, std::function<void()> contents) {
 
 void TitleBar::drawIcon(ImDrawList* dl, const Rect& area) const {
     ImVec2 c = center(area);
-    dl->AddRectFilled(corner(c.x - 8.f, c.y - 8.f), corner(c.x + 8.f, c.y + 8.f), kAccent, 3.f);
+    if (icon_ != 0 && iconWidth_ > 0.f && iconHeight_ > 0.f) {
+        // Fit the favicon into the same 16x16 box the placeholder uses.
+        const float side = std::max(iconWidth_, iconHeight_);
+        const float scale = std::min(1.f, 16.f / side);
+        const float w = iconWidth_ * scale, h = iconHeight_ * scale;
+        dl->AddImage(icon_, ImVec2(c.x - w * 0.5f, c.y - h * 0.5f), ImVec2(c.x + w * 0.5f, c.y + h * 0.5f));
+        return;
+    }
+    dl->AddRectFilled(ImVec2(c.x - 8.f, c.y - 8.f), ImVec2(c.x + 8.f, c.y + 8.f), kAccent, 3.f);
     ImVec2 ts = ImGui::CalcTextSize("A");
     dl->AddText(ImVec2(std::floor(c.x - ts.x * 0.5f), std::floor(c.y - ts.y * 0.5f)), IM_COL32(255, 255, 255, 255), "A");
 }
 
 void TitleBar::drawCaptionBackground(ImDrawList* dl, const Rect& area, ImU32 color) const {
-    dl->AddRectFilled(corner(area.left, area.top), corner(area.right, area.bottom), color);
+    dl->AddRectFilled(ImVec2(area.left, area.top), ImVec2(area.right, area.bottom), color);
 }
 
 void TitleBar::drawGlyph(ImDrawList* dl, const Rect& area, Glyph glyph, ImU32 color) const {
     ImVec2 c = center(area);
     switch (glyph) {
     case Glyph::Minimize:
-        dl->AddLine(corner(c.x - 5.f, c.y + 0.5f), corner(c.x + 5.f, c.y + 0.5f), color, 1.f);
+        dl->AddLine(ImVec2(c.x - 5.f, c.y + 0.5f), ImVec2(c.x + 5.f, c.y + 0.5f), color, 1.f);
         break;
     case Glyph::Maximize:
-        dl->AddRect(corner(c.x - 4.5f, c.y - 4.5f), corner(c.x + 5.5f, c.y + 5.5f), color, 0.f, 0, 1.f);
+        dl->AddRect(ImVec2(c.x - 4.5f, c.y - 4.5f), ImVec2(c.x + 5.5f, c.y + 5.5f), color, 0.f, 0, 1.f);
         break;
     case Glyph::Restore: {
-        dl->AddRect(corner(c.x - 4.5f, c.y - 2.5f), corner(c.x + 3.5f, c.y + 5.5f), color, 0.f, 0, 1.f);
-        ImVec2 back[5] = {corner(c.x - 2.5f, c.y - 2.5f), corner(c.x - 2.5f, c.y - 4.5f), corner(c.x + 5.5f, c.y - 4.5f),
-                          corner(c.x + 5.5f, c.y + 3.5f), corner(c.x + 3.5f, c.y + 3.5f)};
+        dl->AddRect(ImVec2(c.x - 4.5f, c.y - 2.5f), ImVec2(c.x + 3.5f, c.y + 5.5f), color, 0.f, 0, 1.f);
+        ImVec2 back[5] = {ImVec2(c.x - 2.5f, c.y - 2.5f), ImVec2(c.x - 2.5f, c.y - 4.5f), ImVec2(c.x + 5.5f, c.y - 4.5f),
+                          ImVec2(c.x + 5.5f, c.y + 3.5f), ImVec2(c.x + 3.5f, c.y + 3.5f)};
         dl->AddPolyline(back, 5, color, ImDrawFlags_None, 1.f);
         break;
     }
     case Glyph::Close:
-        dl->AddLine(corner(c.x - 5.f, c.y - 5.f), corner(c.x + 5.f, c.y + 5.f), color, 1.f);
-        dl->AddLine(corner(c.x + 5.f, c.y - 5.f), corner(c.x - 5.f, c.y + 5.f), color, 1.f);
+        dl->AddLine(ImVec2(c.x - 5.f, c.y - 5.f), ImVec2(c.x + 5.f, c.y + 5.f), color, 1.f);
+        dl->AddLine(ImVec2(c.x + 5.f, c.y - 5.f), ImVec2(c.x - 5.f, c.y + 5.f), color, 1.f);
         break;
     }
 }
@@ -105,7 +112,7 @@ void TitleBar::render() {
         layout.clientRects.push_back(r);
         x += w;
 
-        const bool hovered = windowHovered && ImGui::IsMouseHoveringRect(corner(r.left, r.top), corner(r.right, r.bottom), false);
+        const bool hovered = windowHovered && ImGui::IsMouseHoveringRect(ImVec2(r.left, r.top), ImVec2(r.right, r.bottom), false);
         const bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
         if (clicked && (int)i != justClosed) {
             openMenu_ = (int)i;
@@ -135,11 +142,11 @@ void TitleBar::render() {
     const ImVec2 titleSize = ImGui::CalcTextSize(title_.c_str());
     float titleX = std::floor((origin.x + width - titleSize.x) * 0.5f);
     titleX = std::max(titleX, menusEnd + 16.f);
-    dl->PushClipRect(corner(menusEnd, top), corner(captionStart - 8.f, bottom), true);
+    dl->PushClipRect(ImVec2(menusEnd, top), ImVec2(captionStart - 8.f, bottom), true);
     dl->AddText(ImVec2(titleX, std::floor(top + (height_ - titleSize.y) * 0.5f)), kTitle, title_.c_str());
     dl->PopClipRect();
 
-    ImGui::SetCursorScreenPos(corner(minRect.left, minRect.top));
+    ImGui::SetCursorScreenPos(ImVec2(minRect.left, minRect.top));
     bool minClicked = ImGui::InvisibleButton("##minimize", ImVec2(kButtonWidth, height_));
     bool minHover = !overMax && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
     if (ImGui::IsItemActive()) drawCaptionBackground(dl, minRect, kPressed);
@@ -150,18 +157,18 @@ void TitleBar::render() {
     else if (overMax) drawCaptionBackground(dl, maxRect, kHover);
     drawGlyph(dl, maxRect, maximized ? Glyph::Restore : Glyph::Maximize, kGlyph);
 
-    ImGui::SetCursorScreenPos(corner(closeRect.left, closeRect.top));
+    ImGui::SetCursorScreenPos(ImVec2(closeRect.left, closeRect.top));
     bool closeClicked = ImGui::InvisibleButton("##close", ImVec2(kButtonWidth, height_));
     bool closeHover = !overMax && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
     if (ImGui::IsItemActive()) drawCaptionBackground(dl, closeRect, kClosePressed);
     else if (closeHover) drawCaptionBackground(dl, closeRect, kCloseHover);
     drawGlyph(dl, closeRect, Glyph::Close, closeHover || ImGui::IsItemActive() ? IM_COL32(255, 255, 255, 255) : kGlyph);
 
-    dl->AddLine(corner(origin.x, bottom - 1.f), corner(origin.x + width, bottom - 1.f), kBorder);
+    dl->AddLine(ImVec2(origin.x, bottom - 1.f), ImVec2(origin.x + width, bottom - 1.f), kBorder);
 
     if (openMenu_ >= 0) {
         const Menu& menu = menus_[(size_t)openMenu_];
-        ImGui::SetNextWindowPos(corner(menuRects[(size_t)openMenu_].left, bottom));
+        ImGui::SetNextWindowPos(ImVec2(menuRects[(size_t)openMenu_].left, bottom));
         if (ImGui::BeginPopup(menu.popupId.c_str(), ImGuiWindowFlags_NoMove)) {
             menu.contents();
             ImGui::EndPopup();
@@ -172,5 +179,10 @@ void TitleBar::render() {
     ImGui::End();
 
     if (minClicked) frame_.minimize();
-    if (closeClicked) frame_.close();
+    if (closeClicked) {
+        // Same path as Alt+F4 / the system menu: the application decides
+        // (after the unsaved-changes prompt) whether the window closes.
+        if (closeHandler_) closeHandler_();
+        else frame_.close();
+    }
 }

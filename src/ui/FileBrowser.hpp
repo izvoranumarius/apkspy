@@ -5,15 +5,16 @@
 #include "imgui.h"
 
 // Self-contained modal file browser so "Browse..." works on every platform
-// without native dialogs. Used for picking APK files (single and multi),
+// without native dialogs. Used for picking APK files (multi-select),
 // project files and the jadx executable.
 class FileBrowser {
 public:
     enum class Mode {
-        OpenApk,        // single .apk file
         OpenApkMulti,   // multiple .apk files (click toggles selection)
         OpenProject,    // single .apkspy project file
         SaveProject,    // new .apkspy project file (name input)
+        SaveFile,       // export target: single file, any name (M5)
+        SelectFolder,   // export target: an existing directory (M5)
         SelectExecutable
     };
 
@@ -21,7 +22,7 @@ public:
     // Prefills the name field (SaveProject mode).
     void setDefaultName(const std::string& name);
     // Renders the popup (if open). Call once per frame.
-    void render(const char* popupTitle);
+    void render();
     // True when the user accepted a file this frame; consumed by the caller.
     bool takeAccepted(std::string& outPath);
     // Multi-select result (OpenApkMulti); same consumption semantics.
@@ -36,7 +37,7 @@ private:
     // Project file name with a guaranteed .apkspy extension.
     std::string projectFileName(const std::string& name) const;
 
-    Mode mode_ = Mode::OpenApk;
+    Mode mode_ = Mode::OpenApkMulti;
     bool open_ = false;
     bool openRequest_ = false;  // open() sets it; render() calls OpenPopup in its own ID context
     bool accepted_ = false;

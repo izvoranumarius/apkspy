@@ -22,4 +22,31 @@ public:
 
     // True if the buffer starts with the AXML magic (RES_XML_TYPE, LE).
     static bool looksLikeAxml(const std::vector<uint8_t>& bytes);
+
+    // --- Event-based access (additive, M4) ---------------------------------
+    // One attribute of a start element. `name` already carries the resolved
+    // namespace prefix ("android:name"); xmlns declarations are reported as
+    // attributes named "xmlns:prefix". Values are the formatted strings the
+    // text decoder would print (typed values already resolved), unescaped.
+    struct Attr {
+        std::string name;
+        std::string value;
+    };
+
+    // Consumer of the decoded element tree. All callbacks run inline on the
+    // calling thread; default implementations make partial overrides easy.
+    struct Visitor {
+        virtual ~Visitor() = default;
+        virtual void startElement(const std::string& name, const std::vector<Attr>& attrs) {
+            (void)name;
+            (void)attrs;
+        }
+        virtual void endElement(const std::string& name) { (void)name; }
+        virtual void text(const std::string& text) { (void)text; }
+    };
+
+    // Walks the AXML chunk stream and feeds `visitor`. Same validation and
+    // error strings as decode(); decode() itself is implemented on top of
+    // this walk, so the two can never disagree about the format.
+    static bool decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visitor, std::string& error);
 };

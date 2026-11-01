@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <cstdio>
 #include "app/Theme.hpp"
+#include <fstream>
+#include "core/Paths.hpp"
 #include "core/Settings.hpp"
 #include "imgui_internal.h"
 namespace ImStb {
@@ -18,18 +20,53 @@ int resizeCallback(ImGuiInputTextCallbackData* data) {
     }
     return 0;
 }
+
+// Colours of the find-match overlays (drawn under the code text).
+constexpr ImU32 kMatchColor = IM_COL32(255, 213, 79, 40);
+constexpr ImU32 kCurrentMatchColor = IM_COL32(255, 145, 0, 95);
+constexpr ImU32 kSymbolUnderline = IM_COL32(120, 180, 255, 210);
+// Error colour shared by the "No results" label.
+constexpr ImVec4 kErrorColor(0.95f, 0.45f, 0.35f, 1.f);
+
+// Toggle button that stays lit while `on` (find bar's Aa / W switches).
+bool toggleButton(const char* label, bool on) {
+    if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetColorU32(ImGuiCol_ButtonActive));
+    bool clicked = ImGui::SmallButton(label);
+    if (on) ImGui::PopStyleColor();
+    return clicked;
 }
 
-const char* EditorPanel::tabLabel(const Document& doc) {
-    static char buf[512];
-    if (doc.isPreview())
-        std::snprintf(buf, sizeof buf, "%s (preview)", doc.title().c_str());
-    else if (doc.isDirty())
-        std::snprintf(buf, sizeof buf, "%s *", doc.title().c_str());
-    else
-        std::snprintf(buf, sizeof buf, "%s", doc.title().c_str());
-    return buf;
+// Byte offset the mouse sits on inside a rendered span (monospace column
+// math via CalcTextSize, the same formula the find overlays use). Returns
+// false when the mouse is outside the span's text range.
+bool byteOffsetAtX(const std::string& line, const Span& span, float relX, int& offOut) {
+    if (span.end <= span.begin) return false;
+    int off = (int)span.end - 1;  // clicked at/behind the last glyph
+    for (int c = (int)span.begin + 1; c <= (int)span.end; ++c) {
+        if (ImGui::CalcTextSize(line.c_str() + span.begin, line.c_str() + c).x > relX) {
+            off = c - 1;
+            break;
+        }
+    }
+    if (off < (int)span.begin || off >= (int)span.end) return false;
+    offOut = off;
+    return true;
 }
+
+// [a,b) bounds of the identifier under `off` (expands along the line, not
+// just the span, so '$'-stitched nested names stay whole).
+bool identifierAround(const std::string& line, int off, int& aOut, int& bOut) {
+    if (off < 0 || off >= (int)line.size()) return false;
+    if (!tex::isIdentChar(line[(size_t)off])) return false;
+    int a = off;
+    while (a > 0 && tex::isIdentChar(line[(size_t)a - 1])) --a;
+    int b = off + 1;
+    while (b < (int)line.size() && tex::isIdentChar(line[(size_t)b])) ++b;
+    aOut = a;
+    bOut = b;
+    return true;
+}
+}  // namespace
 
 bool EditorPanel::lineNumbers() const { return settings_.getBool(Settings::kLineNumbers, true); }
 
@@ -48,7 +85,13 @@ void EditorPanel::drawContents() {
             ImGuiTabItemFlags flags = doc.get() == focus ? ImGuiTabItemFlags_SetSelected : 0;
             bool open = true;
             ImGui::PushID(doc.get());
-            if (ImGui::BeginTabItem(tabLabel(*doc), &open, flags)) {
+            // The tab id comes from the "###doc" suffix, so the label can
+            // grow a " *" or " (preview)" marker (or lose it) without the
+            // tab jumping to the end of the bar.
+            char label[640];
+            const char* marker = doc->isPreview() ? " (preview)" : (doc->isDirty() ? " *" : "");
+            std::snprintf(label, sizeof label, "%s%s###doc%p", doc->title().c_str(), marker, (void*)doc.get());
+            if (ImGui::BeginTabItem(label, &open, flags)) {
                 if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && doc->isPreview())
                     promoted = doc.get();  // preview tab double-clicked -> keep it
                 drawDocument(*doc);
@@ -75,30 +118,42 @@ void EditorPanel::drawContents() {
     }
     if (promoted) workspace_.promoteDocument(promoted);
 
+    // Menu-triggered find / go-to-line (View > Find..., Ctrl+G from the menu
+    // bar). Consumed here so the popup opens in this window's ID scope.
+    if (findRequest_ || goToRequest_) {
+        Document* active = workspace_.activeDocument();
+        if (active && active->mode() == Document::Mode::Code) {
+            if (findRequest_) {
+                findRequest_ = false;
+                openFind(*active, *findState(*active));
+            }
+            if (goToRequest_) {
+                goToRequest_ = false;
+                openGoTo(*active);
+            }
+        } else {
+            findRequest_ = goToRequest_ = false;  // no code document active: ignore
+        }
+    }
+    if (gotoOpenRequest_) {
+        ImGui::OpenPopup("Go to line");
+        gotoOpenRequest_ = false;
+    }
+    drawGoToModal();
+    drawExportBrowser();
+
     processCloses();
     drawConfirmModal();
+    sweepFindStates();
 }
 
 void EditorPanel::requestClose(Document* doc) {
     if (!doc) return;
     if (doc->isDirty()) {
         closingDoc_ = doc;
-        saveOnConfirm_ = false;
         ImGui::OpenPopup("Close with unsaved changes?");
     } else {
         closeNow_.push_back(doc);
-    }
-}
-
-void EditorPanel::closeMany(std::vector<Document*> docs) {
-    bool anyDirty = false;
-    for (Document* d : docs) anyDirty |= d->isDirty();
-    if (anyDirty) {
-        batchClose_ = std::move(docs);
-        saveOnConfirm_ = false;
-        ImGui::OpenPopup("Close with unsaved changes?");
-    } else {
-        closeNow_.insert(closeNow_.end(), docs.begin(), docs.end());
     }
 }
 
@@ -128,8 +183,6 @@ void EditorPanel::drawConfirmModal() {
     if (closingDoc_) {
         ImGui::Text("\"%s\" has unsaved changes.", closingDoc_->title().c_str());
         ImGui::Spacing();
-        bool canSave = closingDoc_->canEdit();
-        if (!canSave) ImGui::BeginDisabled();
         if (ImGui::Button("Save", ImVec2(120, 0))) {
             if (closingDoc_->save()) {
                 closeNow_.push_back(closingDoc_);
@@ -138,11 +191,6 @@ void EditorPanel::drawConfirmModal() {
                 workspace_.log("Could not save the file");
             }
             ImGui::CloseCurrentPopup();
-        }
-        if (!canSave) {
-            ImGui::EndDisabled();
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("APK entries cannot be saved; only decompiled files can.");
         }
         ImGui::SameLine();
         if (ImGui::Button("Don't Save", ImVec2(120, 0))) {
@@ -158,7 +206,7 @@ void EditorPanel::drawConfirmModal() {
         ImGui::Spacing();
         if (ImGui::Button("Save All", ImVec2(120, 0))) {
             for (Document* d : batchClose_)
-                if (d->isDirty() && d->canEdit() && !d->save()) workspace_.log("Could not save " + d->title());
+                if (d->isDirty() && !d->save()) workspace_.log("Could not save " + d->title());
             closeNow_.insert(closeNow_.end(), batchClose_.begin(), batchClose_.end());
             batchClose_.clear();
             ImGui::CloseCurrentPopup();
@@ -181,6 +229,8 @@ void EditorPanel::drawConfirmModal() {
 }
 
 void EditorPanel::drawDocument(Document& doc) {
+    workspace_.setActiveDocument(&doc);
+    processShortcuts(doc);
     if (doc.mode() == Document::Mode::Image) {
         viewer_.drawToolbar(doc);
         ImGui::Separator();
@@ -190,11 +240,16 @@ void EditorPanel::drawDocument(Document& doc) {
     }
     drawToolbar(doc);
     ImGui::Separator();
+    FindState* f = findState(doc);
+    if (f->open) {
+        drawFindBar(doc, *f);
+        ImGui::Separator();
+    }
     if (!doc.note().empty()) ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.f), "%s", doc.note().c_str());
-    // Files are editable by default; the highlighted read-only view only
-    // remains for entries that cannot be edited (e.g. files inside the APK).
-    if (doc.canEdit() && !doc.isEditing()) doc.beginEdit();
-    if (doc.isEditing()) {
+    // Read-only viewer by default; only an explicit Edit toggle switches to
+    // the editor (files from the APK archive can never be edited).
+    if (doc.wantsEdit() && doc.canEdit()) {
+        doc.beginEdit();
         drawEditable(doc);
         return;
     }
@@ -202,8 +257,50 @@ void EditorPanel::drawDocument(Document& doc) {
 }
 
 void EditorPanel::drawToolbar(Document& doc) {
+    // Back/Forward buttons (Alt+Left / Alt+Right have the same effect).
+    {
+        ImGui::BeginDisabled(!workspace_.canNavBack());
+        if (ImGui::SmallButton("<##navback")) workspace_.navBack();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Navigate Back (Alt+Left)");
+        ImGui::SameLine(0, 2.f);
+        ImGui::BeginDisabled(!workspace_.canNavForward());
+        if (ImGui::SmallButton(">##navfwd")) workspace_.navForward();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Navigate Forward (Alt+Right)");
+        ImGui::SameLine(0, 8.f);
+    }
     const char* path = doc.node() ? doc.node()->path().c_str() : "";
     ImGui::TextDisabled("%s", path);
+    // Right-aligned toolbar buttons, laid out right to left: [Edit] [Export].
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const bool canEdit = doc.canEdit();
+    const bool canExport = doc.node() && !doc.node()->path().empty();
+    const char* editLabel = doc.isEditing() ? "View" : "Edit";
+    const float editW = canEdit ? ImGui::CalcTextSize(editLabel).x + style.FramePadding.x * 2.f : 0.f;
+    const float exportW = canExport ? ImGui::CalcTextSize("Export...").x + style.FramePadding.x * 2.f : 0.f;
+    float x = ImGui::GetWindowWidth() - style.WindowPadding.x;
+    if (canEdit) {
+        x -= editW;
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(x);
+        if (ImGui::Button(editLabel)) {
+            if (doc.isEditing()) doc.stopEditingView();
+            else doc.setWantsEdit(true);
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", doc.isEditing() ? "Back to the read-only view (unsaved edits are kept)"
+                                                    : "Edit this file in place (saved with Ctrl+S)");
+        x -= 6.f;
+    }
+    if (canExport) {
+        x -= exportW;
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(x);
+        if (ImGui::Button("Export...")) openExport(doc);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Save this file outside the workspace (decoded text for source code)");
+    }
 }
 
 void EditorPanel::drawScrollable(Document& doc) {
@@ -218,14 +315,37 @@ void EditorPanel::drawScrollable(Document& doc) {
 void EditorPanel::drawCode(Document& doc) {
     const auto& lines = doc.lines();
     const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
+    const float textHeight = ImGui::GetTextLineHeight();
     int target = doc.takeGoTo();
     if (target >= 0) ImGui::SetScrollY(std::max(0.f, target * lineHeight - ImGui::GetWindowHeight() * 0.33f));
 
+    FindState* f = nullptr;
+    if (!find_.empty()) {
+        auto it = find_.find(&doc);
+        if (it != find_.end() && it->second.open && !it->second.matches.empty()) f = &it->second;
+    }
+    // Consume a match jump: vertical via the shared goTo/highlight path,
+    // horizontal here because only this view knows its own scroll offsets.
+    if (f && f->pendingJump >= 0 && f->pendingJump < (int)f->matches.size()) {
+        const textsearch::Match& m = f->matches[(size_t)f->pendingJump];
+        f->pendingJump = -1;
+        doc.goTo(m.line);
+        float gutter = 0.f;
+        if (lineNumbers()) gutter = ImGui::CalcTextSize("12345").x + 14.f;  // "%5d" + SameLine spacing
+        const float matchX = gutter + columnToX(lines[(size_t)m.line], m.col + m.len);
+        const float viewW = ImGui::GetWindowWidth();
+        if (matchX > ImGui::GetScrollX() + viewW - 40.f)  // off-screen to the right
+            ImGui::SetScrollX(std::max(0.f, matchX - viewW * 0.5f));
+    }
+
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImGuiIO& io = ImGui::GetIO();
     std::vector<Span> spans;
     ImGuiListClipper clipper;
     clipper.Begin((int)lines.size(), lineHeight);
     while (clipper.Step()) {
+        // The top visible line feeds the Back/Forward history (M2).
+        doc.setViewLine(std::min(clipper.DisplayStart, std::max(0, (int)lines.size() - 1)));
         for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
             if (lineNumbers()) {
                 if (i == doc.highlight()) {
@@ -235,6 +355,23 @@ void EditorPanel::drawCode(Document& doc) {
                 }
                 ImGui::TextDisabled("%5d", i + 1);
                 ImGui::SameLine(0, 14);
+            }
+            // Match rects must be in the draw list BEFORE the line's text so
+            // the glyphs stay on top.
+            if (f) {
+                if (auto it = f->byLine.find(i); it != f->byLine.end()) {
+                    const std::string& line = lines[(size_t)i];
+                    const ImVec2 textPos = ImGui::GetCursorScreenPos();
+                    for (int k = 0; k < it->second.second; ++k) {
+                        const int idx = it->second.first + k;
+                        const textsearch::Match& m = f->matches[(size_t)idx];
+                        const float x0 = columnToX(line, m.col);
+                        const float x1 = columnToX(line, m.col + m.len);
+                        dl->AddRectFilled(ImVec2(textPos.x + x0, textPos.y),
+                                          ImVec2(textPos.x + x1, textPos.y + textHeight),
+                                          idx == f->current ? kCurrentMatchColor : kMatchColor);
+                    }
+                }
             }
             bool inBlock = doc.blockStateAt((size_t)i);
             const std::string& line = lines[(size_t)i];
@@ -248,6 +385,26 @@ void EditorPanel::drawCode(Document& doc) {
                 ImGui::PushStyleColor(ImGuiCol_Text, spans[k].color);
                 ImGui::TextUnformatted(line.c_str() + spans[k].begin, line.c_str() + spans[k].end);
                 ImGui::PopStyleColor();
+                // Ctrl+click navigation (M3): underline the identifier under
+                // the cursor while Ctrl is held, open its file on click.
+                if (io.KeyCtrl && ImGui::IsItemHovered()) {
+                    int off = -1;
+                    if (byteOffsetAtX(line, spans[k], io.MousePos.x - ImGui::GetItemRectMin().x, off)) {
+                        int a = -1, b = -1;
+                        if (identifierAround(line, off, a, b)) {
+                            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                                symbolNavigate(doc, line, a, b);
+                            } else if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                                const ImVec2 imin = ImGui::GetItemRectMin();
+                                const ImVec2 imax = ImGui::GetItemRectMax();
+                                const float x0 = imin.x + ImGui::CalcTextSize(line.c_str() + spans[k].begin,
+                                                                              line.c_str() + a).x;
+                                const float x1 = x0 + ImGui::CalcTextSize(line.c_str() + a, line.c_str() + b).x;
+                                dl->AddLine(ImVec2(x0, imax.y), ImVec2(x1, imax.y), kSymbolUnderline, 1.3f);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -260,6 +417,16 @@ void EditorPanel::drawEditable(Document& doc) {
     const float fontSize = ImGui::GetFontSize();
     const ImGuiStyle& style = ImGui::GetStyle();
 
+    // Give keyboard focus back to the editor after Esc closed the find bar.
+    if (refocusEdit_) {
+        refocusEdit_ = false;
+        ImGui::SetKeyboardFocusHere();
+    }
+
+    // Jump to a search hit: consumed here as well, not only in the read-only
+    // view (decompiled documents open in this editor).
+    int goTo = doc.takeGoTo();
+
     // The multiline input owns every interaction (caret, selection, clipboard,
     // undo/redo). Its own text is rendered fully transparent and is replaced
     // by a syntax-highlighted overlay appended straight into the same draw
@@ -270,6 +437,20 @@ void EditorPanel::drawEditable(Document& doc) {
                               &resizeCallback, &text);
     ImGui::PopStyleColor();
     if (ImGui::IsItemEdited()) doc.markDirty();
+
+    // Remember the current selection (single line only) so Ctrl+F can prefill
+    // the find bar with it - like every mainstream editor does.
+    const ImGuiInputTextState* selState = ImGui::GetInputTextState(editId);
+    if (selState && selState->Stb && selState->Stb->select_start != selState->Stb->select_end) {
+        const int a = ImMin(selState->Stb->select_start, selState->Stb->select_end);
+        const int b = ImMax(selState->Stb->select_start, selState->Stb->select_end);
+        // Single line: the first newline at/after the selection start lies
+        // beyond its end (npos counts as "beyond").
+        if (a >= 0 && b <= (int)text.size() && text.find('\n', (size_t)a) > (size_t)b)
+            selSnippet_ = text.substr((size_t)a, (size_t)(b - a));
+    } else if (!selSnippet_.empty()) {
+        selSnippet_.clear();  // selection gone: nothing to prefill next time
+    }
 
     // Geometry of the input's internal child window, its scroll offsets and
     // its draw list. The overlay is recorded after EndChild, so it paints on
@@ -293,9 +474,23 @@ void EditorPanel::drawEditable(Document& doc) {
     const float scrollY = inputWindow ? inputWindow->Scroll.y : 0.f;
     ImDrawList* dl = inputWindow ? inputWindow->DrawList : ImGui::GetWindowDrawList();
 
+    // Scroll the jumped-to line into view (applied on the child's next
+    // layout pass, one frame later).
+    if (goTo >= 0 && inputWindow) {
+        float target = std::max(0.f, goTo * fontSize - (inputWindow->Size.y - fontSize) * 0.33f);
+        ImGui::SetScrollY(inputWindow, target);
+    }
+
     const ImVec2 textOrigin(frameMin.x + style.FramePadding.x, frameMin.y + style.FramePadding.y);
     const float right = frameMax.x - (inputWindow ? inputWindow->ScrollbarSizes.x : 0.f);
     dl->PushClipRect(frameMin, ImVec2(right, frameMax.y), true);
+
+    // Highlight band behind the search hit (under the text and the caret).
+    if (doc.highlight() >= 0 && inputWindow) {
+        const float y = textOrigin.y + (float)doc.highlight() * fontSize - scrollY;
+        if (y + fontSize >= frameMin.y && y <= frameMax.y)
+            dl->AddRectFilled(ImVec2(frameMin.x, y), ImVec2(right, y + fontSize), IM_COL32(0, 122, 204, 60));
+    }
 
     const std::vector<std::string>& lines = doc.lines();
     const std::vector<size_t>& offsets = doc.lineOffsets();
@@ -303,11 +498,33 @@ void EditorPanel::drawEditable(Document& doc) {
     const float viewHeight = frameMax.y - frameMin.y;
     const int first = std::max(0, (int)(scrollY / fontSize) - 1);
     const int last = std::min(lineCount, first + (int)(viewHeight / fontSize) + 3);
+    doc.setViewLine(std::min(first, std::max(0, lineCount - 1)));  // for the nav history
+
+    // Match overlays: drawn into the same overlay list, below the line's
+    // glyphs (the rects are added before the AddText calls of that line).
+    FindState* f = nullptr;
+    if (!find_.empty()) {
+        auto it = find_.find(&doc);
+        if (it != find_.end() && it->second.open && !it->second.matches.empty()) f = &it->second;
+    }
 
     std::vector<Span> spans;
     for (int i = first; i < last; ++i) {
         const std::string& line = lines[(size_t)i];
         const float y = textOrigin.y + (float)i * fontSize - scrollY;
+        if (f) {
+            if (auto it = f->byLine.find(i); it != f->byLine.end()) {
+                const float xBase = textOrigin.x - scrollX;
+                for (int k = 0; k < it->second.second; ++k) {
+                    const int idx = it->second.first + k;
+                    const textsearch::Match& m = f->matches[(size_t)idx];
+                    const float x0 = columnToX(line, m.col);
+                    const float x1 = columnToX(line, m.col + m.len);
+                    dl->AddRectFilled(ImVec2(xBase + x0, y), ImVec2(xBase + x1, y + fontSize),
+                                      idx == f->current ? kCurrentMatchColor : kMatchColor);
+                }
+            }
+        }
         bool inBlock = doc.blockStateAt((size_t)i);
         SyntaxHighlighter::tokenize(line, doc.language(), inBlock, spans);
         float x = textOrigin.x - scrollX;
@@ -366,5 +583,249 @@ void EditorPanel::drawHex(const Document& doc) {
             buf[n] = 0;
             ImGui::TextUnformatted(buf);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Find in file (M1) and go to line
+// ---------------------------------------------------------------------------
+
+FindState* EditorPanel::findState(const Document& doc) { return &find_[&doc]; }
+
+// Editor-scoped shortcuts: they must not steal Ctrl+F/G from a text field in
+// another panel, hence the window-focus check. Runs only for the visible tab
+// (drawDocument is called from inside its BeginTabItem).
+void EditorPanel::processShortcuts(Document& doc) {
+    if (doc.mode() != Document::Mode::Code) return;
+    ImGuiIO& io = ImGui::GetIO();
+    if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) return;
+    FindState* f = findState(doc);
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false)) openFind(doc, *f);
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_G, false)) openGoTo(doc);
+    if (f->open && !io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F3, false))
+        moveMatch(*f, io.KeyShift ? -1 : 1);
+}
+
+void EditorPanel::openFind(Document& doc, FindState& f) {
+    (void)doc;
+    f.open = true;
+    f.focusInput = true;
+    // Prefill with the editor selection (single line, captured while it was
+    // drawn) before the user's own typing has a chance to overwrite it.
+    if (!selSnippet_.empty() && selSnippet_.size() < sizeof f.query) {
+        std::snprintf(f.query, sizeof f.query, "%s", selSnippet_.c_str());
+        selSnippet_.clear();
+    }
+}
+
+void EditorPanel::openGoTo(Document& doc) {
+    const int n = std::max<int>((int)doc.lines().size(), 1);
+    gotoValue_ = doc.highlight() >= 0 ? std::clamp(doc.highlight() + 1, 1, n) : 1;
+    gotoOpenRequest_ = true;
+    gotoFocus_ = true;
+}
+
+// Rebuilds the match list only when something actually changed: the query,
+// the options or the document text (cheap revision counter, no text hash).
+void EditorPanel::recomputeMatches(Document& doc, FindState& f) {
+    const std::string query = f.query;
+    if (query == f.lastQuery && f.opt.matchCase == f.lastCase && f.opt.wholeWord == f.lastWord &&
+        f.docSerial == doc.textRevision())
+        return;
+    f.lastQuery = query;
+    f.lastCase = f.opt.matchCase;
+    f.lastWord = f.opt.wholeWord;
+    f.docSerial = doc.textRevision();
+    f.truncated = false;
+    f.matches = textsearch::findAll(doc.lines(), query, f.opt, textsearch::kDefaultMaxMatches, f.truncated);
+    f.byLine.clear();
+    for (size_t i = 0; i < f.matches.size(); ++i) {
+        auto& slot = f.byLine[f.matches[i].line];
+        if (slot.second == 0) slot.first = (int)i;
+        ++slot.second;
+    }
+    // Anchor the current match at the visible/highlighted line; an empty
+    // query or a document without matches clears it.
+    if (f.matches.empty()) {
+        f.current = -1;
+    } else {
+        const int anchor = doc.highlight() >= 0 ? doc.highlight() : 0;
+        f.current = textsearch::nextIndex(f.matches, anchor, 0);
+        f.pendingJump = f.current;
+    }
+}
+
+void EditorPanel::moveMatch(FindState& f, int dir) {
+    if (f.matches.empty()) return;
+    int idx = f.current;
+    if (idx < 0 || idx >= (int)f.matches.size())
+        idx = dir > 0 ? 0 : (int)f.matches.size() - 1;
+    else
+        idx = (idx + dir + (int)f.matches.size()) % (int)f.matches.size();
+    f.current = idx;
+    f.pendingJump = idx;
+}
+
+void EditorPanel::drawFindBar(Document& doc, FindState& f) {
+    const ImGuiStyle& style = ImGui::GetStyle();
+    ImGui::PushID("##findbar");
+
+    if (f.focusInput) {
+        ImGui::SetKeyboardFocusHere();
+        f.focusInput = false;
+    }
+    ImGui::SetNextItemWidth(220.f);
+    const bool enter = ImGui::InputText("##find", f.query, sizeof f.query, ImGuiInputTextFlags_EnterReturnsTrue);
+    if (enter) moveMatch(f, ImGui::GetIO().KeyShift ? -1 : 1);  // Enter / Shift+Enter
+
+    ImGui::SameLine(0, style.ItemInnerSpacing.x);
+    if (toggleButton("Aa", f.opt.matchCase)) f.opt.matchCase = !f.opt.matchCase;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Match case");
+    ImGui::SameLine(0, 2.f);
+    if (toggleButton("W", f.opt.wholeWord)) f.opt.wholeWord = !f.opt.wholeWord;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Whole word");
+
+    ImGui::SameLine(0, style.ItemInnerSpacing.x);
+    if (ImGui::SmallButton("<")) moveMatch(f, -1);  // Shift+F3 / Shift+Enter
+    ImGui::SameLine(0, 2.f);
+    if (ImGui::SmallButton(">")) moveMatch(f, 1);   // F3 / Enter
+
+    ImGui::SameLine(0, style.ItemInnerSpacing.x);
+    if (f.query[0] == 0) {
+        ImGui::TextDisabled(" ");
+    } else if (f.matches.empty()) {
+        ImGui::TextColored(kErrorColor, "No results");
+    } else if (f.truncated) {
+        ImGui::TextDisabled("%d+ results", (int)textsearch::kDefaultMaxMatches);
+    } else {
+        const int at = f.current >= 0 ? f.current + 1 : 0;
+        ImGui::TextDisabled("%d of %d", at, (int)f.matches.size());
+    }
+
+    ImGui::SameLine(0, style.ItemInnerSpacing.x);
+    const bool editorFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    if (ImGui::SmallButton("x##closefind") || (editorFocused && ImGui::IsKeyPressed(ImGuiKey_Escape, false))) {
+        if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {  // let modals keep Esc
+            f.open = false;
+            refocusEdit_ = doc.isEditing();  // give the keyboard back to the editor
+        }
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Close (Esc)");
+
+    // Typing updates the matches incrementally; this call returns immediately
+    // when query, options and text are unchanged.
+    recomputeMatches(doc, f);
+    ImGui::PopID();
+}
+
+void EditorPanel::drawGoToModal() {
+    bool open = ImGui::BeginPopupModal("Go to line", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+    if (!open) return;
+    Document* doc = workspace_.activeDocument();
+    if (!doc || doc->mode() != Document::Mode::Code) {
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    const int n = std::max<int>((int)doc->lines().size(), 1);
+    ImGui::Text("Go to line (1 - %d):", n);
+    if (gotoFocus_) {
+        ImGui::SetKeyboardFocusHere();
+        gotoFocus_ = false;
+    }
+    ImGui::SetNextItemWidth(140.f);
+    const bool submit = ImGui::InputInt("##gotoline", &gotoValue_, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue);
+    // Out-of-range input is clamped to [1, N] instead of being rejected.
+    if (submit) {
+        const int target = std::clamp(gotoValue_, 1, n) - 1;  // UI is 1-based, goTo is 0-based
+        // Same-document jump: record it for Back/Forward without re-opening.
+        const NavLocation origin = workspace_.locationOf(*doc);
+        NavLocation dest = origin;
+        dest.line = target;
+        workspace_.recordJump(origin, dest);
+        doc->goTo(target);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+// Drops find state of documents that no longer exist (closed tab, replaced
+// preview) so the map can never grow and addresses are never reused stale.
+void EditorPanel::sweepFindStates() {
+    if (find_.empty()) return;
+    auto& docs = workspace_.documents();
+    for (auto it = find_.begin(); it != find_.end();) {
+        const bool alive = std::any_of(docs.begin(), docs.end(),
+                                       [&](const std::unique_ptr<Document>& d) { return d.get() == it->first; });
+        if (alive) ++it;
+        else it = find_.erase(it);
+    }
+}
+
+float EditorPanel::columnToX(const std::string& line, int col) const {
+    if (col <= 0) return 0.f;
+    if ((size_t)col >= line.size()) return ImGui::CalcTextSize(line.c_str()).x;
+    return ImGui::CalcTextSize(line.c_str(), line.c_str() + col).x;
+}
+
+// Ctrl+click on an identifier (M3): resolve it against the document's group
+// symbol index and jump to the declaring file. Unresolved identifiers get a
+// quiet log line instead of failing silently.
+void EditorPanel::symbolNavigate(Document& doc, const std::string& line, int a, int b) {
+    if (a < 0 || b <= a || (size_t)b > line.size()) return;
+    const std::string ident = line.substr((size_t)a, (size_t)(b - a));
+    std::string hintDir;
+    if (doc.node()) {
+        const std::string& p = doc.node()->path();
+        const size_t slash = p.find_last_of('/');
+        if (slash != std::string::npos) hintDir = p.substr(0, slash);
+    }
+    const NavLocation origin = workspace_.locationOf(doc);
+    if (!workspace_.openSymbol(doc.rootGroup(), ident, hintDir, &origin))
+        workspace_.log("No source file declares '" + ident + "'");
+}
+
+// ---------------------------------------------------------------------------
+// Document export (M5)
+// ---------------------------------------------------------------------------
+
+void EditorPanel::openExport(Document& doc) {
+    exportDoc_ = &doc;
+    exportBrowser_.open(FileBrowser::Mode::SaveFile);
+    exportBrowser_.setDefaultName(doc.title());  // after open(): open() resets the name
+}
+
+// Consumes the export destination browser; the raw-vs-decoded choice follows
+// the document mode (code documents export their text, everything else the
+// exact bytes). The explorer's context menu offers both variants explicitly.
+void EditorPanel::drawExportBrowser() {
+    std::string picked;
+    if (exportBrowser_.render(), exportBrowser_.takeAccepted(picked)) {
+        Document* doc = exportDoc_;
+        exportDoc_ = nullptr;
+        if (!doc) return;
+        // Unsaved edits are exported as the user sees them: dirty code
+        // documents write the edit buffer instead of the on-disk bytes.
+        if (doc->mode() == Document::Mode::Code && doc->isDirty()) {
+            std::ofstream out(pathutil::fromUtf8(pathutil::normalize(picked)), std::ios::binary);
+            if (!out) {
+                workspace_.log("Export failed: cannot write " + picked);
+                return;
+            }
+            const std::vector<std::string>& lines = doc->lines();
+            for (size_t i = 0; i < lines.size(); ++i) {
+                if (i) out << '\n';
+                out << lines[i];
+            }
+            workspace_.log("Exported " + doc->title() + " (with unsaved edits) to " + picked);
+            return;
+        }
+        Root* root = workspace_.rootByGroup(doc->rootGroup(), doc->rootKind());
+        if (root && doc->node())
+            workspace_.exportNode(*root, *doc->node(), picked, doc->mode() == Document::Mode::Code);
+        else
+            workspace_.log("Export failed: the document is no longer available");
+    } else if (!exportBrowser_.isOpen() && exportDoc_) {
+        exportDoc_ = nullptr;  // browser closed without accepting
     }
 }

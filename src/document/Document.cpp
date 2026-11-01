@@ -3,6 +3,8 @@
 #include <cctype>
 #include <fstream>
 #include "core/AxmlDecoder.hpp"
+#include "core/Paths.hpp"
+#include "core/TextUtils.hpp"
 #include "image/ImageDecoder.hpp"
 
 namespace {
@@ -14,10 +16,38 @@ bool looksLikeText(const std::vector<uint8_t>& bytes) {
         if (bytes[i] == 0) return false;
     return true;
 }
+
+// Splits text into lines (dropping \r) - the single line-splitting helper for
+// the whole document, used for both file bytes and the edit buffer.
+std::vector<std::string> splitTextLines(std::string_view text) {
+    std::vector<std::string> lines;
+    std::string current;
+    for (char b : text) {
+        if (b == '\n') {
+            lines.push_back(std::move(current));
+            current.clear();
+        } else if (b != '\r') {
+            current.push_back(b);
+        }
+    }
+    lines.push_back(std::move(current));
+    return lines;
 }
 
-Document::Document(std::string title, const TreeNode* node, std::vector<uint8_t> bytes, bool fromDisk)
-    : title_(std::move(title)), node_(node), bytes_(std::move(bytes)), fromDisk_(fromDisk) {
+// Byte offset of each line's start inside `text` (which uses \n only).
+std::vector<size_t> lineOffsetsOf(std::string_view text) {
+    std::vector<size_t> offsets;
+    offsets.push_back(0);
+    for (size_t i = 0; i < text.size(); ++i)
+        if (text[i] == '\n') offsets.push_back(i + 1);
+    return offsets;
+}
+}  // namespace
+
+std::atomic<uint64_t> Document::sEditSerial_{1};
+
+Document::Document(std::string title, const TreeNode* node, std::vector<uint8_t> bytes, RootKind rootKind)
+    : title_(std::move(title)), node_(node), bytes_(std::move(bytes)), rootKind_(rootKind) {
     NodeKind kind = node_->kind();
     bool imageCandidate = kind == NodeKind::Image ||
                           (kind == NodeKind::Binary && !ImageDecoder::sniffFormat(bytes_).empty());
@@ -28,13 +58,13 @@ Document::Document(std::string title, const TreeNode* node, std::vector<uint8_t>
     bool binaryKind = kind == NodeKind::Dex || kind == NodeKind::Native;
 
     // Binary XML inside an APK (AndroidManifest.xml, res/**/*.xml) is compiled
-    // AXML - decode it into readable, editable-looking text instead of hex.
+    // AXML - decode it into readable, highlighted text instead of hex.
     if (!binaryKind && AxmlDecoder::looksLikeAxml(bytes_)) {
         std::string xml, error;
         if (AxmlDecoder::decode(bytes_, xml, error)) {
             mode_ = Mode::Code;
             language_ = Language::Xml;
-            splitLinesFromText(xml);
+            lines_ = splitTextLines(xml);
             computeBlockStates();
             note_ = "Decoded from binary XML";
             bytes_.clear();
@@ -55,10 +85,7 @@ Document::Document(std::string title, const TreeNode* node, std::vector<uint8_t>
     else if (kind == NodeKind::Groovy) language_ = Language::Groovy;
     else if (kind == NodeKind::Yaml) language_ = Language::Yaml;
     else if (kind == NodeKind::Web) {
-        const std::string& name = node_->name();
-        size_t dot = name.find_last_of('.');
-        std::string ext = dot == std::string::npos ? std::string() : name.substr(dot + 1);
-        for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+        std::string ext = tex::asciiLower(node_->name().substr(node_->name().find_last_of('.') + 1));
         if (ext == "css") language_ = Language::Css;
         else if (ext == "js" || ext == "mjs") language_ = Language::JavaScript;
         else language_ = Language::Xml;  // html/htm
@@ -86,46 +113,41 @@ bool Document::loadImage() {
     return true;
 }
 
+const std::vector<std::string>& Document::lines() const {
+    if (cachesDirty_) refreshEditCaches();
+    return lines_;
+}
+
+const std::vector<size_t>& Document::lineOffsets() const {
+    if (cachesDirty_) refreshEditCaches();
+    return lineOffsets_;
+}
+
+bool Document::blockStateAt(size_t line) const {
+    if (cachesDirty_) refreshEditCaches();
+    return line < blockStates_.size() && blockStates_[line];
+}
+
 void Document::splitLines() {
-    std::string current;
-    for (uint8_t b : bytes_) {
-        if (b == '\n') {
-            lines_.push_back(std::move(current));
-            current.clear();
-        } else if (b != '\r') {
-            current.push_back((char)b);
-        }
-    }
-    lines_.push_back(std::move(current));
+    lines_ = splitTextLines(std::string_view((const char*)bytes_.data(), bytes_.size()));
 }
 
-void Document::splitLinesFromText(const std::string& text) {
-    lines_.clear();
-    lineOffsets_.clear();
-    lineOffsets_.push_back(0);
-    std::string current;
-    size_t i = 0;
-    for (char b : text) {
-        if (b == '\n') {
-            lines_.push_back(std::move(current));
-            current.clear();
-            lineOffsets_.push_back(i + 1);
-        } else if (b != '\r') {
-            current.push_back(b);
-        }
-        ++i;
-    }
-    lines_.push_back(std::move(current));
-}
-
-void Document::computeBlockStates() {
+void Document::computeBlockStates() const {
     bool inBlock = false;
     std::vector<Span> scratch;
+    blockStates_.clear();
     blockStates_.reserve(lines_.size());
     for (const auto& line : lines_) {
         blockStates_.push_back(inBlock);
         SyntaxHighlighter::tokenize(line, language_, inBlock, scratch);
     }
+}
+
+void Document::refreshEditCaches() const {
+    cachesDirty_ = false;
+    lines_ = splitTextLines(editBuffer_);
+    lineOffsets_ = lineOffsetsOf(editBuffer_);
+    computeBlockStates();
 }
 
 void Document::beginEdit() {
@@ -138,45 +160,45 @@ void Document::beginEdit() {
             if (i) editBuffer_.push_back('\n');
             editBuffer_.append(lines_[i]);
         }
-        // Byte offsets matching the freshly built buffer (lines_ joined with
-        // '\n'); kept in sync by markDirty()/save() from here on.
-        lineOffsets_.clear();
-        size_t offset = 0;
-        for (const auto& line : lines_) {
-            lineOffsets_.push_back(offset);
-            offset += line.size() + 1;
-        }
     }
     editing_ = true;
+    ++textRevision_;  // lines() now reflects the (identical) edit buffer snapshot
 }
 
 void Document::markDirty() {
     dirty_ = true;
-    if (editing_) {
-        splitLinesFromText(editBuffer_);
-        computeBlockStates();
-    }
+    cachesDirty_ = true;  // re-parse lazily on the next lines()/blockStateAt()
+    bumpEditSerial();
+    ++textRevision_;
 }
 
 void Document::cancelEdit() {
     editing_ = false;
+    wantsEdit_ = false;
     dirty_ = false;
     editBuffer_.clear();
     editBuffer_.shrink_to_fit();
+    cachesDirty_ = true;
+    bumpEditSerial();
+    ++textRevision_;
 }
 
 bool Document::save() {
     if (!canEdit()) return false;
-    std::ofstream out(node_->path(), std::ios::binary);
+    std::ofstream out(pathutil::fromUtf8(node_->path()), std::ios::binary);
     if (!out) return false;
     out.write(editBuffer_.data(), (std::streamsize)editBuffer_.size());
     out.close();
     if (!out) return false;
-    splitLinesFromText(editBuffer_);
+    lines_ = splitTextLines(editBuffer_);
+    lineOffsets_ = lineOffsetsOf(editBuffer_);
     computeBlockStates();
+    cachesDirty_ = false;
     dirty_ = false;
     editing_ = false;
     editBuffer_.clear();
     editBuffer_.shrink_to_fit();
+    bumpEditSerial();
+    ++textRevision_;
     return true;
 }

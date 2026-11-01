@@ -27,7 +27,6 @@ private:
 
     bool open_ = false;
     int category_ = 0;
-    bool resultPending_ = false;
 
     // Working copies, committed by OK/Apply.
     char jadxPath_[1024] = {};

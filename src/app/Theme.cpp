@@ -1,23 +1,127 @@
 #include "app/Theme.hpp"
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <initializer_list>
+#include <vector>
 
 ImFont* Theme::mono_ = nullptr;
+ImGuiStyle Theme::baseStyle_;
+bool Theme::styleCaptured_ = false;
 
 namespace {
-ImFont* tryLoad(ImGuiIO& io, std::initializer_list<const char*> candidates, float size) {
-    for (const char* path : candidates)
-        if (std::filesystem::exists(path)) return io.Fonts->AddFontFromFileTTF(path, size);
+
+ImFont* tryLoad(ImGuiIO& io, std::initializer_list<const char*> candidates, float size,
+                const ImWchar* ranges, const ImFontConfig* config) {
+    for (const char* path : candidates) {
+        if (!std::filesystem::exists(path)) continue;
+        if (ImFont* font = io.Fonts->AddFontFromFileTTF(path, size, config, ranges)) return font;
+    }
     return nullptr;
 }
+
+bool fileExists(const char* path) { return std::filesystem::exists(path); }
+
+// Appends a zero-terminated ImWchar range list into `out` (without its
+// terminator), skipping the terminating 0.
+void appendRanges(std::vector<ImWchar>& out, const ImWchar* ranges) {
+    if (!ranges) return;
+    for (const ImWchar* r = ranges; r[0] || r[1]; r += 2) {
+        out.push_back(r[0]);
+        out.push_back(r[1]);
+    }
 }
 
-void Theme::loadFonts(ImGuiIO& io) {
+// Merges the collected (lo, hi) pairs into a sorted, de-duplicated,
+// zero-terminated static array ImGui can use.
+const ImWchar* mergedRanges(std::vector<ImWchar>&& flat) {
+    std::vector<std::pair<ImWchar, ImWchar>> intervals;
+    for (size_t i = 0; i + 1 < flat.size(); i += 2) intervals.emplace_back(flat[i], flat[i + 1]);
+    std::sort(intervals.begin(), intervals.end());
+    std::vector<ImWchar> merged;
+    merged.reserve(intervals.size() * 2 + 1);
+    for (auto [lo, hi] : intervals) {
+        if (!merged.empty() && lo <= (ImWchar)(merged.back() + 1)) {
+            if (hi > merged.back()) merged.back() = hi;  // extend the previous range
+        } else {
+            merged.push_back(lo);
+            merged.push_back(hi);
+        }
+    }
+    merged.push_back(0);
+    static std::vector<ImWchar> storage;
+    storage = std::move(merged);
+    return storage.data();
+}
+
+// Base coverage shared by the UI and mono fonts: Latin, Greek, Cyrillic.
+const ImWchar* baseRanges(ImGuiIO& io) {
+    std::vector<ImWchar> r;
+    appendRanges(r, io.Fonts->GetGlyphRangesDefault());
+    appendRanges(r, io.Fonts->GetGlyphRangesGreek());
+    appendRanges(r, io.Fonts->GetGlyphRangesCyrillic());
+    return mergedRanges(std::move(r));
+}
+
+// CJK coverage (symbols, kana, common han, fullwidth forms) used as a merged
+// fallback - Segoe UI, Consolas and DejaVu ship none of these.
+const ImWchar* cjkRanges() {
+    static const ImWchar ranges[] = {
+        0x2018, 0x201F,  // quotes used by CJK text
+        0x3000, 0x30FF,  // CJK symbols + kana
+        0x31F0, 0x31FF,
+        0x4E00, 0x9FFF,  // CJK unified ideographs (includes the common 2500)
+        0xFF00, 0xFFEF,  // fullwidth forms
+        0,
+    };
+    return ranges;
+}
+
+}  // namespace
+
+void Theme::loadFonts(ImGuiIO& io, float scale) {
+    scale = std::clamp(scale, 0.75f, 3.0f);
+    const float uiSize = std::round(16.f * scale);
+    const float monoSize = std::round(15.f * scale);
+    const ImWchar* base = baseRanges(io);
+
+    // CJK-capable fallback found on the target system, merged into both
+    // fonts so Chinese/Japanese comments and names keep rendering.
+    const char* cjkFonts[] = {
+        "C:/Windows/Fonts/msyh.ttc",        // Microsoft YaHei
+        "C:/Windows/Fonts/simsun.ttc",      // SimSun
+        "/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+    };
+    const char* cjk = nullptr;
+    for (const char* path : cjkFonts)
+        if (fileExists(path)) {
+            cjk = path;
+            break;
+        }
+
     ImFont* ui = tryLoad(io, {"C:/Windows/Fonts/segoeui.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                              "/System/Library/Fonts/Supplemental/Arial.ttf"}, 16.f);
-    if (!ui) io.Fonts->AddFontDefault();
+                              "/System/Library/Fonts/Supplemental/Arial.ttf"},
+                         uiSize, base, nullptr);
+    if (!ui) ui = io.Fonts->AddFontDefault();
+    if (ui && cjk) {
+        ImFontConfig merge;
+        merge.MergeMode = true;
+        io.Fonts->AddFontFromFileTTF(cjk, uiSize, &merge, cjkRanges());
+    }
+
     mono_ = tryLoad(io, {"C:/Windows/Fonts/consola.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-                         "/System/Library/Fonts/Menlo.ttc"}, 15.f);
+                         "/System/Library/Fonts/Menlo.ttc"},
+                    monoSize, base, nullptr);
+    if (!mono_) mono_ = io.Fonts->AddFontDefault();
+    if (mono_ && cjk) {
+        ImFontConfig merge;
+        merge.MergeMode = true;
+        io.Fonts->AddFontFromFileTTF(cjk, monoSize, &merge, cjkRanges());
+    }
+    io.Fonts->Build();
 }
 
 ImFont* Theme::monoFont() { return mono_ ? mono_ : ImGui::GetFont(); }
@@ -71,4 +175,13 @@ void Theme::apply() {
     col[ImGuiCol_DockingEmptyBg] = c(30, 30, 30);
     col[ImGuiCol_ResizeGrip] = c(0, 0, 0, 0);
     col[ImGuiCol_TextSelectedBg] = c(38, 79, 120);
+
+    baseStyle_ = s;  // unscaled reference for DPI changes
+    styleCaptured_ = true;
+    (void)styleCaptured_;
+}
+
+void Theme::scaleStyle(float scale) {
+    ImGui::GetStyle() = baseStyle_;
+    if (scale != 1.f) ImGui::GetStyle().ScaleAllSizes(scale);
 }

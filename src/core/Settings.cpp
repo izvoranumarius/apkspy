@@ -1,25 +1,50 @@
 #include "core/Settings.hpp"
+#include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <string>
+#include <vector>
+
+namespace {
+std::string trimCr(std::string s) {
+    while (!s.empty() && (s.back() == '\r' || s.back() == '\n')) s.pop_back();
+    return s;
+}
+}
 
 void Settings::load(const std::string& path) {
     std::ifstream in(path);
     if (!in) return;
     std::string line;
     while (std::getline(in, line)) {
+        line = trimCr(std::move(line));  // tolerate CRLF files everywhere
         if (line.empty() || line.front() == '#') continue;
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
-        map_[line.substr(0, eq)] = line.substr(eq + 1);
+        map_[trimCr(line.substr(0, eq))] = line.substr(eq + 1);
     }
 }
 
 bool Settings::save(const std::string& path) const {
-    std::ofstream out(path);
-    if (!out) return false;
-    out << "# ApkSpy user settings\n";
-    for (const auto& [key, value] : map_) out << key << '=' << value << '\n';
-    return true;
+    // Atomic write: a crash mid-save can never truncate the previous file.
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary);
+        if (!out) return false;
+        out << "# ApkSpy settings - safe to delete, defaults will be used\n";
+        // Sorted so consecutive saves produce readable, minimal diffs.
+        std::vector<const std::string*> keys;
+        keys.reserve(map_.size());
+        for (const auto& [key, value] : map_) keys.push_back(&key);
+        std::sort(keys.begin(), keys.end(),
+                  [](const std::string* a, const std::string* b) { return *a < *b; });
+        for (const std::string* key : keys) out << *key << '=' << map_.at(*key) << '\n';
+        out.flush();
+        if (!out) return false;
+    }
+    std::remove(path.c_str());  // rename() won't overwrite on Windows
+    return std::rename(tmp.c_str(), path.c_str()) == 0;
 }
 
 std::string Settings::getString(const std::string& key, const std::string& fallback) const {

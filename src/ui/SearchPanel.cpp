@@ -6,12 +6,18 @@ void SearchPanel::drawContents() {
     auto roots = workspace_.decompiledRoots();
     bool running = workspace_.jadx().state() == JadxRunner::State::Running;
     if (roots.empty()) {
-        ImGui::TextDisabled(running ? "Decompilation is starting - search will cover the results as they appear"
+        ImGui::TextDisabled(running ? "Decompilation is starting - search will cover the results once it finishes"
                                     : "Search becomes available once an APK has been decompiled");
         return;
     }
     if (rootIdx_ >= (int)roots.size()) rootIdx_ = 0;
     Root* root = roots[(size_t)rootIdx_];
+
+    // The tree of a root that is currently being decompiled is mutated on
+    // the UI thread while results stream in; searching it concurrently is a
+    // data race, so searches on that root are stopped and new ones refused.
+    const bool decompiling = running && workspace_.isGroupDecompiling(root->title);
+    if (decompiling && workspace_.search().running()) workspace_.search().stop();
 
     // With several APKs in the project, pick which decompiled tree to search.
     if (roots.size() > 1) {
@@ -31,17 +37,33 @@ void SearchPanel::drawContents() {
     const char* modes[] = {"Full text", "Filenames", "Classes", "Methods", "Fields"};
     ImGui::Combo("##mode", &mode_, modes, 5);
 
-    bool submit = ImGui::InputText("##query", query_, sizeof query_, ImGuiInputTextFlags_EnterReturnsTrue);
+    bool submit = false;
+    if (decompiling) ImGui::BeginDisabled();
+    if (ImGui::InputText("##query", query_, sizeof query_, ImGuiInputTextFlags_EnterReturnsTrue)) submit = true;
     ImGui::SameLine();
     if (ImGui::Button("Search")) submit = true;
-    if (submit && query_[0])
+    if (submit && query_[0] && !decompiling)
         workspace_.search().start(root->tree.get(), root->source.get(), query_,
-                                  (SearchService::Mode)mode_);
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", workspace_.search().running() ? "searching..." : "");
+                                  (SearchService::Mode)mode_, root->title);
+    if (decompiling) {
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("results still streaming in...");
+    } else {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", workspace_.search().running() ? "searching..." : "");
+    }
 
-    // Hits point into this root's tree; only render them while it still
-    // exists (removing an APK clears them with the next stop()).
+    const SearchService& search = workspace_.search();
+    if (search.truncated())
+        ImGui::TextDisabled("Result list truncated at 3000 hits - refine the query");
+    if (search.skippedFiles() > 0)
+        ImGui::TextDisabled("%d oversized file(s) skipped (limit 4 MB)", search.skippedFiles());
+
+    // Hits point into the root that was searched (not the one currently
+    // selected in the combo), and only render while it still exists.
+    Root* hitRoot = workspace_.rootByGroup(search.group(), Root::Kind::Decompiled);
+    if (!hitRoot) return;
     ImGui::PushFont(Theme::monoFont());
     workspace_.search().withHits([&](const std::vector<SearchHit>& hits) {
         ImGuiListClipper clipper;
@@ -50,13 +72,19 @@ void SearchPanel::drawContents() {
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
                 const SearchHit& h = hits[(size_t)i];
                 char label[640];
-                std::snprintf(label, sizeof label, "%s:%d   %s##%d", h.label.c_str(), h.line + 1, h.text.c_str(), i);
+                std::snprintf(label, sizeof label, "%s:%d   %s##%d", h.node->name().c_str(), h.line + 1,
+                              h.text.c_str(), i);
                 if (ImGui::Selectable(label, false, ImGuiSelectableFlags_AllowDoubleClick)) {
-                    // Single click previews, double click keeps the tab open.
-                    workspace_.openNode(*root, *h.node, h.line,
-                                        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
-                                            ? Workspace::OpenMode::Permanent
-                                            : Workspace::OpenMode::Preview);
+                    // Opening a hit is an explicit jump: it lands in the
+                    // Back/Forward history (the current position is the
+                    // origin, so Alt+Left returns to it).
+                    NavLocation origin;
+                    NavLocation* originPtr = nullptr;
+                    if (Document* active = workspace_.activeDocument()) {
+                        origin = workspace_.locationOf(*active);
+                        originPtr = &origin;
+                    }
+                    workspace_.navigateTo(*hitRoot, *h.node, h.line, originPtr);
                 }
             }
         }

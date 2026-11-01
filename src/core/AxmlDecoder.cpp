@@ -99,7 +99,8 @@ bool parseStringPool(const uint8_t* data, size_t size, std::vector<std::string>&
             out.emplace_back(reinterpret_cast<const char*>(data + q), byteLen);
         } else {
             size_t p = base;
-            if (!c.avail(2)) return false;
+            // Bounds-check the string data cursor p (not the offsets cursor).
+            if (p + 2 > size) return false;
             uint32_t len = (uint32_t)data[p] | ((uint32_t)data[p + 1] << 8);
             p += 2;
             if (len & 0x8000) {
@@ -146,8 +147,12 @@ void escape(std::string& out, const std::string& s, bool attribute) {
 }
 
 float complexToFloat(uint32_t data) {
-    static const float kRadixMults[4] = {0.00390625f, 3.051758E-5f, 1.220703125E-7f, 4.656613E-10f};
-    return (float)(data & 0xFFFFFF00u) * kRadixMults[(data >> 4) & 0x3];
+    // Matches AOSP TypedValue.complexToFloat: the mantissa (bits 8-31) is
+    // SIGN-extended, and the per-radix multipliers are exactly those of
+    // AOSP's RADIX_MULTS = {1/2^8, 1/2^15, 1/2^23, 1/2^31}.
+    static const float kRadixMults[4] = {0.00390625f, 0.000030517578125f, 0.00000011920928955078125f,
+                                         0.0000000004656612873077392578125f};
+    return (float)(int32_t)(data & 0xFFFFFF00u) * kRadixMults[(data >> 4) & 0x3];
 }
 
 std::string formatTypedValue(uint8_t type, uint32_t data) {
@@ -161,9 +166,12 @@ std::string formatTypedValue(uint8_t type, uint32_t data) {
     case 0x02:  // ATTRIBUTE
         std::snprintf(buf, sizeof buf, "?attr/0x%08X", data);
         return buf;
-    case 0x04:  // FLOAT
-        std::snprintf(buf, sizeof buf, "%g", *reinterpret_cast<const float*>(&data));
+    case 0x04: {  // FLOAT
+        float v = 0.f;
+        std::memcpy(&v, &data, sizeof v);  // no type-punning
+        std::snprintf(buf, sizeof buf, "%g", v);
         return buf;
+    }
     case 0x05: {  // DIMENSION
         static const char* kUnits[] = {"px", "dp", "sp", "pt", "in", "mm"};
         uint32_t unit = data & 0xF;
@@ -199,7 +207,10 @@ bool AxmlDecoder::looksLikeAxml(const std::vector<uint8_t>& bytes) {
     return bytes.size() >= 8 && bytes[0] == 0x03 && bytes[1] == 0x00;
 }
 
-bool AxmlDecoder::decode(const std::vector<uint8_t>& bytes, std::string& out, std::string& error) {
+// -- Event walk ---------------------------------------------------------------
+// The chunk loop below is the single decoder: decode() prints through a
+// Visitor, structured consumers (ApkInfo, M4) override the callbacks.
+bool AxmlDecoder::decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visitor, std::string& error) {
     if (!looksLikeAxml(bytes)) {
         error = "not a binary XML chunk";
         return false;
@@ -215,11 +226,7 @@ bool AxmlDecoder::decode(const std::vector<uint8_t>& bytes, std::string& out, st
     // xmlns declarations waiting to be attached to the next start tag
     std::vector<std::pair<std::string, std::string>> pendingNs;   // prefix, uri
     std::vector<std::pair<std::string, std::string>> openNs;      // prefix, uri
-    std::vector<std::string> openElements;
-    int depth = 0;
-    bool pendingOpenTag = false;  // "<name ..." written without ">" yet
-
-    out += "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
+    std::vector<Attr> attrs;
 
     size_t pos = 8;  // skip the RES_XML_TYPE wrapper header
     while (pos + 8 <= totalSize) {
@@ -243,8 +250,8 @@ bool AxmlDecoder::decode(const std::vector<uint8_t>& bytes, std::string& out, st
             break;
 
         case kStartNamespace: {
-            if (size < 24) { error = "short namespace chunk"; return false; }
-            c.pos = pos + 16;
+            if (size < 24 || headerSize < 16) { error = "short namespace chunk"; return false; }
+            c.pos = pos + headerSize;
             uint32_t prefixIdx = c.u32();
             uint32_t uriIdx = c.u32();
             if (!c.ok) { error = "short namespace chunk"; return false; }
@@ -261,31 +268,31 @@ bool AxmlDecoder::decode(const std::vector<uint8_t>& bytes, std::string& out, st
             break;
 
         case kStartElement: {
-            if (size < 36) { error = "short element chunk"; return false; }
-            // ResXMLTree_attrExt: ns u32, name u32, attributeStart u16,
-            // attributeSize u16, attributeCount u16, id/class/styleIndex u16
-            c.pos = pos + 16;
+            if (size < 36 || headerSize < 16) { error = "short element chunk"; return false; }
+            // Chunk layout per AOSP: [16-byte ResXMLTree_node header]
+            // [ResXMLTree_attrExt: ns, name, attributeStart, attributeSize,
+            //  attributeCount, id/class/style index]. attributeStart is
+            // relative to the START OF THE attrExt struct (standard value
+            // 0x14 = 20), NOT to the chunk - real AXML files store 20.
+            const size_t attrExt = pos + headerSize;
+            c.pos = attrExt;
             uint32_t nsElemIdx = c.u32();
             uint32_t nameIdx = c.u32();
             uint16_t attributeStart = c.u16();
             uint16_t attributeSize = c.u16();
             uint16_t attributeCount = c.u16();
-            if (!c.ok || attributeSize < 20) { error = "corrupt element"; return false; }
+            if (!c.ok || attributeSize < 20 || attributeStart < 20) {
+                error = "corrupt element";
+                return false;
+            }
             (void)nsElemIdx;
 
-            if (pendingOpenTag) { out += ">\n"; pendingOpenTag = false; }
-            out.append(depth * 4, ' ');
-            out += "<" + poolString(pool, nameIdx);
-            for (const auto& ns : pendingNs) {
-                out += "\n";
-                out.append((depth + 1) * 4, ' ');
-                out += "xmlns:" + ns.first + "=\"";
-                escape(out, ns.second, true);
-                out += "\"";
-            }
+            attrs.clear();
+            for (const auto& ns : pendingNs)
+                attrs.push_back({"xmlns:" + ns.first, ns.second});
             pendingNs.clear();
 
-            size_t attrBase = pos + attributeStart;
+            size_t attrBase = attrExt + attributeStart;
             for (uint16_t i = 0; i < attributeCount; ++i) {
                 size_t base = attrBase + (size_t)i * attributeSize;
                 if (base + 20 > pos + size) { error = "corrupt attributes"; return false; }
@@ -299,8 +306,6 @@ bool AxmlDecoder::decode(const std::vector<uint8_t>& bytes, std::string& out, st
 
                 std::string name = poolString(pool, attrNameIdx);
                 if (name.empty()) name = "attr" + std::to_string(i);
-                out += "\n";
-                out.append((depth + 1) * 4, ' ');
                 if (nsIdx != kNoIndex) {
                     std::string uri = poolString(pool, nsIdx);
                     std::string prefix;
@@ -311,68 +316,101 @@ bool AxmlDecoder::decode(const std::vector<uint8_t>& bytes, std::string& out, st
                         else if (uri == "http://schemas.android.com/apk/res-auto") prefix = "app";
                         else prefix = "ns";
                     }
-                    out += prefix + ":";
+                    name = prefix + ":" + name;
                 }
-                out += name + "=\"";
+                std::string value;
                 if (dataType == 0x03 && typedData != kNoIndex) {
-                    escape(out, poolString(pool, typedData), true);
+                    value = poolString(pool, typedData);
                 } else if (rawValue != kNoIndex && dataType == 0x03) {
-                    escape(out, poolString(pool, rawValue), true);
+                    value = poolString(pool, rawValue);
                 } else {
-                    std::string v = formatTypedValue(dataType, dataType == 0x03 ? rawValue : typedData);
-                    escape(out, v, true);
+                    value = formatTypedValue(dataType, dataType == 0x03 ? rawValue : typedData);
                 }
-                out += "\"";
+                attrs.push_back({std::move(name), std::move(value)});
             }
-            // The closing ">" is deferred so an immediately following end
-            // element can turn the tag into "<name ... />".
-            pendingOpenTag = true;
-            openElements.push_back(poolString(pool, nameIdx));
-            ++depth;
+            visitor.startElement(poolString(pool, nameIdx), attrs);
             break;
         }
 
         case kEndElement: {
-            if (size < 24) { error = "short end-element chunk"; return false; }
-            // ResXMLTree_endElementExt: ns u32, name u32
-            c.pos = pos + 20;
+            if (size < 24 || headerSize < 16) { error = "short end-element chunk"; return false; }
+            // ResXMLTree_endElementExt follows the 16-byte node header.
+            c.pos = pos + headerSize + 4;  // skip ns, read name
             uint32_t nameIdx = c.u32();
             if (!c.ok) { error = "short end-element chunk"; return false; }
-            if (depth > 0) --depth;
-            std::string name = poolString(pool, nameIdx);
-            if (pendingOpenTag) {
-                out += " />\n";
-                pendingOpenTag = false;
-                if (!openElements.empty()) openElements.pop_back();
-            } else {
-                out.append(depth * 4, ' ');
-                out += "</" + name + ">\n";
-                if (!openElements.empty()) openElements.pop_back();
-            }
+            visitor.endElement(poolString(pool, nameIdx));
             break;
         }
 
         case kCData: {
-            if (size < 20) break;
-            uint32_t dataIdx = c.peek32(pos + 16);
+            if (size < 20 || headerSize < 16) break;
+            uint32_t dataIdx = c.peek32(pos + headerSize);
             if (dataIdx == kNoIndex) break;
             std::string text = poolString(pool, dataIdx);
             // skip whitespace-only text nodes
             bool printable = false;
             for (char ch : text)
                 if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') { printable = true; break; }
-            if (!printable) break;
-            if (pendingOpenTag) { out += ">"; pendingOpenTag = false; }
-            escape(out, text, false);
+            if (printable) visitor.text(text);
             break;
         }
 
         default:
             break;  // resource map, unknown chunks - skip
         }
-        (void)headerSize;
         pos += chunkSize;
     }
 
     return true;
+}
+
+// Prints the event stream exactly like decode() always did (indented XML,
+// one attribute per line, self-closing empty elements).
+namespace {
+class XmlPrintVisitor : public AxmlDecoder::Visitor {
+public:
+    explicit XmlPrintVisitor(std::string& out) : out_(out) {}
+
+    void startElement(const std::string& name, const std::vector<AxmlDecoder::Attr>& attrs) override {
+        if (pendingOpenTag_) { out_ += ">\n"; pendingOpenTag_ = false; }
+        out_.append((size_t)depth_ * 4, ' ');
+        out_ += "<" + name;
+        for (const AxmlDecoder::Attr& a : attrs) {
+            out_ += "\n";
+            out_.append((size_t)(depth_ + 1) * 4, ' ');
+            out_ += a.name + "=\"";
+            escape(out_, a.value, true);
+            out_ += "\"";
+        }
+        pendingOpenTag_ = true;
+        ++depth_;
+    }
+
+    void endElement(const std::string& name) override {
+        if (depth_ > 0) --depth_;
+        if (pendingOpenTag_) {
+            out_ += " />\n";
+            pendingOpenTag_ = false;
+        } else {
+            out_.append((size_t)depth_ * 4, ' ');
+            out_ += "</" + name + ">\n";
+        }
+    }
+
+    void text(const std::string& text) override {
+        if (pendingOpenTag_) { out_ += ">"; pendingOpenTag_ = false; }
+        escape(out_, text, false);
+    }
+
+private:
+    std::string& out_;
+    int depth_ = 0;
+    bool pendingOpenTag_ = false;
+};
+}  // namespace
+
+bool AxmlDecoder::decode(const std::vector<uint8_t>& bytes, std::string& out, std::string& error) {
+    out += "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
+    XmlPrintVisitor printer(out);
+    return decodeEvents(bytes, printer, error);
 }

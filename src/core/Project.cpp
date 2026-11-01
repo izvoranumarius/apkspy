@@ -1,15 +1,21 @@
 #include "core/Project.hpp"
 #include <filesystem>
+#include "core/Paths.hpp"
 
 namespace fs = std::filesystem;
 
 static constexpr const char* kProjectFormat = "apkspy-project-1";
+// Sanity caps for untrusted input: a corrupt or hostile project file must not
+// turn into gigabytes of allocations before the format check even runs.
+static constexpr int kMaxApkEntries = 4096;
+static constexpr int kMaxTabEntries = 10000;
 
 void Project::reset() {
     open_ = true;
     path_.clear();
     apks_.clear();
     tabs_.clear();
+    ++epoch_;
 }
 
 void Project::close() {
@@ -17,11 +23,12 @@ void Project::close() {
     path_.clear();
     apks_.clear();
     tabs_.clear();
+    ++epoch_;
 }
 
 std::string Project::name() const {
     if (path_.empty()) return "Untitled Project";
-    return fs::path(path_).stem().string();
+    return pathutil::toUtf8(fs::path(pathutil::fromUtf8(path_)).stem());
 }
 
 ProjectApk* Project::findApkByPath(const std::string& path) {
@@ -36,21 +43,19 @@ ProjectApk* Project::findApkByGroup(const std::string& group) {
     return nullptr;
 }
 
-void Project::addApk(std::string path, std::string group, std::string jadxOut) {
-    apks_.push_back({std::move(path), std::move(group), std::move(jadxOut)});
+void Project::addApk(std::string path, std::string group) {
+    apks_.push_back({std::move(path), std::move(group)});
+    ++epoch_;
 }
 
 void Project::removeApk(const std::string& group) {
     for (auto it = apks_.begin(); it != apks_.end(); ++it) {
         if (it->group == group) {
             apks_.erase(it);
+            ++epoch_;
             return;
         }
     }
-}
-
-void Project::setJadxOut(const std::string& group, std::string outDir) {
-    if (ProjectApk* apk = findApkByGroup(group)) apk->jadxOut = std::move(outDir);
 }
 
 std::string Project::uniqueGroupName(const std::string& stem) const {
@@ -74,18 +79,18 @@ bool Project::save(const std::string& path) {
         const std::string idx = std::to_string(i);
         out.set("apk." + idx + ".path", apks_[i].path);
         out.set("apk." + idx + ".group", apks_[i].group);
-        out.set("apk." + idx + ".jadxOut", apks_[i].jadxOut);
     }
     out.set("tab.count", (int)tabs_.size());
     for (size_t i = 0; i < tabs_.size(); ++i) {
         const std::string idx = std::to_string(i);
-        out.set("tab." + idx + ".kind", tabs_[i].rootKind);
+        out.set("tab." + idx + ".kind", (int)tabs_[i].rootKind);
         out.set("tab." + idx + ".group", tabs_[i].group);
         out.set("tab." + idx + ".path", tabs_[i].path);
     }
     if (!out.save(path)) return false;
     path_ = path;
     open_ = true;
+    ++epoch_;
     return true;
 }
 
@@ -96,21 +101,24 @@ bool Project::load(const std::string& path) {
 
     std::vector<ProjectApk> apks;
     int count = in.getInt("apk.count", 0);
+    if (count < 0 || count > kMaxApkEntries) return false;
     for (int i = 0; i < count; ++i) {
         const std::string idx = std::to_string(i);
         ProjectApk apk;
         apk.path = in.getString("apk." + idx + ".path");
         apk.group = in.getString("apk." + idx + ".group");
-        apk.jadxOut = in.getString("apk." + idx + ".jadxOut");
         if (!apk.path.empty()) apks.push_back(std::move(apk));
     }
 
     std::vector<Tab> tabs;
     int tabCount = in.getInt("tab.count", 0);
+    if (tabCount < 0 || tabCount > kMaxTabEntries) return false;
     for (int i = 0; i < tabCount; ++i) {
         const std::string idx = std::to_string(i);
         Tab tab;
-        tab.rootKind = in.getInt("tab." + idx + ".kind", 0);
+        int kind = in.getInt("tab." + idx + ".kind", 0);
+        if (kind != (int)RootKind::Apk && kind != (int)RootKind::Decompiled) continue;
+        tab.rootKind = (RootKind)kind;
         tab.group = in.getString("tab." + idx + ".group");
         tab.path = in.getString("tab." + idx + ".path");
         if (!tab.path.empty()) tabs.push_back(std::move(tab));
@@ -120,5 +128,6 @@ bool Project::load(const std::string& path) {
     tabs_ = std::move(tabs);
     path_ = path;
     open_ = true;
+    ++epoch_;
     return true;
 }

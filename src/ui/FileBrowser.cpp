@@ -1,12 +1,9 @@
 #include "ui/FileBrowser.hpp"
 #include <algorithm>
 #include <cstdio>
-#include <cctype>
 #include <filesystem>
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
+#include "core/Paths.hpp"
+#include "core/TextUtils.hpp"
 
 namespace fs = std::filesystem;
 
@@ -20,14 +17,9 @@ std::string homeDir() {
     return d ? d : ".";
 }
 
-std::string lower(std::string s) {
-    for (char& c : s) c = (char)std::tolower((unsigned char)c);
-    return s;
-}
-
 bool hasExtension(const std::string& name, const char* ext) {
-    std::string n = lower(name);
-    std::string e = lower(ext);
+    std::string n = tex::asciiLower(name);
+    std::string e = tex::asciiLower(ext);
     return n.size() >= e.size() && n.compare(n.size() - e.size(), e.size(), e) == 0;
 }
 }  // namespace
@@ -58,9 +50,9 @@ void FileBrowser::setDefaultName(const std::string& name) {
 
 void FileBrowser::goTo(const std::string& dir) {
     std::error_code ec;
-    fs::path p = fs::absolute(fs::path(dir)).lexically_normal();
+    fs::path p = fs::absolute(pathutil::fromUtf8(dir)).lexically_normal();
     if (!fs::is_directory(p, ec)) return;
-    currentDir_ = p.string();
+    currentDir_ = pathutil::toUtf8(p);
     std::snprintf(pathBuffer_, sizeof pathBuffer_, "%s", currentDir_.c_str());
     refresh();
 }
@@ -72,7 +64,7 @@ void FileBrowser::applyFilter() {
             entries_.push_back(e);
             continue;
         }
-        if (mode_ == Mode::OpenApk || mode_ == Mode::OpenApkMulti) {
+        if (mode_ == Mode::OpenApkMulti) {
             if (hasExtension(e.name, ".apk")) entries_.push_back(e);
         } else if (mode_ == Mode::OpenProject) {
             if (hasExtension(e.name, ".apkspy")) entries_.push_back(e);
@@ -82,17 +74,17 @@ void FileBrowser::applyFilter() {
     }
     std::stable_sort(entries_.begin(), entries_.end(), [](const Entry& a, const Entry& b) {
         if (a.isDir != b.isDir) return a.isDir;
-        return lower(a.name) < lower(b.name);
+        return tex::asciiLower(a.name) < tex::asciiLower(b.name);
     });
 }
 
 void FileBrowser::refresh() {
     all_.clear();
     std::error_code ec;
-    for (fs::directory_iterator it(currentDir_, ec), end; !ec && it != end; it.increment(ec)) {
-        std::string name = it->path().filename().string();
+    for (fs::directory_iterator it(pathutil::fromUtf8(currentDir_), ec), end; !ec && it != end; it.increment(ec)) {
+        std::string name = pathutil::toUtf8(it->path().filename());
         if (name.empty()) continue;
-        if (!name.empty() && name.front() == '.') continue;  // keep the list tidy
+        if (name.front() == '.') continue;  // keep the list tidy
         all_.push_back({name, it->is_directory(ec)});
     }
     applyFilter();
@@ -100,10 +92,11 @@ void FileBrowser::refresh() {
 
 const char* FileBrowser::popupTitle() const {
     switch (mode_) {
-    case Mode::OpenApk: return "Select APK File";
     case Mode::OpenApkMulti: return "Select APK Files";
     case Mode::OpenProject: return "Open Project";
     case Mode::SaveProject: return "Save Project As";
+    case Mode::SaveFile: return "Export File";
+    case Mode::SelectFolder: return "Export Folder";
     default: return "Select jadx Executable";
     }
 }
@@ -129,7 +122,7 @@ bool FileBrowser::takeAcceptedMulti(std::vector<std::string>& outPaths) {
     return true;
 }
 
-void FileBrowser::render(const char*) {
+void FileBrowser::render() {
     if (!open_) return;
     const char* popupTitle = this->popupTitle();
     // Consume the open request in the same ID scope as the BeginPopupModal()
@@ -147,20 +140,20 @@ void FileBrowser::render(const char*) {
     ImGui::SetNextItemWidth(-buttonW - 140.f);
     if (ImGui::InputText("##path", pathBuffer_, sizeof pathBuffer_, ImGuiInputTextFlags_EnterReturnsTrue)) {
         std::error_code ec;
-        fs::path p = fs::path(pathBuffer_).lexically_normal();
+        fs::path p = pathutil::fromUtf8(pathBuffer_).lexically_normal();
         if (fs::is_directory(p, ec)) {
-            currentDir_ = p.string();
+            currentDir_ = pathutil::toUtf8(p);
             refresh();
         }
     }
     ImGui::SameLine();
     if (ImGui::Button("Up", ImVec2(60, 0))) {
-        fs::path parent = fs::path(currentDir_).parent_path();
-        if (!parent.empty()) goTo(parent.string());
+        fs::path parent = pathutil::fromUtf8(currentDir_).parent_path();
+        if (!parent.empty()) goTo(pathutil::toUtf8(parent));
         else {
             std::error_code ec;
-            if (!fs::path(currentDir_).has_root_path() || fs::path(currentDir_).root_path().string() != currentDir_)
-                goTo("/");
+            fs::path cur = pathutil::fromUtf8(currentDir_);
+            if (!cur.has_root_path() || pathutil::toUtf8(cur.root_path()) != currentDir_) goTo("/");
         }
     }
     ImGui::SameLine();
@@ -186,35 +179,47 @@ void FileBrowser::render(const char*) {
 
     ImGui::Separator();
 
-    // Entries ---------------------------------------------------------------
+    // Entries (virtualized: a Downloads folder with thousands of files
+    // must not submit every row every frame) ------------------------------
     ImGui::BeginChild("##entries", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() * 2.f),
                       ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
     std::string pendingDir;
     bool pendingAccept = false;
-    for (const Entry& e : entries_) {
-        ImGui::PushID(e.name.c_str());
-        const bool selected = multi ? selectedNames_.count(e.name) > 0
-                                    : (selectedFile_ == e.name && !e.isDir);
-        if (ImGui::Selectable(e.name.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick)) {
-            if (e.isDir) {
-                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) pendingDir = e.name;
-                else if (!multi) selectedFile_ = e.name;  // remember highlight only
-            } else if (multi) {
-                // Click toggles the file in the multi-selection.
-                if (selectedNames_.count(e.name)) selectedNames_.erase(e.name);
-                else selectedNames_.insert(e.name);
-                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                    selectedNames_.clear();
-                    selectedNames_.insert(e.name);
-                    pendingAccept = true;
+    ImGuiListClipper clipper;
+    clipper.Begin((int)entries_.size());
+    while (clipper.Step()) {
+        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+            const Entry& e = entries_[(size_t)i];
+            ImGui::PushID(i);
+            const bool folderMode = mode_ == Mode::SelectFolder;
+            const bool selected = multi       ? selectedNames_.count(e.name) > 0
+                                  : folderMode ? (selectedFile_ == e.name && e.isDir)
+                                               : (selectedFile_ == e.name && !e.isDir);
+            if (ImGui::Selectable(e.name.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+                if (e.isDir) {
+                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) pendingDir = e.name;
+                    else if (folderMode) selectedFile_ = e.name;  // folder highlight
+                    else if (!multi) selectedFile_ = e.name;      // remember highlight only
+                } else if (folderMode) {
+                    // Files are not valid export destinations here; enter on
+                    // double click is handled above only for dirs.
+                } else if (multi) {
+                    // Click toggles the file in the multi-selection.
+                    if (selectedNames_.count(e.name)) selectedNames_.erase(e.name);
+                    else selectedNames_.insert(e.name);
+                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                        selectedNames_.clear();
+                        selectedNames_.insert(e.name);
+                        pendingAccept = true;
+                    }
+                } else {
+                    selectedFile_ = e.name;
+                    std::snprintf(nameBuffer_, sizeof nameBuffer_, "%s", e.name.c_str());
+                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) pendingAccept = true;
                 }
-            } else {
-                selectedFile_ = e.name;
-                std::snprintf(nameBuffer_, sizeof nameBuffer_, "%s", e.name.c_str());
-                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) pendingAccept = true;
             }
+            ImGui::PopID();
         }
-        ImGui::PopID();
     }
     ImGui::EndChild();
 
@@ -226,7 +231,10 @@ void FileBrowser::render(const char*) {
         ImGui::InputText("##name", nameBuffer_, sizeof nameBuffer_);
     }
     ImGui::SameLine();
-    const char* acceptLabel = multi ? "Add" : (mode_ == Mode::OpenApk || mode_ == Mode::OpenProject ? "Open" : "Select");
+    const char* acceptLabel = multi      ? "Add"
+                              : mode_ == Mode::OpenProject ? "Open"
+                              : mode_ == Mode::SelectFolder ? "Select Folder"
+                                                            : "Save";
     if (ImGui::Button(acceptLabel, ImVec2(buttonW, 0))) pendingAccept = true;
     ImGui::SameLine();
     if (ImGui::Button("Cancel", ImVec2(buttonW, 0))) {
@@ -235,7 +243,7 @@ void FileBrowser::render(const char*) {
     }
 
     if (!pendingDir.empty()) {
-        goTo((fs::path(currentDir_) / pendingDir).string());
+        goTo(pathutil::toUtf8(pathutil::fromUtf8(currentDir_) / pendingDir));
         selectedFile_.clear();
     }
     if (pendingAccept) {
@@ -243,8 +251,20 @@ void FileBrowser::render(const char*) {
             if (!selectedNames_.empty()) {
                 results_.clear();
                 for (const std::string& name : selectedNames_)
-                    results_.push_back((fs::path(currentDir_) / name).string());
+                    results_.push_back(pathutil::toUtf8(pathutil::fromUtf8(currentDir_) / name));
                 acceptedMulti_ = true;
+                open_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+        } else if (mode_ == Mode::SelectFolder) {
+            // The highlighted folder wins; otherwise the current directory.
+            std::error_code ec;
+            fs::path chosen = selectedFile_.empty()
+                                  ? fs::path(pathutil::fromUtf8(currentDir_))
+                                  : pathutil::fromUtf8(currentDir_) / selectedFile_;
+            if (fs::is_directory(chosen, ec)) {
+                result_ = pathutil::toUtf8(chosen);
+                accepted_ = true;
                 open_ = false;
                 ImGui::CloseCurrentPopup();
             }
@@ -252,11 +272,11 @@ void FileBrowser::render(const char*) {
             std::string name = nameBuffer_;
             if (mode_ == Mode::SaveProject) name = projectFileName(name);
             std::error_code ec;
-            fs::path candidate = fs::path(currentDir_) / name;
-            if (mode_ != Mode::SaveProject && fs::is_directory(candidate, ec)) {
-                goTo(candidate.string());
+            fs::path candidate = pathutil::fromUtf8(currentDir_) / name;
+            if (mode_ != Mode::SaveProject && mode_ != Mode::SaveFile && fs::is_directory(candidate, ec)) {
+                goTo(pathutil::toUtf8(candidate));
             } else {
-                result_ = candidate.string();
+                result_ = pathutil::toUtf8(candidate);
                 accepted_ = true;
                 open_ = false;
                 ImGui::CloseCurrentPopup();

@@ -15,7 +15,7 @@ void SettingsDialog::open() {
 }
 
 bool SettingsDialog::render() {
-    resultPending_ = false;
+    bool resultPending = false;
     if (!open_) return false;
 
     ImGui::SetNextWindowSize(ImVec2(760, 480), ImGuiCond_Appearing);
@@ -66,17 +66,17 @@ bool SettingsDialog::render() {
         settings_.set(Settings::kJadxArgs, jadxArgs_);
         settings_.set(Settings::kRestoreSession, restoreSession_);
         settings_.set(Settings::kLineNumbers, lineNumbers_);
-        resultPending_ = true;
+        resultPending = true;
     }
     if (ok) open_ = false;
 
     ImGui::End();
 
-    browser_.render("Select jadx Executable");
+    browser_.render();
     std::string picked;
     if (browser_.takeAccepted(picked)) std::snprintf(jadxPath_, sizeof jadxPath_, "%s", picked.c_str());
 
-    return resultPending_;
+    return resultPending;
 }
 
 void SettingsDialog::drawGeneralPage() {
@@ -109,10 +109,12 @@ void SettingsDialog::drawJadxPage() {
     ImGui::Dummy(ImVec2(browseW, 0));
 
     ImGui::Spacing();
+    // Disabled while a test is running (starting another would have to
+    // join the live thread on the UI thread and freeze the dialog).
+    if (workspace_.jadx().testRunning()) ImGui::BeginDisabled();
     if (ImGui::Button("Test installation")) workspace_.jadx().testInstall(jadxPath_);
-
-    bool running = workspace_.jadx().testRunning();
-    if (running) {
+    if (workspace_.jadx().testRunning()) {
+        ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::TextDisabled("testing...");
     } else {
@@ -132,6 +134,8 @@ void SettingsDialog::drawEditorPage() {
     ImGui::Checkbox("Show line numbers", &lineNumbers_);
     ImGui::Separator();
     ImGui::TextWrapped("Single-clicking a file in the explorer opens it in a preview tab; "
-                       "double-clicking keeps it permanently. Modified files are marked "
-                       "with a dot and ApkSpy asks for confirmation before closing them.");
+                       "double-clicking keeps it permanently. Files open in a read-only view - "
+                       "use the Edit toggle above the document to modify them. Modified files "
+                       "are marked with a star (*) and ApkSpy asks for confirmation before "
+                       "closing them.");
 }

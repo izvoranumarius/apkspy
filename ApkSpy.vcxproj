@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -20,14 +20,14 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
-    <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
@@ -38,7 +38,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
+      <WarningLevel>Level4</WarningLevel>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
@@ -48,7 +48,8 @@
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
+      <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(ProjectDir)lib\glfw\lib-vc2022;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>glfw3.lib;dwmapi.lib;opengl32.lib;gdi32.lib;shell32.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -57,7 +58,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>_ITERATOR_DEBUG_LEVEL=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
@@ -77,8 +78,21 @@
     <ClInclude Include="src\app\Theme.hpp" />
     <ClInclude Include="src\app\WindowFrame.hpp" />
     <ClInclude Include="src\core\ApkArchive.hpp" />
+    <ClInclude Include="src\core\TextSearch.hpp" />
+    <ClInclude Include="src\core\NavHistory.hpp" />
+    <ClInclude Include="src\core\SymbolIndex.hpp" />
+    <ClInclude Include="src\core\Sha256.hpp" />
+    <ClInclude Include="src\core\Der.hpp" />
+    <ClInclude Include="src\core\ApkInfo.hpp" />
+    <ClInclude Include="src\core\SafePath.hpp" />
+    <ClInclude Include="src\core\IcoLoader.hpp" />
+    <ClInclude Include="src\core\Paths.hpp" />
+    <ClInclude Include="src\core\ExportJob.hpp" />
     <ClInclude Include="src\core\AxmlDecoder.hpp" />
     <ClInclude Include="src\core\ContentSource.hpp" />
+    <ClInclude Include="src\core\LogSeverity.hpp" />
+    <ClInclude Include="src\core\RootKind.hpp" />
+    <ClInclude Include="src\core\TextUtils.hpp" />
     <ClInclude Include="src\core\JadxRunner.hpp" />
     <ClInclude Include="src\core\SearchService.hpp" />
     <ClInclude Include="src\core\Settings.hpp" />
@@ -96,6 +110,7 @@
     <ClInclude Include="src\ui\ImageViewer.hpp" />
     <ClInclude Include="src\ui\OutputPanel.hpp" />
     <ClInclude Include="src\ui\Panel.hpp" />
+    <ClInclude Include="src\ui\OverviewPanel.hpp" />
     <ClInclude Include="src\ui\SearchPanel.hpp" />
     <ClInclude Include="src\ui\SettingsDialog.hpp" />
     <ClInclude Include="src\ui\TitleBar.hpp" />
@@ -110,6 +125,11 @@
     <ClCompile Include="src\core\JadxRunner.cpp" />
     <ClCompile Include="src\core\Project.cpp" />
     <ClCompile Include="src\core\SearchService.cpp" />
+    <ClCompile Include="src\core\SymbolIndex.cpp" />
+    <ClCompile Include="src\core\IcoLoader.cpp" />
+    <ClCompile Include="src\core\Paths.cpp" />
+    <ClCompile Include="src\core\ApkInfo.cpp" />
+    <ClCompile Include="src\core\ExportJob.cpp" />
     <ClCompile Include="src\core\Settings.cpp" />
     <ClCompile Include="src\core\Workspace.cpp" />
     <ClCompile Include="src\document\Document.cpp" />
@@ -122,6 +142,7 @@
     <ClCompile Include="src\ui\FileBrowser.cpp" />
     <ClCompile Include="src\ui\ImageViewer.cpp" />
     <ClCompile Include="src\ui\OutputPanel.cpp" />
+    <ClCompile Include="src\ui\OverviewPanel.cpp" />
     <ClCompile Include="src\ui\SearchPanel.cpp" />
     <ClCompile Include="src\ui\SettingsDialog.cpp" />
     <ClCompile Include="src\ui\TitleBar.cpp" />

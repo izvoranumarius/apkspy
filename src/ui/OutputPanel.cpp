@@ -1,24 +1,19 @@
 #include "ui/OutputPanel.hpp"
-#include <cctype>
-#include <string>
+#include "core/LogSeverity.hpp"
 #include "app/Theme.hpp"
-
-namespace {
-enum class LineKind { Info, Warn, Error };
-
-LineKind classify(const std::string& line) {
-    auto contains = [&line](const char* word) { return line.find(word) != std::string::npos; };
-    if (contains("ERROR") || contains("Error") || contains("error:")) return LineKind::Error;
-    if (contains("WARN") || contains("Warn") || contains("warning:")) return LineKind::Warn;
-    return LineKind::Info;
-}
-}
 
 void OutputPanel::drawContents() {
     const auto& lines = workspace_.logLines();
 
     // Toolbar ---------------------------------------------------------------
-    if (ImGui::Button("Clear")) workspace_.clearLog();
+    if (ImGui::Button("Clear")) {
+        workspace_.clearLog();
+        severities_.clear();
+        classifiedCount_ = 0;
+        index_.clear();
+        lastFilter_ = -1;  // force an index rebuild
+        lastCount_ = 0;
+    }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.f);
     ImGui::Combo("##filter", &filter_, "All\0Warnings\0Errors\0\0");
@@ -32,34 +27,69 @@ void OutputPanel::drawContents() {
     }
     ImGui::Separator();
 
+    const size_t prevCount = lastCount_;
+    const bool trimmed = lines.size() < prevCount;  // workspace dropped old lines
+    lastCount_ = lines.size();
+
+    // Classify each line exactly once (not per frame per line).
+    if (trimmed) {
+        severities_.clear();
+        classifiedCount_ = 0;
+        index_.clear();
+    }
+    if (severities_.size() < lines.size()) {
+        severities_.resize(lines.size());
+        for (size_t i = classifiedCount_; i < lines.size(); ++i)
+            severities_[i] = (char)logsev::classify(lines[i]);
+        classifiedCount_ = lines.size();
+    }
+
+    // Remember whether the view is at the bottom BEFORE new lines are
+    // appended - auto-scroll must never yank the user back down while they
+    // read older output.
+    const bool atBottom = ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 8.f;
+
+    // Filtered index: the clipper needs a dense row list, so rows are
+    // skipped while building the index instead of inside its loop (the old
+    // in-loop "continue" corrupted the clipper's measurements and left
+    // blank gaps).
+    auto matches = [this](size_t i) {
+        if (filter_ == 0) return true;
+        if (filter_ == 1) return severities_[i] == (char)LogSeverity::Warn;
+        return severities_[i] == (char)LogSeverity::Error;
+    };
+    if (lastFilter_ != filter_) {
+        index_.clear();
+        for (size_t i = 0; i < lines.size(); ++i)
+            if (matches(i)) index_.push_back((int)i);
+    } else {
+        for (size_t i = prevCount < lines.size() ? prevCount : lines.size(); i < lines.size(); ++i)
+            if (matches(i)) index_.push_back((int)i);
+    }
+    lastFilter_ = filter_;
+
     // Log lines --------------------------------------------------------------
     ImGui::PushFont(Theme::monoFont());
     ImGuiListClipper clipper;
-    clipper.Begin((int)lines.size());
+    clipper.Begin((int)index_.size());
     while (clipper.Step()) {
-        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-            const std::string& line = lines[(size_t)i];
-            LineKind kind = classify(line);
-            if (filter_ == 1 && kind != LineKind::Warn) continue;
-            if (filter_ == 2 && kind != LineKind::Error) continue;
-            switch (kind) {
-            case LineKind::Warn:
+        for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; ++r) {
+            const size_t i = (size_t)index_[(size_t)r];
+            switch ((LogSeverity)severities_[i]) {
+            case LogSeverity::Warn:
                 ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220, 190, 100, 255));
                 break;
-            case LineKind::Error:
+            case LogSeverity::Error:
                 ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(235, 100, 90, 255));
                 break;
             default:
                 ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(200, 200, 200, 255));
                 break;
             }
-            ImGui::TextUnformatted(line.c_str());
+            ImGui::TextUnformatted(lines[i].c_str());
             ImGui::PopStyleColor();
         }
     }
     ImGui::PopFont();
-    if (lines.size() != lastCount_) {
-        ImGui::SetScrollHereY(1.0f);
-        lastCount_ = lines.size();
-    }
+    if (lines.size() > prevCount && atBottom) ImGui::SetScrollHereY(1.0f);
 }

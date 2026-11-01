@@ -1,6 +1,7 @@
 #include "ui/ExplorerPanel.hpp"
 #include "ui/ShellIcons.hpp"
 #include <cstdio>
+#include "imgui_internal.h"
 
 namespace {
 ImVec4 colorFor(NodeKind kind) {
@@ -24,8 +25,9 @@ ImVec4 colorFor(NodeKind kind) {
 
 // ---------------------------------------------------------------------------
 // Windows Explorer style default icons, drawn with ImDrawList primitives so
-// no texture atlas or font icons are needed. All coordinates are derived from
-// the [mn, mx] box so they scale with the current font size.
+// no texture atlas or font icons are needed (non-Windows fallback). All
+// coordinates are derived from the [mn, mx] box so they scale with the
+// current font size.
 // ---------------------------------------------------------------------------
 
 // Classic two-tone yellow shell folder. 'archive' adds the dashed zipper
@@ -118,7 +120,7 @@ void ExplorerPanel::drawContents() {
                 ImGui::TextDisabled("No project open - use File > New Project or drop an APK here");
             } else {
                 // One group per APK; the jadx output lives in its own tab.
-                for (Root* apk : apks) drawNode(*apk, *apk->tree, true);
+                for (Root* apk : apks) drawTree(*apk);
             }
             ImGui::EndTabItem();
         }
@@ -136,7 +138,7 @@ void ExplorerPanel::drawContents() {
                 if (running) drawJadxProgress();
                 ImGui::Separator();
                 // One group per APK, named exactly like in the Files tab.
-                for (Root* dec : decompiled) drawNode(*dec, *dec->tree, true);
+                for (Root* dec : decompiled) drawTree(*dec);
             }
             ImGui::EndTabItem();
         }
@@ -150,9 +152,9 @@ void ExplorerPanel::drawContents() {
     hoveredAny_ = false;
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) pressNode_ = nullptr;
 
-    // Drop selection entries that were not part of the tree this frame
-    // (collapsed rows keep their selection only while visible - this also
-    // discards pointers into trees that were removed from the project).
+    // Drop selection entries that were not part of the walked tree this
+    // frame (collapsed rows keep their selection only while visible - this
+    // also discards pointers into trees that were removed from the project).
     selection_ = drawnSelection_;
     drawnSelection_.clear();
 
@@ -162,7 +164,38 @@ void ExplorerPanel::drawContents() {
         ImGui::IsWindowFocused())
         copySelection();
 
+    drawExportProgress();
     drawRemoveConfirm();
+}
+
+// Depth-first walk that collects the rows ImGui will need: one entry per
+// visible node (open folders only), re-validating the selection on the way.
+// Reading the open state from ImGui's own storage keeps the walk and the
+// rendered arrows in sync (a toggle click applies on the next frame).
+void ExplorerPanel::walk(Root& root, const TreeNode& node, int depth, bool isRoot) {
+    rows_.push_back({&root, &node, depth, isRoot});
+    if (selection_.count(&node)) drawnSelection_.insert(&node);
+    if (!node.isFolder()) return;
+    bool open = isRoot;
+    if (ImGuiStorage* storage = ImGui::GetStateStorage())
+        open = storage->GetInt((int)ImGui::GetID(&node), isRoot ? 1 : 0) != 0;
+    if (!open) return;
+    for (const auto& c : node.children()) walk(root, *c, depth + 1, false);
+}
+
+void ExplorerPanel::drawTree(Root& root) {
+    rows_.clear();
+    walk(root, *root.tree, 0, true);
+    // Virtualized rendering: only the rows in view are submitted, so huge
+    // packages don't pay for thousands of hidden tree nodes per frame.
+    ImGuiListClipper clipper;
+    clipper.Begin((int)rows_.size());
+    while (clipper.Step()) {
+        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+            const Row& row = rows_[(size_t)i];
+            drawRow(*row.root, *row.node, row.depth, row.isRoot);
+        }
+    }
 }
 
 void ExplorerPanel::copySelection() {
@@ -212,28 +245,33 @@ void ExplorerPanel::drawJadxProgress() {
     ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.35f, 1.f), "Errors: %d", jadx.errorCount());
     ImGui::SameLine();
     ImGui::TextDisabled("Classes processed: %d", jadx.processedCount());
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) workspace_.cancelDecompile();
 }
 
-void ExplorerPanel::drawNode(Root& root, const TreeNode& node, bool isRoot) {
+void ExplorerPanel::drawRow(Root& root, const TreeNode& node, int depth, bool isRoot) {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow |
-                               ImGuiTreeNodeFlags_OpenOnDoubleClick;
+                               ImGuiTreeNodeFlags_OpenOnDoubleClick | ImGuiTreeNodeFlags_NoTreePushOnOpen;
     if (isRoot) flags |= ImGuiTreeNodeFlags_DefaultOpen;
-    if (!node.isFolder()) flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+    if (!node.isFolder()) flags |= ImGuiTreeNodeFlags_Leaf;
     if (selection_.count(&node)) flags |= ImGuiTreeNodeFlags_Selected;
 
-    // Windows Explorer look: [arrow] [icon] [name]. ImGui renders the label
-    // right after the arrow, so we pad the label with leading spaces to open a
-    // gap, then paint the icon over that gap once the item rect is known.
-    // labelX = cursor + GetTreeNodeToLabelSpacing() reproduces exactly where
-    // TreeNodeBehavior starts the text (FontSize + FramePadding.x * 2).
+    // Windows Explorer look: [arrow] [icon] [name] at the row's depth.
+    // ImGui renders the label right after the arrow, so we pad the label
+    // with leading spaces to open a gap, then paint the icon over that gap
+    // once the item rect is known. labelX = cursor + GetTreeNodeToLabelSpacing()
+    // reproduces exactly where TreeNodeBehavior starts the text.
     const float iconSize = ImGui::GetTextLineHeight();
     const float spaceW = ImGui::CalcTextSize(" ").x;
     const int padSpaces = (int)((iconSize + ImGui::GetStyle().ItemInnerSpacing.x) / spaceW) + 1;
     char label[512];
     std::snprintf(label, sizeof label, "%*s%s", padSpaces, "", node.name().c_str());
 
+    // Flat rendering: the depth indent is applied directly to the row's
+    // cursor instead of nested TreePush/TreePop (which clipper rows can't do).
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (float)depth * ImGui::GetStyle().IndentSpacing);
     const ImVec2 start = ImGui::GetCursorScreenPos();
-    const bool open = ImGui::TreeNodeEx(&node, flags, "%s", label);
+    ImGui::TreeNodeEx(&node, flags, "%s", label);
 
     // Paint the icon into the reserved gap, vertically centered on the row.
     const ImVec2 itemMin = ImGui::GetItemRectMin();
@@ -269,17 +307,26 @@ void ExplorerPanel::drawNode(Root& root, const TreeNode& node, bool isRoot) {
     const bool plainClick = hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
                             pressNode_ == &node && !dragMoved_;
     const bool doubleClicked = !node.isFolder() && hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+    // Opening a file while a document is already active is an explicit jump
+    // that lands in the Back/Forward history (M2); without an active code
+    // document the plain open paths are used.
+    const Document* activeDoc = workspace_.activeDocument();
+    const bool jump = !node.isFolder() && activeDoc && activeDoc->mode() == Document::Mode::Code;
+    NavLocation origin;
+    if (jump) origin = workspace_.locationOf(*activeDoc);
     if (doubleClicked) {
         selection_ = {&node};
         drawnSelection_.insert(&node);
         // Double click: promote to a permanent tab.
-        workspace_.openNode(root, node, -1, Workspace::OpenMode::Permanent);
+        if (jump) workspace_.navigateTo(root, node, -1, &origin);
+        else workspace_.openNode(root, node, -1, Workspace::OpenMode::Permanent);
     } else if (plainClick) {
         selection_ = {&node};
         drawnSelection_.insert(&node);
         if (!node.isFolder()) {
             // Single click: open (or replace) the preview tab.
-            workspace_.openNode(root, node, -1, Workspace::OpenMode::Preview);
+            if (jump) workspace_.navigateTo(root, node, -1, &origin);
+            else workspace_.openNode(root, node, -1, Workspace::OpenMode::Preview);
         }
     }
 
@@ -295,6 +342,16 @@ void ExplorerPanel::drawNode(Root& root, const TreeNode& node, bool isRoot) {
             if (ImGui::MenuItem("Open in New Tab"))
                 workspace_.openNode(root, node, -1, Workspace::OpenMode::Permanent);
             ImGui::Separator();
+            // Export (M5): raw copies the exact bytes, decoded converts
+            // compiled Android XML to readable text.
+            if (ImGui::MenuItem("Export Raw...")) openExportFile(root, node, false);
+            if (ImGui::MenuItem("Export Decoded...")) openExportFile(root, node, true);
+            ImGui::Separator();
+        } else {
+            // Folder export (M5): whole subtree, raw or decoded.
+            if (ImGui::MenuItem("Export Folder (raw)...")) openExportFolder(root, node, false);
+            if (ImGui::MenuItem("Export Folder (decoded)...")) openExportFolder(root, node, true);
+            ImGui::Separator();
         }
         if (ImGui::MenuItem("Copy Path")) ImGui::SetClipboardText(node.path().c_str());
         if (isRoot && root.kind == Root::Kind::Apk) {
@@ -303,9 +360,51 @@ void ExplorerPanel::drawNode(Root& root, const TreeNode& node, bool isRoot) {
         }
         ImGui::EndPopup();
     }
+}
 
-    if (!node.isFolder()) return;
-    if (!open) return;
-    for (const auto& child : node.children()) drawNode(root, *child, false);
-    ImGui::TreePop();
+// ---------------------------------------------------------------------------
+// Export / extract (M5)
+// ---------------------------------------------------------------------------
+
+void ExplorerPanel::openExportFile(Root& root, const TreeNode& node, bool decoded) {
+    exportRequest_ = {&root, &node, decoded, false};
+    exportFileBrowser_.open(FileBrowser::Mode::SaveFile);
+    exportFileBrowser_.setDefaultName(node.name());  // after open(): open() resets the name
+
+}
+
+void ExplorerPanel::openExportFolder(Root& root, const TreeNode& node, bool decoded) {
+    exportRequest_ = {&root, &node, decoded, true};
+    exportFolderBrowser_.open(FileBrowser::Mode::SelectFolder);
+    exportFolderBrowser_.setDefaultName(node.name());
+
+}
+
+// Draws the running export job's progress (folder exports); single-file
+// exports finish synchronously and only log.
+void ExplorerPanel::drawExportProgress() {
+    // Browser accepts are consumed here so the export starts in the same
+    // frame the user confirmed (the request survives the popup's frame).
+    std::string picked;
+    if (exportFileBrowser_.render(), exportFileBrowser_.takeAccepted(picked)) {
+        if (exportRequest_.root && exportRequest_.node && !exportRequest_.folder)
+            workspace_.exportNode(*exportRequest_.root, *exportRequest_.node, picked, exportRequest_.decoded);
+        exportRequest_ = {};
+    }
+    if (exportFolderBrowser_.render(), exportFolderBrowser_.takeAccepted(picked)) {
+        if (exportRequest_.root && exportRequest_.node && exportRequest_.folder)
+            workspace_.exportFolder(*exportRequest_.root, *exportRequest_.node, picked, exportRequest_.decoded);
+        exportRequest_ = {};
+    }
+
+    const ExportJob& job = workspace_.exportJob();
+    if (!job.busy()) return;
+    ImGui::Separator();
+    const float frac = job.total() > 0 ? (float)job.done() / (float)job.total() : 0.f;
+    char label[256];
+    std::snprintf(label, sizeof label, "%s (%d/%d)", job.currentName().c_str(), job.done(), job.total());
+    ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0.f), label);
+    ImGui::TextDisabled("Exporting to %s - %d failed", job.destDir().c_str(), job.failed());
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) workspace_.exportJob().cancel();
 }

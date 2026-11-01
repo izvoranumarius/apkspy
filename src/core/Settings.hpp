@@ -3,15 +3,15 @@
 #include <unordered_map>
 
 // Simple persistent key/value store backed by a plain text file
-// ("apkspy.settings"). It stores user preferences, the jadx configuration
-// and the last session (open APK + editor tabs) so they survive restarts.
-// The ImGui dock layout itself is persisted separately by ImGui in
-// "apkspy.ini" (see Application::initImGui).
+// ("apkspy.settings" in the per-user config directory - see Paths.hpp). It
+// stores user preferences, the jadx configuration and the last session so
+// they survive restarts. The ImGui dock layout itself is persisted separately
+// by ImGui in "apkspy.ini" in the same directory.
 class Settings {
 public:
     // Loads the file if it exists; missing keys keep their defaults.
     void load(const std::string& path);
-    // Writes every non-default key back to disk. Returns false on IO error.
+    // Writes all keys back to disk atomically (temp file + rename).
     bool save(const std::string& path) const;
 
     std::string getString(const std::string& key, const std::string& fallback = {}) const;

@@ -3,6 +3,8 @@ CC ?= gcc
 BUILD := build
 OBJ := $(BUILD)/obj
 TARGET := $(BUILD)/apkspy
+TEST := $(BUILD)/apkspy_core_test
+IMGUI_TEST := $(BUILD)/imgui_editor_test
 LIB := lib
 
 UNAME := $(shell uname -s)
@@ -12,10 +14,10 @@ UNAME := $(shell uname -s)
 # On Linux/macOS GLFW comes from the system (pkg-config); the bundled headers
 # in include/glfw are for the MSVC build.
 INCLUDES := -Isrc -Iinclude -Iinclude/imgui -Iinclude/imgui/backends \
-            -Iinclude/miniz -Iinclude/libwebp
-CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter $(INCLUDES) $(shell pkg-config --cflags glfw3)
+            -Iinclude/miniz -Iinclude/libwebp -Iinclude/glfw
+CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter $(INCLUDES) $(shell pkg-config --cflags glfw3 2>/dev/null)
 CFLAGS := -O2 -w $(INCLUDES)
-LDLIBS := $(shell pkg-config --libs glfw3) -lpthread
+LDLIBS := $(shell pkg-config --libs glfw3 2>/dev/null) -lpthread
 
 ifeq ($(UNAME),Darwin)
 LDLIBS += -framework OpenGL
@@ -30,30 +32,65 @@ IMGUI_SRC := $(LIB)/imgui/imgui.cpp $(LIB)/imgui/imgui_draw.cpp $(LIB)/imgui/img
 C_SRC := $(wildcard $(LIB)/miniz/*.c) $(wildcard $(LIB)/libwebp/src/dec/*.c) \
          $(wildcard $(LIB)/libwebp/src/dsp/*.c) $(wildcard $(LIB)/libwebp/src/utils/*.c)
 
+# Headless tests link the core (no GLFW/OpenGL needed): everything except
+# the UI panels, the app shell and the GL-backed image code; Texture and
+# ImageDecoder are stubbed inside the test.
+UI_SRC := src/app/Application.cpp src/app/Theme.cpp src/app/WindowFrame.cpp src/app/main.cpp \
+          src/ui/EditorPanel.cpp src/ui/ExplorerPanel.cpp src/ui/OutputPanel.cpp src/ui/SearchPanel.cpp \
+          src/ui/SettingsDialog.cpp src/ui/TitleBar.cpp src/ui/FileBrowser.cpp src/ui/ImageViewer.cpp \
+          src/ui/OverviewPanel.cpp \
+          src/ui/ShellIcons.cpp src/image/Texture.cpp src/image/ImageDecoder.cpp
+CORE_SRC := $(filter-out $(UI_SRC),$(APP_SRC))
+
+# miniz must be compiled as C (gcc), not C++.
+MINIZ_SRC := lib/miniz/miniz.c lib/miniz/miniz_tinfl.c lib/miniz/miniz_tdef.c lib/miniz/miniz_zip.c
+MINIZ_OBJ := $(patsubst lib/miniz/%.c,$(BUILD)/test_%.o,$(MINIZ_SRC))
+
 CXX_OBJ := $(patsubst %.cpp,$(OBJ)/%.o,$(APP_SRC) $(IMGUI_SRC))
 C_OBJ := $(patsubst %.c,$(OBJ)/%.o,$(C_SRC))
 DEPS := $(CXX_OBJ:.o=.d)
 
-.PHONY: all run clean
+.PHONY: all run test clean
 
 all: $(TARGET)
 
 $(TARGET): $(CXX_OBJ) $(C_OBJ)
-        @mkdir -p $(@D)
-        $(CXX) $^ -o $@ $(LDLIBS)
+	@mkdir -p $(@D)
+	$(CXX) $^ -o $@ $(LDLIBS)
 
 $(OBJ)/%.o: %.cpp
-        @mkdir -p $(@D)
-        $(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
 $(OBJ)/%.o: %.c
-        @mkdir -p $(@D)
-        $(CC) $(CFLAGS) -c $< -o $@
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+test: $(TEST) $(IMGUI_TEST)
+	./$(TEST)
+	./$(IMGUI_TEST)
+
+$(BUILD)/test_%.o: lib/miniz/%.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(TEST): tests/apkspy_core_test.cpp $(CORE_SRC) $(MINIZ_OBJ) $(wildcard src/*.hpp src/*/*.hpp)
+	@mkdir -p $(@D)
+	$(CXX) -std=c++17 -O1 -g -Wall -Wextra -Wno-unused-parameter $(INCLUDES) \
+            tests/apkspy_core_test.cpp $(CORE_SRC) $(MINIZ_OBJ) \
+            -o $@ -lpthread
+
+$(IMGUI_TEST): tests/imgui_editor_test.cpp $(LIB)/imgui/imgui.cpp $(LIB)/imgui/imgui_draw.cpp \
+                 $(LIB)/imgui/imgui_tables.cpp $(LIB)/imgui/imgui_widgets.cpp
+	@mkdir -p $(@D)
+	$(CXX) -std=c++17 -O1 -Wall -Wextra -Wno-unused-parameter -Iinclude/imgui -Iinclude/imgui/backends \
+	    tests/imgui_editor_test.cpp $(LIB)/imgui/imgui.cpp $(LIB)/imgui/imgui_draw.cpp \
+	    $(LIB)/imgui/imgui_tables.cpp $(LIB)/imgui/imgui_widgets.cpp -o $@
 
 run: $(TARGET)
-        ./$(TARGET)
+	./$(TARGET)
 
 clean:
-        rm -rf $(BUILD)
+	rm -rf $(BUILD)
 
 -include $(DEPS)
