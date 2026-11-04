@@ -2,3 +2,8 @@
 Makefile text eol=lf
 *.sh text eol=lf
 *.c text eol=lf
+
+# Bundled libraries and build files stay out of the GitHub language bar.
+include/** linguist-vendored
+lib/** linguist-vendored
+Makefile linguist-detectable=false
