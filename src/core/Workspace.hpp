@@ -2,8 +2,12 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
+#include "analysis/AnalysisService.hpp"
+#include "core/Annotations.hpp"
 #include "core/ApkArchive.hpp"
+#include "core/ResourceTable.hpp"
 #include "core/ContentSource.hpp"
 #include "core/ExportJob.hpp"
 #include "core/NavHistory.hpp"
@@ -23,6 +27,9 @@ struct Root {
     std::string outDir;   // (Decompiled) jadx output directory (owned by ApkSpy)
     std::unique_ptr<TreeNode> tree;
     std::shared_ptr<ContentSource> source;
+    // (Apk) parsed resources.arsc, loaded on first use (Workspace::resources).
+    std::shared_ptr<const ResourceTable> resources;
+    bool resourcesLoaded = false;
 };
 
 // A tab saved by a project (or session) that still has to be re-opened
@@ -132,14 +139,30 @@ public:
     // SafePath module.
     void exportFolder(Root& root, const TreeNode& folder, const std::string& destDir, bool decoded);
     ExportJob& exportJob() { return export_; }
+    // resources.arsc of the APK group (parsed once, UI thread); nullptr when
+    // the APK has none or it is malformed.
+    std::shared_ptr<const ResourceTable> resources(const std::string& group);
+    // Generated documents (M6): shows `text` as a read-only tab of the
+    // group's virtual root (created on demand) at `path` ("smali/Lfoo;.smali"),
+    // replacing the content when the path is reopened, and jumps to `line`
+    // (0-based) through the navigation history. Closing the tab frees it.
+    void openGenerated(const std::string& group, const std::string& path, const std::string& title,
+                       std::string text, int line = 0);
+    // Smali listing of a method, on the instruction at `pc` when given.
+    void openMethodListing(const std::string& group, const ApkAnalysis& a, const ApkAnalysis::MethodDef& m,
+                           uint32_t pc = UINT32_MAX);
     // Promotes a preview tab so it survives further explorer clicks.
     void promoteDocument(Document* doc);
     void closeDocument(const Document* doc);
     void closeAllDocuments();
     void closeAll();
     Document* takeFocusRequest();
-    void log(std::string message);
+    bool hasFocusRequest() const { return pendingFocus_ != nullptr; }
+    void requestFocus(Document* doc) { pendingFocus_ = doc; }
+    // Every line starts with its source: "[jadx] ...". See logsev::kSources.
+    void log(std::string message, const char* source = "app");
     void clearLog() { log_.clear(); }
+    size_t logTrims() const { return logTrims_; }  // changes when old lines are dropped
 
     // The document whose tab is currently visible in the editor. Plain UI
     // view state, set by EditorPanel every frame; the shared View menu uses
@@ -167,6 +190,42 @@ public:
     const std::vector<std::unique_ptr<Document>>& documents() const { return documents_; }
     const std::vector<std::string>& logLines() const { return log_; }
     SearchService& search() { return search_; }
+    // Bytecode analysis (DEX parsing, xrefs, call graphs) per APK group.
+    AnalysisService& analysis() { return analysis_; }
+    Annotations& annotations() { return annotations_; }
+    const Annotations& annotations() const { return annotations_; }
+
+    // UI request (owner thread): show a native function / address of a library in the Analysis panel.
+    struct NativeViewRequest {
+        std::string group, entry, target;
+        std::string view = {};  // "listing", "graph", "calls" or empty to keep the current one
+    };
+    void requestNativeView(NativeViewRequest r) {
+        nativeView_ = std::move(r);
+        nativeViewPending_ = true;
+    }
+    // Same for a bytecode method; view is "listing", "graph" or "calls".
+    struct MethodViewRequest {
+        std::string group, method, view;
+    };
+    void requestMethodView(MethodViewRequest r) {
+        methodView_ = std::move(r);
+        methodViewPending_ = true;
+    }
+    bool takeMethodView(MethodViewRequest& out) {
+        if (!methodViewPending_) return false;
+        out = std::move(methodView_);
+        methodViewPending_ = false;
+        return true;
+    }
+    bool takeNativeView(NativeViewRequest& out) {
+        if (!nativeViewPending_) return false;
+        out = std::move(nativeView_);
+        nativeViewPending_ = false;
+        return true;
+    }
+    // Starts the analysis of `group` (no-op while running / ready).
+    void startAnalysis(const std::string& group, bool force = false);
     const JadxRunner& jadx() const { return jadx_; }
     JadxRunner& jadx() { return jadx_; }
     const std::string& jadxPath() const { return jadxPath_; }
@@ -200,11 +259,19 @@ private:
     std::vector<std::unique_ptr<Root>> roots_;
     std::vector<std::unique_ptr<Document>> documents_;
     std::vector<std::string> log_;
+    size_t logTrims_ = 0;
     std::string jadxPath_ = "jadx";
     std::string jadxArgs_;
     JadxRunner jadx_;
     SearchService search_;
+    AnalysisService analysis_;
+    std::unordered_set<std::string> analysisReported_;  // groups whose completion was logged
     Document* pendingFocus_ = nullptr;
+    Annotations annotations_;
+    NativeViewRequest nativeView_;
+    MethodViewRequest methodView_;
+    bool methodViewPending_ = false;
+    bool nativeViewPending_ = false;
     Document* activeDocument_ = nullptr;  // visible tab, set by the editor panel
     bool decompileSwitch_ = false;
     bool decompileFailure_ = false;

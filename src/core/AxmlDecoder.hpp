@@ -14,11 +14,16 @@
 //   0x0100/0x0101 namespaces  - xmlns declarations
 //   0x0102/0x0103 elements    - start/end tags with typed attributes
 //   0x0104 CDATA              - text content
+class ResourceTable;
+
 class AxmlDecoder {
 public:
     // Returns false (with a reason in 'error') if 'bytes' is not valid AXML.
     // On success 'out' receives the XML text.
-    static bool decode(const std::vector<uint8_t>& bytes, std::string& out, std::string& error);
+    // `resources` (optional) resolves app references: "@ref/0x7F0E0023"
+    // becomes "@string/app_name".
+    static bool decode(const std::vector<uint8_t>& bytes, std::string& out, std::string& error,
+                       const ResourceTable* resources = nullptr);
 
     // True if the buffer starts with the AXML magic (RES_XML_TYPE, LE).
     static bool looksLikeAxml(const std::vector<uint8_t>& bytes);
@@ -48,5 +53,6 @@ public:
     // Walks the AXML chunk stream and feeds `visitor`. Same validation and
     // error strings as decode(); decode() itself is implemented on top of
     // this walk, so the two can never disagree about the format.
-    static bool decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visitor, std::string& error);
+    static bool decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visitor, std::string& error,
+                             const ResourceTable* resources = nullptr);
 };

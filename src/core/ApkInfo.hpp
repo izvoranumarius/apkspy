@@ -6,8 +6,6 @@
 
 struct Root;  // full definition in Workspace.hpp (included by the .cpp)
 
-class Root;
-
 // Structured facts about one APK (M4), extracted from the binary manifest
 // and the signing data. Built by ApkInfo::extract on the UI thread: it reads
 // through the APK root's ContentSource, which only the UI thread may use
@@ -36,6 +34,7 @@ struct ApkInfo {
     std::string targetSdk;
     std::string appLabel;   // android:label of <application> (may be a @ref/... resource id)
     std::string appIcon;    // android:icon (resource reference)
+    std::string appLabelRef;  // "@string/app_name" when appLabel was resolved from resources.arsc
     bool debuggable = false;
     bool allowBackup = false;
     std::vector<std::string> permissions;  // uses-permission android:name values

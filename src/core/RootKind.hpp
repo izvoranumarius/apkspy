@@ -6,4 +6,7 @@
 enum class RootKind {
     Apk = 0,
     Decompiled = 1,
+    // Generated listings (smali disassembly, CFG text, ...) held in memory.
+    // Never written to project files: the content is derived data.
+    Virtual = 2,
 };

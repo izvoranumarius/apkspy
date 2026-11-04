@@ -1,4 +1,7 @@
 #include "ui/ExplorerPanel.hpp"
+#include "core/TextUtils.hpp"
+#include <cstring>
+#include <string>
 #include "ui/ShellIcons.hpp"
 #include <cstdio>
 #include "imgui_internal.h"
@@ -93,6 +96,84 @@ void drawPageIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, ImU32 acce
         }
     }
 }
+
+// IDE-style file-type icon: a page with a colored badge carrying a short
+// mnemonic ("J", "K", "<>", "{}", "DX", "SO"...). Used for every file type
+// Windows has no meaningful icon for - .java, .kt, .smali, .dex, .so, .arsc
+// and friends otherwise all resolve to the same blank page.
+void drawBadgeIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, ImU32 badge, const char* text) {
+    const float w = mx.x - mn.x, h = mx.y - mn.y;
+    // Page silhouette (narrower, so the badge can overhang on the left).
+    const ImVec2 p0(mn.x + w * 0.22f, mn.y + h * 0.02f), p1(mx.x - w * 0.04f, mx.y - h * 0.02f);
+    const float fold = w * 0.26f;
+    const ImVec2 corner(p1.x - fold, p0.y), foldEnd(p1.x, p0.y + fold);
+    const ImVec2 pts[5] = {p0, corner, foldEnd, p1, ImVec2(p0.x, p1.y)};
+    dl->AddConvexPolyFilled(pts, 5, IM_COL32(236, 238, 242, 255));
+    dl->AddPolyline(pts, 5, IM_COL32(138, 144, 155, 255), 0, 1.0f);
+    dl->AddTriangleFilled(corner, foldEnd, ImVec2(corner.x, foldEnd.y), IM_COL32(197, 203, 212, 255));
+    // Badge: rounded rectangle across the lower part with the mnemonic.
+    const ImVec2 b0(mn.x, mn.y + h * 0.40f), b1(mx.x - w * 0.10f, mx.y - h * 0.04f);
+    dl->AddRectFilled(b0, b1, badge, h * 0.14f);
+    ImFont* font = ImGui::GetFont();
+    const size_t len = std::strlen(text);
+    const float fontSize = h * (len >= 3 ? 0.40f : len == 2 ? 0.48f : 0.58f);
+    const ImVec2 ts = font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, text);
+    const ImVec2 at(b0.x + (b1.x - b0.x - ts.x) * 0.5f, b0.y + (b1.y - b0.y - ts.y) * 0.5f);
+    dl->AddText(font, fontSize, ImVec2(at.x + 0.6f, at.y), IM_COL32(255, 255, 255, 255), text);  // faux bold
+    dl->AddText(font, fontSize, at, IM_COL32(255, 255, 255, 255), text);
+}
+
+std::string lowerExt(const std::string& name) {
+    const size_t dot = name.find_last_of('.');
+    return dot == std::string::npos ? std::string() : tex::asciiLower(name.substr(dot + 1));
+}
+
+// Draws the icon for a file; false when the type has no drawn icon (the
+// shell icon / plain page is used then).
+bool drawFileTypeIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, const TreeNode& node) {
+    const std::string ext = lowerExt(node.name());
+    switch (node.kind()) {
+    case NodeKind::Java: drawBadgeIcon(dl, mn, mx, IM_COL32(231, 111, 0, 255), "J"); return true;
+    case NodeKind::Kotlin: drawBadgeIcon(dl, mn, mx, IM_COL32(127, 82, 255, 255), "K"); return true;
+    case NodeKind::Smali: drawBadgeIcon(dl, mn, mx, IM_COL32(192, 64, 64, 255), "S"); return true;
+    case NodeKind::Xml: drawBadgeIcon(dl, mn, mx, IM_COL32(46, 139, 87, 255), "<>"); return true;
+    case NodeKind::Json: drawBadgeIcon(dl, mn, mx, IM_COL32(201, 162, 39, 255), "{}"); return true;
+    case NodeKind::Dex: drawBadgeIcon(dl, mn, mx, IM_COL32(155, 77, 202, 255), "DX"); return true;
+    case NodeKind::Native: drawBadgeIcon(dl, mn, mx, IM_COL32(84, 110, 122, 255), "SO"); return true;
+    case NodeKind::Groovy: drawBadgeIcon(dl, mn, mx, IM_COL32(66, 152, 184, 255), "G"); return true;
+    case NodeKind::Yaml: drawBadgeIcon(dl, mn, mx, IM_COL32(203, 23, 30, 255), "Y"); return true;
+    case NodeKind::Web:
+        if (ext == "css") drawBadgeIcon(dl, mn, mx, IM_COL32(41, 101, 241, 255), "#");
+        else if (ext == "js" || ext == "mjs") drawBadgeIcon(dl, mn, mx, IM_COL32(200, 170, 0, 255), "JS");
+        else drawBadgeIcon(dl, mn, mx, IM_COL32(227, 79, 38, 255), "<>");
+        return true;
+    case NodeKind::Image:
+        drawPageIcon(dl, mn, mx, IM_COL32(120, 170, 220, 255), true);
+        return true;
+    case NodeKind::Text:
+        if (ext == "properties" || ext == "pro" || ext == "cfg" || ext == "ini" || ext == "conf" || ext == "prop") {
+            drawBadgeIcon(dl, mn, mx, IM_COL32(110, 120, 135, 255), "=");
+            return true;
+        }
+        if (ext == "mf" || ext == "sf") {
+            drawBadgeIcon(dl, mn, mx, IM_COL32(70, 130, 110, 255), "MF");
+            return true;
+        }
+        drawPageIcon(dl, mn, mx, IM_COL32(150, 156, 168, 255), false);
+        return true;
+    case NodeKind::Binary:
+        if (ext == "arsc") drawBadgeIcon(dl, mn, mx, IM_COL32(0, 137, 123, 255), "RS");
+        else if (ext == "rsa" || ext == "dsa" || ext == "ec") drawBadgeIcon(dl, mn, mx, IM_COL32(176, 120, 30, 255), "SIG");
+        else if (ext == "ttf" || ext == "otf" || ext == "ttc") drawBadgeIcon(dl, mn, mx, IM_COL32(90, 90, 160, 255), "F");
+        else if (ext == "jar" || ext == "zip" || ext == "apk" || ext == "aar") drawBadgeIcon(dl, mn, mx, IM_COL32(150, 110, 40, 255), "ZIP");
+        else if (ext == "kotlin_module" || ext == "kotlin_builtins") drawBadgeIcon(dl, mn, mx, IM_COL32(127, 82, 255, 255), "KM");
+        else if (ext == "version") drawBadgeIcon(dl, mn, mx, IM_COL32(110, 120, 135, 255), "V");
+        else drawBadgeIcon(dl, mn, mx, IM_COL32(96, 102, 112, 255), "01");
+        return true;
+    case NodeKind::Folder: break;
+    }
+    return false;
+}
 } // namespace
 
 void ExplorerPanel::drawContents() {
@@ -147,7 +228,8 @@ void ExplorerPanel::drawContents() {
 
     // Clicking empty space clears the selection.
     if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !hoveredAny_) {
-        selection_.clear();
+        setSelection({});
+        anchorNode_ = nullptr;
     }
     hoveredAny_ = false;
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) pressNode_ = nullptr;
@@ -157,6 +239,7 @@ void ExplorerPanel::drawContents() {
     // also discards pointers into trees that were removed from the project).
     selection_ = drawnSelection_;
     drawnSelection_.clear();
+    allRows_.clear();
 
     // Ctrl+C copies the selected rows' names (the text shown in the panel).
     ImGuiIO& io = ImGui::GetIO();
@@ -183,9 +266,31 @@ void ExplorerPanel::walk(Root& root, const TreeNode& node, int depth, bool isRoo
     for (const auto& c : node.children()) walk(root, *c, depth + 1, false);
 }
 
+void ExplorerPanel::setSelection(std::set<const TreeNode*> nodes) {
+    drawnSelection_ = nodes;
+    selection_ = std::move(nodes);
+}
+
+std::set<const TreeNode*> ExplorerPanel::rowRange(const Root* root, const TreeNode* a, const TreeNode* b) const {
+    std::set<const TreeNode*> out;
+    int ia = -1, ib = -1;
+    for (int i = 0; i < (int)allRows_.size(); ++i) {
+        if (allRows_[(size_t)i].root != root) continue;
+        if (allRows_[(size_t)i].node == a) ia = i;
+        if (allRows_[(size_t)i].node == b) ib = i;
+    }
+    if (ia < 0 || ib < 0) {
+        if (b) out.insert(b);
+        return out;
+    }
+    for (int i = std::min(ia, ib); i <= std::max(ia, ib); ++i) out.insert(allRows_[(size_t)i].node);
+    return out;
+}
+
 void ExplorerPanel::drawTree(Root& root) {
     rows_.clear();
     walk(root, *root.tree, 0, true);
+    allRows_.insert(allRows_.end(), rows_.begin(), rows_.end());
     // Virtualized rendering: only the rows in view are submitted, so huge
     // packages don't pay for thousands of hidden tree nodes per frame.
     ImGuiListClipper clipper;
@@ -237,15 +342,21 @@ void ExplorerPanel::drawRemoveConfirm() {
 void ExplorerPanel::drawJadxProgress() {
     const JadxRunner& jadx = workspace_.jadx();
     char label[128];
-    std::snprintf(label, sizeof label, "Decompiling... %d s", jadx.elapsedSeconds());
-    // A negative fraction animates an indeterminate progress bar.
-    ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(-FLT_MIN, 0.f), label);
+    const int total = jadx.totalCount();
+    if (total > 0) {
+        std::snprintf(label, sizeof label, "Decompiling %d / %d classes - %d s", jadx.processedCount(), total,
+                      jadx.elapsedSeconds());
+        ImGui::ProgressBar((float)jadx.processedCount() / (float)total, ImVec2(-FLT_MIN, 0.f), label);
+    } else {
+        std::snprintf(label, sizeof label, "Decompiling... %d s", jadx.elapsedSeconds());
+        // A negative fraction animates an indeterminate progress bar.
+        ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(-FLT_MIN, 0.f), label);
+    }
     ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.35f, 1.f), "Warnings: %d", jadx.warningCount());
     ImGui::SameLine();
     ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.35f, 1.f), "Errors: %d", jadx.errorCount());
     ImGui::SameLine();
-    ImGui::TextDisabled("Classes processed: %d", jadx.processedCount());
-    ImGui::SameLine();
+
     if (ImGui::Button("Cancel")) workspace_.cancelDecompile();
 }
 
@@ -281,7 +392,9 @@ void ExplorerPanel::drawRow(Root& root, const TreeNode& node, int depth, bool is
     const ImVec2 mx(mn.x + iconSize, mn.y + iconSize);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const bool archiveRoot = isRoot && root.kind == Root::Kind::Apk;
-    if (ImTextureID tex = ShellIcons::instance().iconFor(node, archiveRoot)) {
+    if (!node.isFolder() && !archiveRoot && drawFileTypeIcon(dl, mn, mx, node)) {
+        // Drawn type icon (distinct per file type, scales with the zoom).
+    } else if (ImTextureID tex = ShellIcons::instance().iconFor(node, archiveRoot)) {
         // Real Windows default icon (cached per extension, extracted once).
         dl->AddImage(tex, mn, mx);
     } else if (node.isFolder()) {
@@ -293,16 +406,25 @@ void ExplorerPanel::drawRow(Root& root, const TreeNode& node, int depth, bool is
 
     const bool hovered = ImGui::IsItemHovered();
     hoveredAny_ |= hovered;
+    // Names wider than the panel are clipped at its edge: show them whole.
+    if (hovered && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        const float textEnd = mx.x + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(node.name().c_str()).x;
+        const float visibleEnd = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+        if (textEnd > visibleEnd) ImGui::SetTooltip("%s", node.name().c_str());
+    }
     const bool inSelection = selection_.count(&node) > 0;
 
-    // Click-and-drag text selection: rows the mouse passes over while the
-    // button is down are added to the selection.
-    if (dragMoved_ && hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left) && !inSelection) {
-        selection_.insert(&node);
-        drawnSelection_.insert(&node);
-    }
+    (void)inSelection;
+    const ImGuiIO& io = ImGui::GetIO();
+    // Click-and-drag selects the contiguous rows between the press and the
+    // row under the mouse (dragging back shrinks the range again).
+    if (dragMoved_ && hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left) && pressNode_ && pressRoot_ == &root)
+        setSelection(rowRange(&root, pressNode_, &node));
 
-    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !pressNode_) pressNode_ = &node;
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !pressNode_) {
+        pressNode_ = &node;
+        pressRoot_ = &root;
+    }
     // Opening fires on release without a drag, so dragging selects instead.
     const bool plainClick = hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
                             pressNode_ == &node && !dragMoved_;
@@ -315,14 +437,23 @@ void ExplorerPanel::drawRow(Root& root, const TreeNode& node, int depth, bool is
     NavLocation origin;
     if (jump) origin = workspace_.locationOf(*activeDoc);
     if (doubleClicked) {
-        selection_ = {&node};
-        drawnSelection_.insert(&node);
+        setSelection({&node});
+        anchorNode_ = &node;
         // Double click: promote to a permanent tab.
         if (jump) workspace_.navigateTo(root, node, -1, &origin);
         else workspace_.openNode(root, node, -1, Workspace::OpenMode::Permanent);
+    } else if (plainClick && io.KeyCtrl) {
+        // Ctrl+click toggles one row without opening it.
+        std::set<const TreeNode*> next = selection_;
+        if (!next.erase(&node)) next.insert(&node);
+        setSelection(std::move(next));
+        anchorNode_ = &node;
+    } else if (plainClick && io.KeyShift && anchorNode_) {
+        // Shift+click extends from the anchor without opening.
+        setSelection(rowRange(&root, anchorNode_, &node));
     } else if (plainClick) {
-        selection_ = {&node};
-        drawnSelection_.insert(&node);
+        setSelection({&node});
+        anchorNode_ = &node;
         if (!node.isFolder()) {
             // Single click: open (or replace) the preview tab.
             if (jump) workspace_.navigateTo(root, node, -1, &origin);

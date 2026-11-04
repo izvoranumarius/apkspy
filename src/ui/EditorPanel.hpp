@@ -5,8 +5,10 @@
 #include "ui/FileBrowser.hpp"
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
+#include "ui/AnnotationUi.hpp"
 
 class Settings;
 
@@ -58,7 +60,24 @@ private:
     void drawScrollable(Document& doc);
     void drawCode(Document& doc);
     void drawEditable(Document& doc);
-    void drawHex(const Document& doc);
+    // Bookmark / comment location of a line; false for generated listings.
+    bool annotationAt(const Document& doc, int line, Annotation& out) const;
+    void drawLineMenu(Document& doc);
+    ui::CommentPopup comment_;
+    const Document* lineDoc_ = nullptr;  // last clicked line: target of Ctrl+B and ;
+    int line_ = -1;
+    // Hex viewer (binary files): offset jump, byte selection, hex / text
+    // pattern search and a data inspector for the selected offset.
+    struct HexState {
+        int64_t selected = -1;
+        int64_t scrollTo = -1;
+        char gotoBuf[32] = {};
+        char findBuf[128] = {};
+        bool findText = false;
+        std::string status;
+    };
+    void drawHexView(const Document& doc);
+    void drawHexInspector(const Document& doc, HexState& h);
     void requestClose(Document* doc);
     void processCloses();
     void drawConfirmModal();
@@ -79,9 +98,9 @@ private:
     void drawExportBrowser();
     void openExport(Document& doc);
     // Ctrl+click navigation (M3).
-    void symbolNavigate(Document& doc, const std::string& line, int a, int b);
+    void symbolNavigate(Document& doc, std::string_view line, int a, int b);
     // Byte column -> pixel x inside the monospace line, for match overlays.
-    float columnToX(const std::string& line, int col) const;
+    float columnToX(std::string_view line, int col) const;
 
     ImageViewer viewer_;
     Settings& settings_;
@@ -93,6 +112,7 @@ private:
     // Find state per open document; entries are swept when their document is
     // gone (closed tab, replaced preview).
     std::unordered_map<const Document*, FindState> find_;
+    std::unordered_map<const Document*, HexState> hex_;  // swept together with find_
     bool findRequest_ = false;   // View > Find... / Ctrl+F from the menu
     bool goToRequest_ = false;   // View > Go to Line... / Ctrl+G from the menu
     bool gotoOpenRequest_ = false;

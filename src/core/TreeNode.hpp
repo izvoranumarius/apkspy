@@ -35,6 +35,17 @@ public:
         return children_.back().get();
     }
 
+    // Removes (and destroys) a direct child. Only used for generated nodes of
+    // the virtual root, which nothing but their own document points to.
+    bool removeChild(const TreeNode* child) {
+        for (auto it = children_.begin(); it != children_.end(); ++it)
+            if (it->get() == child) {
+                children_.erase(it);
+                return true;
+            }
+        return false;
+    }
+
     // Looks a node up by the exact path string stored in its nodes
     // (zip entry path for APK roots, absolute disk path for decompiled
     // roots). Used to restore editor tabs between sessions.
@@ -45,12 +56,17 @@ public:
         return nullptr;
     }
 
-    void sortRecursive() {
+    // Folders first, then by name - this node's children only.
+    void sortChildren() {
         std::stable_sort(children_.begin(), children_.end(),
                          [](const std::unique_ptr<TreeNode>& a, const std::unique_ptr<TreeNode>& b) {
                              if (a->isFolder() != b->isFolder()) return a->isFolder();
                              return a->name_ < b->name_;
                          });
+    }
+
+    void sortRecursive() {
+        sortChildren();
         for (auto& c : children_) c->sortRecursive();
     }
 

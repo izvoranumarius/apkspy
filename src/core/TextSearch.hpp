@@ -5,7 +5,8 @@
 #include "core/TextUtils.hpp"
 
 // In-file text search shared by the editor's find bar (M1). Pure logic: no
-// ImGui, no Document - takes plain lines so it stays unit-testable headless.
+// ImGui, no Document - takes any line container (size() + operator[] yielding
+// something convertible to std::string_view) so it stays unit-testable.
 //
 // Conventions (single source of truth):
 //  - Match::line is 0-based (same convention as Document::goTo/highlight and
@@ -47,7 +48,8 @@ inline bool matchesAt(std::string_view view, size_t at, std::string_view needle,
 // short. An empty query yields an empty result; matches never span lines.
 // Overlapping matches are reported ("aa" in "aaaa" = 3 hits): the scan
 // advances one byte per hit so users can step through every occurrence.
-inline std::vector<Match> findAll(const std::vector<std::string>& lines, const std::string& query,
+template <typename Lines>
+inline std::vector<Match> findAll(const Lines& lines, const std::string& query,
                                   const Options& opt, size_t maxMatches, bool& truncated) {
     truncated = false;
     std::vector<Match> out;
@@ -55,7 +57,7 @@ inline std::vector<Match> findAll(const std::vector<std::string>& lines, const s
     const std::string needle = opt.matchCase ? query : tex::asciiLower(query);
     std::string folded;  // reused fold buffer: one allocation for the whole scan
     for (size_t li = 0; li < lines.size(); ++li) {
-        const std::string& raw = lines[li];
+        const std::string_view raw = lines[li];
         if (needle.size() > raw.size()) continue;
         std::string_view view;
         if (opt.matchCase) {
@@ -80,7 +82,8 @@ inline std::vector<Match> findAll(const std::vector<std::string>& lines, const s
     return out;
 }
 
-inline std::vector<Match> findAll(const std::vector<std::string>& lines, const std::string& query,
+template <typename Lines>
+inline std::vector<Match> findAll(const Lines& lines, const std::string& query,
                                   const Options& opt, bool& truncated) {
     return findAll(lines, query, opt, kDefaultMaxMatches, truncated);
 }

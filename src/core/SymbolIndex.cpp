@@ -85,12 +85,15 @@ std::shared_ptr<const SymbolIndex::Table> SymbolIndex::buildTable(const Request&
                                                                   const std::atomic<bool>& stop) {
     auto table = std::make_shared<Table>();
     table->epoch = req.epoch;
-    const auto addName = [&](const std::string& name, const std::string& path, const std::string& pkg) {
+    table->paths.reserve(req.files.size());
+    const auto addName = [&](const std::string& name, uint32_t path, const std::string& pkg) {
         if (name.empty()) return;
-        table->byName[name].push_back(path);
+        std::vector<uint32_t>& slot = table->byName[name];
+        if (slot.empty() || slot.back() != path) slot.push_back(path);
         if (!pkg.empty()) table->byQualifiedName[pkg + '.' + name] = path;
     };
 
+    std::string text;  // one read buffer for the whole pass
     for (const File& f : req.files) {
         if (stop.load()) break;
         // Bound the read: class declarations live at the top of a file.
@@ -100,12 +103,14 @@ std::shared_ptr<const SymbolIndex::Table> SymbolIndex::buildTable(const Request&
         std::ifstream in(pathutil::fromUtf8(f.path), std::ios::binary);
         if (!in) continue;
         size_t toRead = (size_t)std::min<uint64_t>(size, kMaxScanBytes);
-        std::string text(toRead, '\0');
+        text.resize(toRead);
         in.read(text.data(), (std::streamsize)toRead);
         text.resize((size_t)std::max<size_t>(0, (size_t)in.gcount()));
         if (text.empty()) continue;
 
         const std::string pkg = packageOf(text);
+        const uint32_t pathIndex = (uint32_t)table->paths.size();
+        table->paths.push_back(f.path);
 
         // File stems: Foo.java registers "Foo"; Foo$Bar.java registers both
         // "Foo$Bar" and the nested simple name "Bar" (code references use the
@@ -116,8 +121,8 @@ std::shared_ptr<const SymbolIndex::Table> SymbolIndex::buildTable(const Request&
         std::string nested = stem;
         const size_t dollar = stem.rfind('$');
         if (dollar != std::string::npos) nested = stem.substr(dollar + 1);
-        addName(stem, f.path, pkg);
-        if (nested != stem) addName(nested, f.path, pkg);
+        addName(stem, pathIndex, pkg);
+        if (nested != stem) addName(nested, pathIndex, pkg);
 
         // Declared types: class/interface/enum/record plus Kotlin's object.
         // The scan is identifier-based, so a "class" inside a comment or
@@ -131,11 +136,14 @@ std::shared_ptr<const SymbolIndex::Table> SymbolIndex::buildTable(const Request&
             if (!declKeyword) continue;
             std::string name;
             if (!nextIdentifier(text, p, name)) break;
-            addName(name, f.path, pkg);
+            addName(name, pathIndex, pkg);
         }
     }
-    // Deterministic candidate order.
-    for (auto& kv : table->byName) std::sort(kv.second.begin(), kv.second.end());
+    // Deterministic candidate order (by path, as before the interning).
+    for (auto& kv : table->byName)
+        std::sort(kv.second.begin(), kv.second.end(),
+                  [&](uint32_t a, uint32_t b) { return table->paths[a] < table->paths[b]; });
+    table->paths.shrink_to_fit();
     return table;
 }
 
@@ -172,7 +180,7 @@ std::string SymbolIndex::resolve(const std::string& group, const std::string& id
     // 1) Fully qualified names win (manifest component names, imports).
     if (identifier.find('.') != std::string::npos) {
         auto it = table->byQualifiedName.find(identifier);
-        if (it != table->byQualifiedName.end()) return it->second;
+        if (it != table->byQualifiedName.end()) return table->paths[it->second];
     }
 
     // 2) Short name ("Foo", or "Bar" from Foo$Bar.java). Prefer a file from
@@ -180,10 +188,32 @@ std::string SymbolIndex::resolve(const std::string& group, const std::string& id
     auto it = table->byName.find(identifier);
     if (it == table->byName.end() || it->second.empty()) return {};
     if (!hintDir.empty()) {
-        for (const std::string& path : it->second) {
+        for (uint32_t index : it->second) {
+            const std::string& path = table->paths[index];
             const std::string dir = pathutil::toUtf8(fs::path(pathutil::fromUtf8(path)).parent_path());
             if (dir == hintDir) return path;
         }
     }
-    return it->second.front();
+    return table->paths[it->second.front()];
+}
+
+std::vector<std::pair<std::string, std::string>> SymbolIndex::findClasses(const std::string& group,
+                                                                       const std::string& needle,
+                                                                       size_t limit) const {
+    std::vector<std::pair<std::string, std::string>> out;
+    std::shared_ptr<const Table> table;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = tables_.find(group);
+        if (it == tables_.end()) return out;
+        table = it->second;
+    }
+    if (!table) return out;
+    for (const auto& kv : table->byQualifiedName) {
+        if (out.size() >= limit) break;
+        if (!needle.empty() && tex::ciFind(kv.first, needle) == std::string_view::npos) continue;
+        out.emplace_back(kv.first, table->paths[kv.second]);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
 }

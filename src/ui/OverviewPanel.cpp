@@ -33,7 +33,10 @@ void OverviewPanel::drawContents() {
     }
 
     auto it = cache_.find(apk->apkPath);
-    if (it == cache_.end()) it = cache_.emplace(apk->apkPath, ApkInfo::extract(*apk)).first;
+    if (it == cache_.end()) {
+        workspace_.resources(apk->title);  // label + @ref ids resolved through resources.arsc
+        it = cache_.emplace(apk->apkPath, ApkInfo::extract(*apk)).first;
+    }
     drawApk(*apk, it->second);
 }
 
@@ -44,7 +47,9 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
         return;
     }
     const std::string label = !info.appLabel.empty() ? info.appLabel : info.packageName;
-    ImGui::Text("%s", label.c_str());
+    ImGui::PushTextWrapPos(0.f);
+    ImGui::TextUnformatted(label.c_str());
+    ImGui::PopTextWrapPos();
     std::string sub = info.packageName;
     if (!info.versionName.empty() || !info.versionCode.empty()) {
         sub += "  |  version " + info.versionName;
@@ -52,7 +57,9 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
     }
     if (!info.minSdk.empty()) sub += "  |  minSdk " + info.minSdk;
     if (!info.targetSdk.empty()) sub += "  |  targetSdk " + info.targetSdk;
+    ImGui::PushTextWrapPos(0.f);
     ImGui::TextDisabled("%s", sub.c_str());
+    ImGui::PopTextWrapPos();
     if (info.debuggable || info.allowBackup) {
         if (info.debuggable) {
             ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1.f), "debuggable");
@@ -71,8 +78,27 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
     std::snprintf(header, sizeof header, "Permissions (%d)", (int)info.permissions.size());
     if (ImGui::CollapsingHeader(header)) {
         if (info.permissions.empty()) ImGui::TextDisabled("None declared");
+        // Runtime ("dangerous") permissions are highlighted: they are what a
+        // reviewer looks at first.
+        static const char* kDangerous[] = {
+            "READ_CONTACTS", "WRITE_CONTACTS", "GET_ACCOUNTS", "READ_CALENDAR", "WRITE_CALENDAR", "CAMERA",
+            "RECORD_AUDIO", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION",
+            "READ_PHONE_STATE", "READ_PHONE_NUMBERS", "CALL_PHONE", "READ_CALL_LOG", "WRITE_CALL_LOG",
+            "PROCESS_OUTGOING_CALLS", "BODY_SENSORS", "SEND_SMS", "RECEIVE_SMS", "READ_SMS", "RECEIVE_MMS",
+            "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE", "READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO",
+            "READ_MEDIA_AUDIO", "ACTIVITY_RECOGNITION", "POST_NOTIFICATIONS", "NEARBY_WIFI_DEVICES",
+            "BLUETOOTH_SCAN", "BLUETOOTH_CONNECT", "SYSTEM_ALERT_WINDOW", "REQUEST_INSTALL_PACKAGES",
+            "QUERY_ALL_PACKAGES", "MANAGE_EXTERNAL_STORAGE", "BIND_ACCESSIBILITY_SERVICE"};
         for (const std::string& p : info.permissions) {
-            ImGui::BulletText("%s", p.c_str());
+            bool dangerous = false;
+            for (const char* d : kDangerous)
+                if (p == std::string("android.permission.") + d) dangerous = true;
+            ImGui::Bullet();
+            ImGui::PushTextWrapPos(0.f);
+            if (dangerous) ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1.f), "%s", p.c_str());
+            else ImGui::TextUnformatted(p.c_str());
+            ImGui::PopTextWrapPos();
+            if (dangerous && ImGui::IsItemHovered()) ImGui::SetTooltip("Runtime (dangerous) permission");
         }
     }
 
@@ -83,21 +109,46 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
         // Clicking a row jumps to the class in the decompiled sources (M3
         // symbol index); if that fails the manifest opens instead.
         workspace_.ensureSymbolIndex(apk.title);
-        int i = 0;
-        for (const ApkComponent& c : info.components) {
-            ImGui::PushID(i++);
-            std::string row = c.type + ":  " + (c.name.empty() ? "(unnamed)" : c.name);
-            if (c.exported) row += "   [exported]";
-            if (ImGui::Selectable(row.c_str())) {
-                if (!c.name.empty()) openComponent(apk.title, info.packageName, c);
+        if (ImGui::BeginTable("##components", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 4.f);
+            ImGui::TableSetupColumn("Class", ImGuiTableColumnFlags_WidthStretch);
+            int i = 0;
+            for (const ApkComponent& c : info.components) {
+                ImGui::PushID(i++);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                const ImVec4 typeColor = c.type == "activity" || c.type == "activity-alias" ? ImVec4(0.55f, 0.75f, 0.95f, 1.f)
+                                         : c.type == "service"  ? ImVec4(0.6f, 0.85f, 0.6f, 1.f)
+                                         : c.type == "receiver" ? ImVec4(0.85f, 0.75f, 0.45f, 1.f)
+                                                                : ImVec4(0.8f, 0.6f, 0.9f, 1.f);
+                ImGui::TextColored(typeColor, "%s", c.type == "activity-alias" ? "alias" : c.type.c_str());
+                ImGui::TableNextColumn();
+                // Short class name first (the part that tells components
+                // apart), the package dimmed after it.
+                const std::string full = c.name.empty() ? std::string("(unnamed)") : c.name;
+                const size_t dot = full.rfind('.');
+                const std::string simple = dot == std::string::npos ? full : full.substr(dot + 1);
+                if (ImGui::Selectable(simple.c_str(), false, ImGuiSelectableFlags_SpanAllColumns |
+                                                             ImGuiSelectableFlags_AllowOverlap) &&
+                    !c.name.empty())
+                    openComponent(apk.title, info.packageName, c);
+                if (ImGui::IsItemHovered()) {
+                    std::string tip = full + (c.exported ? "\nexported" : "");
+                    for (const std::string& a : c.actions) tip += "\naction: " + a;
+                    for (const std::string& c2 : c.categories) tip += "\ncategory: " + c2;
+                    ImGui::SetTooltip("%s", tip.c_str());
+                }
+                if (c.exported) {
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1.f), "exported");
+                }
+                if (dot != std::string::npos) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("%s", full.substr(0, dot).c_str());
+                }
+                ImGui::PopID();
             }
-            if (!c.actions.empty() || !c.categories.empty()) {
-                std::string tip;
-                for (const std::string& a : c.actions) tip += "action: " + a + "\n";
-                for (const std::string& c2 : c.categories) tip += "category: " + c2 + "\n";
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip.c_str());
-            }
-            ImGui::PopID();
+            ImGui::EndTable();
         }
         ImGui::Separator();
         if (ImGui::Selectable("AndroidManifest.xml")) openManifest(apk.title);
@@ -114,12 +165,16 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
             ImGui::PushID(i++);
             ImGui::Text("%s", s.scheme.c_str());
             ImGui::PushFont(Theme::monoFont());
+            ImGui::PushTextWrapPos(0.f);
             ImGui::TextDisabled("cert sha256: %s", s.certSha256.c_str());
+            ImGui::PopTextWrapPos();
             ImGui::PopFont();
             if (!s.subject.empty() || !s.issuer.empty()) {
                 std::string who = "subject: " + (s.subject.empty() ? "?" : s.subject) +
                                   "   issuer: " + (s.issuer.empty() ? "?" : s.issuer);
+                ImGui::PushTextWrapPos(0.f);
                 ImGui::TextDisabled("%s", who.c_str());
+                ImGui::PopTextWrapPos();
             }
             ImGui::PopID();
         }

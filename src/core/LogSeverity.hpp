@@ -12,7 +12,29 @@ enum class LogSeverity { Info, Warn, Error };
 
 namespace logsev {
 
+// Where a line came from, in the order the Output panel lists them.
+inline constexpr const char* kSources[] = {"app", "jadx", "analysis", "scripts", "mcp", "debug"};
+
+// "[jadx] text" -> "jadx". Empty for a line with no tag.
+inline std::string_view sourceOf(std::string_view line) {
+    if (line.empty() || line[0] != '[') return {};
+    const size_t end = line.find("] ");
+    return end == std::string_view::npos ? std::string_view() : line.substr(1, end - 1);
+}
+
+// The line without its tag.
+inline std::string_view messageOf(std::string_view line) {
+    const std::string_view source = sourceOf(line);
+    return source.empty() ? line : line.substr(source.size() + 3);
+}
+
 inline LogSeverity classify(std::string_view line) {
+    // Python's own failures: "Traceback ..." and its last line, "NameError: ...".
+    if (sourceOf(line) == "scripts") {
+        const std::string_view message = messageOf(line);
+        if (message.rfind("Traceback", 0) == 0 || message.find("Error: ") != std::string_view::npos)
+            return LogSeverity::Error;
+    }
     auto isWord = [](char c) {
         unsigned char u = (unsigned char)c;
         return std::isalnum(u) || c == '_';

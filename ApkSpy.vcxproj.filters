@@ -4,6 +4,15 @@
     <Filter Include="Header Files">
       <UniqueIdentifier>{2583FC02-470D-4CB0-BE7D-F82433D8A980}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\mcp">
+      <UniqueIdentifier>{f3baeab3-e80d-4c62-8c28-cdf2954806ea}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\debug">
+      <UniqueIdentifier>{6307a22c-ee47-4725-b80f-74d125429d6b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\analysis">
+      <UniqueIdentifier>{123b5131-ef23-41e7-b310-7e35543d0082}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Header Files\app">
       <UniqueIdentifier>{62AECF88-6CFA-4375-B4A4-4205470BFF06}</UniqueIdentifier>
     </Filter>
@@ -46,6 +55,15 @@
     <Filter Include="Source Files">
       <UniqueIdentifier>{478B54C6-C74C-4470-A742-414C7EFB4B77}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\mcp">
+      <UniqueIdentifier>{91142815-3d36-49a0-88e0-2b209431f7ab}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\debug">
+      <UniqueIdentifier>{eedddba1-7d4b-43cb-b3e5-afdc3c9c5597}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\analysis">
+      <UniqueIdentifier>{827df658-3216-4983-9829-3fcf79746e0b}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Source Files\app">
       <UniqueIdentifier>{8D2A87F4-154D-400E-9A7F-E10EEA9651F8}</UniqueIdentifier>
     </Filter>
@@ -65,6 +83,111 @@
   <ItemGroup>
     <ClInclude Include="src\app\Application.hpp">
       <Filter>Header Files\app</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\ScriptPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\ScriptRunner.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\GraphView.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\GraphLayout.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\app\Perspective.hpp">
+      <Filter>Header Files\app</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\BookmarksPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\AnnotationUi.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\Annotations.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\NativeCode.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\Arm64.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\ResourceTable.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\TrafficPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\UiUtil.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\debug\TrafficProxy.hpp">
+      <Filter>Header Files\debug</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\WorkerSet.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\McpSettings.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\DevicePanels.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\AnalysisPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\mcp\McpHost.hpp">
+      <Filter>Header Files\mcp</Filter>
+    </ClInclude>
+    <ClInclude Include="src\app\HeadlessMcp.hpp">
+      <Filter>Header Files\app</Filter>
+    </ClInclude>
+    <ClInclude Include="src\mcp\McpTransports.hpp">
+      <Filter>Header Files\mcp</Filter>
+    </ClInclude>
+    <ClInclude Include="src\mcp\McpTools.hpp">
+      <Filter>Header Files\mcp</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\ApkDiff.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\mcp\McpServer.hpp">
+      <Filter>Header Files\mcp</Filter>
+    </ClInclude>
+    <ClInclude Include="src\debug\Jdwp.hpp">
+      <Filter>Header Files\debug</Filter>
+    </ClInclude>
+    <ClInclude Include="src\debug\DeviceService.hpp">
+      <Filter>Header Files\debug</Filter>
+    </ClInclude>
+    <ClInclude Include="src\debug\Adb.hpp">
+      <Filter>Header Files\debug</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\Socket.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\mcp\Json.hpp">
+      <Filter>Header Files\mcp</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\Process.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\ElfFile.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\DexFile.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\Dalvik.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\ApkAnalysis.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\AnalysisService.hpp">
+      <Filter>Header Files\analysis</Filter>
     </ClInclude>
     <ClInclude Include="src\app\Theme.hpp">
       <Filter>Header Files\app</Filter>
@@ -187,6 +310,102 @@
   <ItemGroup>
     <ClCompile Include="src\app\Application.cpp">
       <Filter>Source Files\app</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\ScriptPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\ScriptRunner.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\GraphView.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\GraphLayout.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\BookmarksPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\Annotations.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\AnalysisNative.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\NativeCode.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\Arm64.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\ResourceTable.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\TrafficPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\TrafficProxy.cpp">
+      <Filter>Source Files\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\McpSettings.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\DevicePanels.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\AnalysisPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\mcp\McpHost.cpp">
+      <Filter>Source Files\mcp</Filter>
+    </ClCompile>
+    <ClCompile Include="src\app\HeadlessMcp.cpp">
+      <Filter>Source Files\app</Filter>
+    </ClCompile>
+    <ClCompile Include="src\mcp\McpTransports.cpp">
+      <Filter>Source Files\mcp</Filter>
+    </ClCompile>
+    <ClCompile Include="src\mcp\McpTools.cpp">
+      <Filter>Source Files\mcp</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\ApkDiff.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\mcp\McpServer.cpp">
+      <Filter>Source Files\mcp</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\Jdwp.cpp">
+      <Filter>Source Files\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\DeviceService.cpp">
+      <Filter>Source Files\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\Adb.cpp">
+      <Filter>Source Files\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\Socket.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\mcp\Json.cpp">
+      <Filter>Source Files\mcp</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\Process.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\ElfFile.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\DexFile.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\Dalvik.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\ApkAnalysis.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\AnalysisService.cpp">
+      <Filter>Source Files\analysis</Filter>
     </ClCompile>
     <ClCompile Include="src\app\Theme.cpp">
       <Filter>Source Files\app</Filter>

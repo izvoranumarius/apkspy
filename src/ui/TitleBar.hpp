@@ -47,4 +47,5 @@ private:
     float iconHeight_ = 0.f;
     int openMenu_ = -1;
     float height_ = 32.f;
+    float scale_ = 1.f;  // height_ / 32: every caption metric follows the font size (zoom, DPI)
 };

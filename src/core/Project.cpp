@@ -1,4 +1,5 @@
 #include "core/Project.hpp"
+#include <cstdlib>
 #include <filesystem>
 #include "core/Paths.hpp"
 
@@ -15,6 +16,7 @@ void Project::reset() {
     path_.clear();
     apks_.clear();
     tabs_.clear();
+    annotations_.clear();
     ++epoch_;
 }
 
@@ -23,6 +25,7 @@ void Project::close() {
     path_.clear();
     apks_.clear();
     tabs_.clear();
+    annotations_.clear();
     ++epoch_;
 }
 
@@ -87,6 +90,20 @@ bool Project::save(const std::string& path) {
         out.set("tab." + idx + ".group", tabs_[i].group);
         out.set("tab." + idx + ".path", tabs_[i].path);
     }
+    out.set("note.count", (int)annotations_.size());
+    for (size_t i = 0; i < annotations_.size(); ++i) {
+        const Annotation& a = annotations_[i];
+        const std::string k = "note." + std::to_string(i) + ".";
+        out.set(k + "kind", (int)a.kind);
+        out.set(k + "target", (int)a.target);
+        out.set(k + "group", a.group);
+        out.set(k + "root", (int)a.root);
+        out.set(k + "path", a.path);
+        out.set(k + "line", a.line);
+        out.set(k + "addr", std::to_string(a.addr));
+        out.set(k + "text", Annotations::escape(a.text));
+        out.set(k + "context", Annotations::escape(a.context));
+    }
     if (!out.save(path)) return false;
     path_ = path;
     open_ = true;
@@ -124,8 +141,30 @@ bool Project::load(const std::string& path) {
         if (!tab.path.empty()) tabs.push_back(std::move(tab));
     }
 
+    std::vector<Annotation> notes;
+    const int noteCount = in.getInt("note.count", 0);
+    if (noteCount < 0 || noteCount > (int)Annotations::kMaxItems) return false;
+    for (int i = 0; i < noteCount; ++i) {
+        const std::string k = "note." + std::to_string(i) + ".";
+        Annotation a;
+        const int kind = in.getInt(k + "kind", 0), target = in.getInt(k + "target", 0), root = in.getInt(k + "root", 0);
+        if (kind < 0 || kind > 1 || target < 0 || target > 1) continue;
+        if (root != (int)RootKind::Apk && root != (int)RootKind::Decompiled) continue;
+        a.kind = (Annotation::Kind)kind;
+        a.target = (Annotation::Target)target;
+        a.root = (RootKind)root;
+        a.group = in.getString(k + "group");
+        a.path = in.getString(k + "path");
+        a.line = in.getInt(k + "line", 0);
+        a.addr = std::strtoull(in.getString(k + "addr", "0").c_str(), nullptr, 10);
+        a.text = Annotations::unescape(in.getString(k + "text"));
+        a.context = Annotations::unescape(in.getString(k + "context"));
+        notes.push_back(std::move(a));
+    }
+
     apks_ = std::move(apks);
     tabs_ = std::move(tabs);
+    annotations_ = std::move(notes);
     path_ = path;
     open_ = true;
     ++epoch_;

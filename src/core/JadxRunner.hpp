@@ -39,6 +39,13 @@ public:
     int warningCount() const { return warnings_.load(); }
     int errorCount() const { return errors_.load(); }
     int processedCount() const { return processed_.load(); }
+    // Total classes reported by jadx's "progress: X of Y" lines (0 = unknown).
+    int totalCount() const { return total_.load(); }
+    // True when the last Done run exited non-zero because some classes
+    // failed to decompile (jadx still writes everything else).
+    bool finishedWithErrors() const { return finishedWithErrors_.load(); }
+    // Error count jadx reported at the end ("finished with errors, count: N").
+    int failedClasses() const { return failedClasses_.load(); }
     int elapsedSeconds() const;
 
     // Runs "jadx --version" on a worker thread and captures the first line.
@@ -64,6 +71,9 @@ private:
     std::atomic<int> warnings_{0};
     std::atomic<int> errors_{0};
     std::atomic<int> processed_{0};
+    std::atomic<int> total_{0};
+    std::atomic<int> failedClasses_{0};
+    std::atomic<bool> finishedWithErrors_{false};
     std::atomic<bool> cancelRequested_{false};
     std::mutex handleMutex_;         // guards the live child handle below
 #ifdef _WIN32

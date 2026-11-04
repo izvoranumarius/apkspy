@@ -1,6 +1,8 @@
 #include "ui/EditorPanel.hpp"
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include "app/Theme.hpp"
 #include <fstream>
 #include "core/Paths.hpp"
@@ -39,11 +41,11 @@ bool toggleButton(const char* label, bool on) {
 // Byte offset the mouse sits on inside a rendered span (monospace column
 // math via CalcTextSize, the same formula the find overlays use). Returns
 // false when the mouse is outside the span's text range.
-bool byteOffsetAtX(const std::string& line, const Span& span, float relX, int& offOut) {
+bool byteOffsetAtX(std::string_view line, const Span& span, float relX, int& offOut) {
     if (span.end <= span.begin) return false;
     int off = (int)span.end - 1;  // clicked at/behind the last glyph
     for (int c = (int)span.begin + 1; c <= (int)span.end; ++c) {
-        if (ImGui::CalcTextSize(line.c_str() + span.begin, line.c_str() + c).x > relX) {
+        if (ImGui::CalcTextSize(line.data() + span.begin, line.data() + c).x > relX) {
             off = c - 1;
             break;
         }
@@ -55,7 +57,7 @@ bool byteOffsetAtX(const std::string& line, const Span& span, float relX, int& o
 
 // [a,b) bounds of the identifier under `off` (expands along the line, not
 // just the span, so '$'-stitched nested names stay whole).
-bool identifierAround(const std::string& line, int off, int& aOut, int& bOut) {
+bool identifierAround(std::string_view line, int off, int& aOut, int& bOut) {
     if (off < 0 || off >= (int)line.size()) return false;
     if (!tex::isIdentChar(line[(size_t)off])) return false;
     int a = off;
@@ -91,14 +93,18 @@ void EditorPanel::drawContents() {
             char label[640];
             const char* marker = doc->isPreview() ? " (preview)" : (doc->isDirty() ? " *" : "");
             std::snprintf(label, sizeof label, "%s%s###doc%p", doc->title().c_str(), marker, (void*)doc.get());
-            if (ImGui::BeginTabItem(label, &open, flags)) {
-                if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && doc->isPreview())
+            const bool tabOpen = ImGui::BeginTabItem(label, &open, flags);
+            const bool tabHovered = ImGui::IsItemHovered();  // read now: the document body adds items of its own
+            if (tabOpen) {
+                if (tabHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && doc->isPreview())
                     promoted = doc.get();  // preview tab double-clicked -> keep it
                 drawDocument(*doc);
                 ImGui::EndTabItem();
             }
-            if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) ImGui::OpenPopup("##tab_ctx");
+            if (tabHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) ImGui::OpenPopup("##tab_ctx");
             if (ImGui::BeginPopup("##tab_ctx")) {
+                if (doc->node() && !doc->node()->path().empty() && ImGui::MenuItem("Export...")) openExport(*doc);
+                ImGui::Separator();
                 if (ImGui::MenuItem("Close")) closingDoc_ = doc.get();
                 if (ImGui::MenuItem("Close All")) {
                     batchClose_.clear();
@@ -140,6 +146,7 @@ void EditorPanel::drawContents() {
         gotoOpenRequest_ = false;
     }
     drawGoToModal();
+    comment_.draw(workspace_.annotations());
     drawExportBrowser();
 
     processCloses();
@@ -272,13 +279,10 @@ void EditorPanel::drawToolbar(Document& doc) {
     }
     const char* path = doc.node() ? doc.node()->path().c_str() : "";
     ImGui::TextDisabled("%s", path);
-    // Right-aligned toolbar buttons, laid out right to left: [Edit] [Export].
     const ImGuiStyle& style = ImGui::GetStyle();
     const bool canEdit = doc.canEdit();
-    const bool canExport = doc.node() && !doc.node()->path().empty();
     const char* editLabel = doc.isEditing() ? "View" : "Edit";
     const float editW = canEdit ? ImGui::CalcTextSize(editLabel).x + style.FramePadding.x * 2.f : 0.f;
-    const float exportW = canExport ? ImGui::CalcTextSize("Export...").x + style.FramePadding.x * 2.f : 0.f;
     float x = ImGui::GetWindowWidth() - style.WindowPadding.x;
     if (canEdit) {
         x -= editW;
@@ -291,24 +295,204 @@ void EditorPanel::drawToolbar(Document& doc) {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", doc.isEditing() ? "Back to the read-only view (unsaved edits are kept)"
                                                     : "Edit this file in place (saved with Ctrl+S)");
-        x -= 6.f;
-    }
-    if (canExport) {
-        x -= exportW;
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(x);
-        if (ImGui::Button("Export...")) openExport(doc);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Save this file outside the workspace (decoded text for source code)");
     }
 }
 
 void EditorPanel::drawScrollable(Document& doc) {
+    if (doc.mode() != Document::Mode::Code) {
+        drawHexView(doc);
+        return;
+    }
     ImGui::BeginChild("##content", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
     ImGui::PushFont(Theme::monoFont());
-    if (doc.mode() == Document::Mode::Code) drawCode(doc);
-    else drawHex(doc);
+    drawCode(doc);
     ImGui::PopFont();
+    ImGui::EndChild();
+}
+
+namespace {
+// Parses "DE AD be ef" / "deadbeef" into bytes; false on bad input.
+bool parseHexPattern(const char* text, std::vector<uint8_t>& out) {
+    out.clear();
+    int nibble = -1;
+    for (const char* p = text; *p; ++p) {
+        const char c = *p;
+        int v;
+        if (c >= '0' && c <= '9') v = c - '0';
+        else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+        else if (c == ' ' || c == ',') continue;
+        else return false;
+        if (nibble < 0) nibble = v;
+        else {
+            out.push_back((uint8_t)(nibble << 4 | v));
+            nibble = -1;
+        }
+    }
+    return nibble < 0 && !out.empty();
+}
+}  // namespace
+
+void EditorPanel::drawHexView(const Document& doc) {
+    HexState& h = hex_[&doc];
+    const auto& bytes = doc.bytes();
+    // Toolbar: jump + search.
+    ImGui::SetNextItemWidth(110.f);
+    if (ImGui::InputTextWithHint("##hexgoto", "offset (hex)", h.gotoBuf, sizeof h.gotoBuf,
+                                 ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CharsHexadecimal)) {
+        const unsigned long long off = std::strtoull(h.gotoBuf, nullptr, 16);
+        if (off < bytes.size()) {
+            h.selected = (int64_t)off;
+            h.scrollTo = (int64_t)off;
+            h.status.clear();
+        } else {
+            h.status = "offset beyond end of file";
+        }
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(220.f);
+    const bool findNow = ImGui::InputTextWithHint("##hexfind", h.findText ? "text to find" : "hex bytes, e.g. 64 65 78 0a",
+                                                  h.findBuf, sizeof h.findBuf, ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    ImGui::Checkbox("Text", &h.findText);
+    ImGui::SameLine();
+    if ((ImGui::Button("Find next") || findNow) && h.findBuf[0]) {
+        std::vector<uint8_t> pattern;
+        if (h.findText) pattern.assign(h.findBuf, h.findBuf + std::strlen(h.findBuf));
+        if (!h.findText && !parseHexPattern(h.findBuf, pattern)) {
+            h.status = "invalid hex pattern";
+        } else {
+            const size_t from = h.selected >= 0 ? (size_t)h.selected + 1 : 0;
+            auto it = std::search(bytes.begin() + (ptrdiff_t)std::min(from, bytes.size()), bytes.end(), pattern.begin(), pattern.end());
+            if (it == bytes.end()) it = std::search(bytes.begin(), bytes.end(), pattern.begin(), pattern.end());  // wrap
+            if (it == bytes.end()) {
+                h.status = "not found";
+            } else {
+                h.selected = it - bytes.begin();
+                h.scrollTo = h.selected;
+                h.status.clear();
+            }
+        }
+    }
+    ImGui::SameLine();
+    if (!h.status.empty()) ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.35f, 1.f), "%s", h.status.c_str());
+    else ImGui::TextDisabled("%zu bytes", bytes.size());
+
+    const float inspectorW = ImGui::GetFontSize() * 17.f;  // fits 20-digit 64-bit values at any zoom
+    ImGui::BeginChild("##content", ImVec2(-inspectorW, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::PushFont(Theme::monoFont());
+    const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
+    const float charW = ImGui::CalcTextSize("0").x;
+    if (h.scrollTo >= 0) {
+        ImGui::SetScrollY(std::max(0.f, (float)(h.scrollTo / 16) * lineHeight - ImGui::GetWindowHeight() * 0.33f));
+        h.scrollTo = -1;
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const int rows = (int)((bytes.size() + 15) / 16);
+    ImGuiListClipper clipper;
+    clipper.Begin(rows, lineHeight);
+    while (clipper.Step()) {
+        for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; ++r) {
+            const size_t offset = (size_t)r * 16;
+            char buf[160];
+            int n = std::snprintf(buf, sizeof buf, "%08X  ", (unsigned)offset);
+            for (size_t k = 0; k < 16; ++k) {
+                if (offset + k < bytes.size()) n += std::snprintf(buf + n, sizeof buf - n, "%02X ", bytes[offset + k]);
+                else n += std::snprintf(buf + n, sizeof buf - n, "   ");
+            }
+            buf[n++] = ' ';
+            for (size_t k = 0; k < 16 && offset + k < bytes.size(); ++k) {
+                const uint8_t c = bytes[offset + k];
+                buf[n++] = (c >= 32 && c < 127) ? (char)c : '.';
+            }
+            buf[n] = 0;
+            const ImVec2 pos = ImGui::GetCursorScreenPos();
+            // Selection highlight in both columns, under the text.
+            if (h.selected >= (int64_t)offset && h.selected < (int64_t)offset + 16) {
+                const int k = (int)(h.selected - (int64_t)offset);
+                const ImU32 sel = IM_COL32(0, 122, 204, 120);
+                dl->AddRectFilled(ImVec2(pos.x + charW * (10 + 3 * k), pos.y), ImVec2(pos.x + charW * (12 + 3 * k), pos.y + lineHeight), sel);
+                dl->AddRectFilled(ImVec2(pos.x + charW * (59 + k), pos.y), ImVec2(pos.x + charW * (60 + k), pos.y + lineHeight), sel);
+            }
+            ImGui::TextUnformatted(buf);
+            if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                const int col = (int)((ImGui::GetIO().MousePos.x - pos.x) / charW);
+                int k = -1;
+                if (col >= 10 && col < 58) k = (col - 10) / 3;
+                else if (col >= 59 && col < 75) k = col - 59;
+                if (k >= 0 && offset + (size_t)k < bytes.size()) h.selected = (int64_t)(offset + (size_t)k);
+            }
+        }
+    }
+    ImGui::PopFont();
+    ImGui::EndChild();
+    ImGui::SameLine();
+    drawHexInspector(doc, h);
+}
+
+void EditorPanel::drawHexInspector(const Document& doc, HexState& h) {
+    const auto& bytes = doc.bytes();
+    ImGui::BeginChild("##inspector", ImVec2(0, 0), ImGuiChildFlags_Borders);
+    ImGui::TextDisabled("Data inspector (little endian)");
+    if (h.selected < 0 || h.selected >= (int64_t)bytes.size()) {
+        ImGui::TextDisabled("Click a byte.");
+        ImGui::EndChild();
+        return;
+    }
+    const size_t off = (size_t)h.selected;
+    const size_t avail = bytes.size() - off;
+    const auto le = [&](size_t n) {
+        uint64_t v = 0;
+        for (size_t i = 0; i < n && i < avail; ++i) v |= (uint64_t)bytes[off + i] << (8 * i);
+        return v;
+    };
+    ImGui::PushFont(Theme::monoFont());
+    ImGui::Text("offset   0x%zX (%zu)", off, off);
+    ImGui::Separator();
+    ImGui::Text("int8     %d", (int)(int8_t)bytes[off]);
+    ImGui::Text("uint8    %u", (unsigned)bytes[off]);
+    if (avail >= 2) {
+        ImGui::Text("int16    %d", (int)(int16_t)le(2));
+        ImGui::Text("uint16   %u", (unsigned)le(2));
+    }
+    if (avail >= 4) {
+        const uint32_t v = (uint32_t)le(4);
+        float f;
+        std::memcpy(&f, &v, 4);
+        ImGui::Text("int32    %d", (int32_t)v);
+        ImGui::Text("uint32   %u", v);
+        ImGui::Text("hex32    0x%08X", v);
+        ImGui::Text("float    %g", f);
+    }
+    if (avail >= 8) {
+        const uint64_t v = le(8);
+        double d;
+        std::memcpy(&d, &v, 8);
+        ImGui::Text("int64    %lld", (long long)v);
+        ImGui::Text("uint64   %llu", (unsigned long long)v);
+        ImGui::Text("double   %g", d);
+    }
+    // ULEB128 (DEX / DWARF encodings).
+    {
+        uint64_t v = 0;
+        int shift = 0;
+        size_t i = 0;
+        for (; i < 10 && i < avail; ++i) {
+            v |= (uint64_t)(bytes[off + i] & 0x7F) << shift;
+            shift += 7;
+            if (!(bytes[off + i] & 0x80)) break;
+        }
+        ImGui::Text("uleb128  %llu (%zu bytes)", (unsigned long long)v, i + 1);
+    }
+    std::string str;
+    for (size_t i = 0; i < 48 && i < avail && bytes[off + i] >= 32 && bytes[off + i] < 127; ++i) str.push_back((char)bytes[off + i]);
+    ImGui::TextWrapped("ascii    \"%s\"", str.c_str());
+    ImGui::PopFont();
+    if (ImGui::SmallButton("Copy offset")) {
+        char b[32];
+        std::snprintf(b, sizeof b, "0x%zX", off);
+        ImGui::SetClipboardText(b);
+    }
     ImGui::EndChild();
 }
 
@@ -341,12 +525,51 @@ void EditorPanel::drawCode(Document& doc) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImGuiIO& io = ImGui::GetIO();
     std::vector<Span> spans;
+    // Bookmarks and comments of this document, by line.
+    struct LineNotes {
+        const Annotation* bookmark = nullptr;
+        const Annotation* comment = nullptr;
+    };
+    std::unordered_map<int, LineNotes> notes;
+    Annotation here;
+    const bool annotatable = annotationAt(doc, 0, here);
+    if (annotatable)
+        for (const Annotation& a : workspace_.annotations().all())
+            if (a.target == Annotation::Target::File && a.group == here.group && a.root == here.root && a.path == here.path)
+                (a.kind == Annotation::Kind::Bookmark ? notes[a.line].bookmark : notes[a.line].comment) = &a;
+    const auto drawNote = [&](int i) {
+        auto it = notes.find(i);
+        if (it == notes.end()) return;
+        const Annotation* a = it->second.comment;
+        if (!a && it->second.bookmark && !it->second.bookmark->text.empty()) a = it->second.bookmark;
+        if (!a) return;
+        ImGui::SameLine(0, ImGui::GetFontSize());
+        const std::string text = "// " + ui::noteFirstLine(a->text);
+        ImGui::TextColored(a->kind == Annotation::Kind::Comment ? ui::kNoteColor : ui::kBookmarkColor, "%s", text.c_str());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", a->text.c_str());
+    };
+    const bool viewHovered = ImGui::IsWindowHovered();
     ImGuiListClipper clipper;
     clipper.Begin((int)lines.size(), lineHeight);
     while (clipper.Step()) {
         // The top visible line feeds the Back/Forward history (M2).
         doc.setViewLine(std::min(clipper.DisplayStart, std::max(0, (int)lines.size() - 1)));
         for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+            const ImVec2 rowPos = ImGui::GetCursorScreenPos();
+            if (viewHovered && io.MousePos.y >= rowPos.y && io.MousePos.y < rowPos.y + lineHeight) {
+                const bool right = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+                if (right || (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyCtrl)) {
+                    lineDoc_ = &doc;
+                    line_ = i;
+                }
+                if (right) ImGui::OpenPopup("##lineMenu");
+            }
+            if (lineDoc_ == &doc && line_ == i)
+                dl->AddRectFilled(rowPos, ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth(), rowPos.y + lineHeight),
+                                  IM_COL32(255, 255, 255, 16));
+            if (auto it = notes.find(i); it != notes.end() && it->second.bookmark)
+                dl->AddCircleFilled(ImVec2(rowPos.x + textHeight * 0.3f, rowPos.y + textHeight * 0.5f), textHeight * 0.26f,
+                                    ImGui::GetColorU32(ui::kBookmarkColor));
             if (lineNumbers()) {
                 if (i == doc.highlight()) {
                     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -360,7 +583,7 @@ void EditorPanel::drawCode(Document& doc) {
             // the glyphs stay on top.
             if (f) {
                 if (auto it = f->byLine.find(i); it != f->byLine.end()) {
-                    const std::string& line = lines[(size_t)i];
+                    const std::string_view line = lines[(size_t)i];
                     const ImVec2 textPos = ImGui::GetCursorScreenPos();
                     for (int k = 0; k < it->second.second; ++k) {
                         const int idx = it->second.first + k;
@@ -374,16 +597,17 @@ void EditorPanel::drawCode(Document& doc) {
                 }
             }
             bool inBlock = doc.blockStateAt((size_t)i);
-            const std::string& line = lines[(size_t)i];
+            const std::string_view line = lines[(size_t)i];
             SyntaxHighlighter::tokenize(line, doc.language(), inBlock, spans);
             if (spans.empty()) {
                 ImGui::TextUnformatted("");
+                drawNote(i);
                 continue;
             }
             for (size_t k = 0; k < spans.size(); ++k) {
                 if (k > 0) ImGui::SameLine(0, 0);
                 ImGui::PushStyleColor(ImGuiCol_Text, spans[k].color);
-                ImGui::TextUnformatted(line.c_str() + spans[k].begin, line.c_str() + spans[k].end);
+                ImGui::TextUnformatted(line.data() + spans[k].begin, line.data() + spans[k].end);
                 ImGui::PopStyleColor();
                 // Ctrl+click navigation (M3): underline the identifier under
                 // the cursor while Ctrl is held, open its file on click.
@@ -397,17 +621,53 @@ void EditorPanel::drawCode(Document& doc) {
                             } else if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                                 const ImVec2 imin = ImGui::GetItemRectMin();
                                 const ImVec2 imax = ImGui::GetItemRectMax();
-                                const float x0 = imin.x + ImGui::CalcTextSize(line.c_str() + spans[k].begin,
-                                                                              line.c_str() + a).x;
-                                const float x1 = x0 + ImGui::CalcTextSize(line.c_str() + a, line.c_str() + b).x;
+                                const float x0 = imin.x + ImGui::CalcTextSize(line.data() + spans[k].begin,
+                                                                              line.data() + a).x;
+                                const float x1 = x0 + ImGui::CalcTextSize(line.data() + a, line.data() + b).x;
                                 dl->AddLine(ImVec2(x0, imax.y), ImVec2(x1, imax.y), kSymbolUnderline, 1.3f);
                             }
                         }
                     }
                 }
             }
+            drawNote(i);
         }
     }
+    drawLineMenu(doc);
+}
+
+bool EditorPanel::annotationAt(const Document& doc, int line, Annotation& out) const {
+    const NavLocation loc = workspace_.locationOf(doc);
+    if ((loc.kind != RootKind::Apk && loc.kind != RootKind::Decompiled) || loc.group.empty() || loc.path.empty()) return false;
+    out = Annotation{};
+    out.target = Annotation::Target::File;
+    out.group = loc.group;
+    out.root = loc.kind;
+    out.path = loc.path;
+    out.line = line;
+    const auto& lines = doc.lines();
+    if (line >= 0 && line < (int)lines.size()) {
+        std::string_view text = lines[(size_t)line];
+        while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) text.remove_prefix(1);
+        out.context = std::string(text.substr(0, 200));
+    }
+    return true;
+}
+
+void EditorPanel::drawLineMenu(Document& doc) {
+    if (!ImGui::BeginPopup("##lineMenu")) return;
+    Annotation here;
+    Annotations& notes = workspace_.annotations();
+    if (lineDoc_ == &doc && annotationAt(doc, line_, here)) {
+        const Annotation* comment = notes.at(Annotation::Kind::Comment, here);
+        if (ImGui::MenuItem(notes.at(Annotation::Kind::Bookmark, here) ? "Remove bookmark" : "Add bookmark", "Ctrl+B"))
+            notes.toggleBookmark(here);
+        if (ImGui::MenuItem(comment ? "Edit comment..." : "Add comment...", ";")) comment_.open(notes, here);
+        if (comment && ImGui::MenuItem("Remove comment")) notes.remove(comment->id);
+    } else {
+        ImGui::TextDisabled("Generated listings cannot be annotated");
+    }
+    ImGui::EndPopup();
 }
 
 void EditorPanel::drawEditable(Document& doc) {
@@ -492,8 +752,8 @@ void EditorPanel::drawEditable(Document& doc) {
             dl->AddRectFilled(ImVec2(frameMin.x, y), ImVec2(right, y + fontSize), IM_COL32(0, 122, 204, 60));
     }
 
-    const std::vector<std::string>& lines = doc.lines();
-    const std::vector<size_t>& offsets = doc.lineOffsets();
+    const auto lines = doc.lines();
+    const std::vector<uint32_t>& offsets = doc.lineOffsets();
     const int lineCount = (int)lines.size();
     const float viewHeight = frameMax.y - frameMin.y;
     const int first = std::max(0, (int)(scrollY / fontSize) - 1);
@@ -510,7 +770,7 @@ void EditorPanel::drawEditable(Document& doc) {
 
     std::vector<Span> spans;
     for (int i = first; i < last; ++i) {
-        const std::string& line = lines[(size_t)i];
+        const std::string_view line = lines[(size_t)i];
         const float y = textOrigin.y + (float)i * fontSize - scrollY;
         if (f) {
             if (auto it = f->byLine.find(i); it != f->byLine.end()) {
@@ -530,8 +790,8 @@ void EditorPanel::drawEditable(Document& doc) {
         float x = textOrigin.x - scrollX;
         for (const Span& span : spans) {
             if (span.end <= span.begin) continue;
-            const char* s = line.c_str() + span.begin;
-            const char* e = line.c_str() + span.end;
+            const char* s = line.data() + span.begin;
+            const char* e = line.data() + span.end;
             dl->AddText(Theme::monoFont(), fontSize, ImVec2(x, y), span.color, s, e);
             x += ImGui::CalcTextSize(s, e).x;
         }
@@ -560,32 +820,6 @@ void EditorPanel::drawEditable(Document& doc) {
     ImGui::PopFont();
 }
 
-void EditorPanel::drawHex(const Document& doc) {
-    const auto& bytes = doc.bytes();
-    const int rows = (int)((bytes.size() + 15) / 16);
-    const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
-    ImGuiListClipper clipper;
-    clipper.Begin(rows, lineHeight);
-    while (clipper.Step()) {
-        for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; ++r) {
-            size_t offset = (size_t)r * 16;
-            char buf[160];
-            int n = std::snprintf(buf, sizeof buf, "%08X  ", (unsigned)offset);
-            for (size_t k = 0; k < 16; ++k) {
-                if (offset + k < bytes.size()) n += std::snprintf(buf + n, sizeof buf - n, "%02X ", bytes[offset + k]);
-                else n += std::snprintf(buf + n, sizeof buf - n, "   ");
-            }
-            buf[n++] = ' ';
-            for (size_t k = 0; k < 16 && offset + k < bytes.size(); ++k) {
-                uint8_t c = bytes[offset + k];
-                buf[n++] = (c >= 32 && c < 127) ? (char)c : '.';
-            }
-            buf[n] = 0;
-            ImGui::TextUnformatted(buf);
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Find in file (M1) and go to line
 // ---------------------------------------------------------------------------
@@ -604,6 +838,13 @@ void EditorPanel::processShortcuts(Document& doc) {
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_G, false)) openGoTo(doc);
     if (f->open && !io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F3, false))
         moveMatch(*f, io.KeyShift ? -1 : 1);
+    if (lineDoc_ == &doc && !doc.isEditing() && !io.WantTextInput) {
+        Annotation here;
+        if (annotationAt(doc, line_, here)) {
+            if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_B, false)) workspace_.annotations().toggleBookmark(here);
+            if (!io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Semicolon, false)) comment_.open(workspace_.annotations(), here);
+        }
+    }
 }
 
 void EditorPanel::openFind(Document& doc, FindState& f) {
@@ -752,8 +993,14 @@ void EditorPanel::drawGoToModal() {
 // Drops find state of documents that no longer exist (closed tab, replaced
 // preview) so the map can never grow and addresses are never reused stale.
 void EditorPanel::sweepFindStates() {
-    if (find_.empty()) return;
     auto& docs = workspace_.documents();
+    for (auto it = hex_.begin(); it != hex_.end();) {
+        const bool alive = std::any_of(docs.begin(), docs.end(),
+                                       [&](const std::unique_ptr<Document>& d) { return d.get() == it->first; });
+        if (alive) ++it;
+        else it = hex_.erase(it);
+    }
+    if (find_.empty()) return;
     for (auto it = find_.begin(); it != find_.end();) {
         const bool alive = std::any_of(docs.begin(), docs.end(),
                                        [&](const std::unique_ptr<Document>& d) { return d.get() == it->first; });
@@ -762,18 +1009,18 @@ void EditorPanel::sweepFindStates() {
     }
 }
 
-float EditorPanel::columnToX(const std::string& line, int col) const {
+float EditorPanel::columnToX(std::string_view line, int col) const {
     if (col <= 0) return 0.f;
-    if ((size_t)col >= line.size()) return ImGui::CalcTextSize(line.c_str()).x;
-    return ImGui::CalcTextSize(line.c_str(), line.c_str() + col).x;
+    if ((size_t)col >= line.size()) return ImGui::CalcTextSize(line.data(), line.data() + line.size()).x;
+    return ImGui::CalcTextSize(line.data(), line.data() + col).x;
 }
 
 // Ctrl+click on an identifier (M3): resolve it against the document's group
 // symbol index and jump to the declaring file. Unresolved identifiers get a
 // quiet log line instead of failing silently.
-void EditorPanel::symbolNavigate(Document& doc, const std::string& line, int a, int b) {
+void EditorPanel::symbolNavigate(Document& doc, std::string_view line, int a, int b) {
     if (a < 0 || b <= a || (size_t)b > line.size()) return;
-    const std::string ident = line.substr((size_t)a, (size_t)(b - a));
+    const std::string ident(line.substr((size_t)a, (size_t)(b - a)));
     std::string hintDir;
     if (doc.node()) {
         const std::string& p = doc.node()->path();
@@ -812,7 +1059,7 @@ void EditorPanel::drawExportBrowser() {
                 workspace_.log("Export failed: cannot write " + picked);
                 return;
             }
-            const std::vector<std::string>& lines = doc->lines();
+            const auto lines = doc->lines();
             for (size_t i = 0; i < lines.size(); ++i) {
                 if (i) out << '\n';
                 out << lines[i];

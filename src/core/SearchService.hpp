@@ -2,6 +2,7 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 #include "core/ContentSource.hpp"
@@ -36,6 +37,10 @@ public:
     // Number of files skipped because they exceeded the size limit.
     int skippedFiles() const { return skipped_.load(); }
 
+    // The per-line matcher shared with the MCP code search (pure, thread
+    // safe). `query` must already be lowered ASCII (as start() does).
+    static bool lineMatches(Mode mode, std::string_view line, std::string_view query);
+
     template <typename F>
     void withHits(F&& fn) const {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -53,6 +58,7 @@ private:
     std::atomic<bool> running_{false};
     mutable std::mutex mutex_;
     std::vector<SearchHit> hits_;
+    std::vector<uint8_t> readBuffer_;  // worker-thread only: reused per scanned file
     Mode mode_ = Mode::Text;
     std::string group_;
     std::atomic<bool> truncated_{false};

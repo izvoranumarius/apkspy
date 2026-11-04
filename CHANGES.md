@@ -1,5 +1,243 @@
 # Changelog
 
+## One output window
+
+- **Output** now carries everything. Each line starts with its source, in its
+  own colour: `[app]`, `[jadx]`, `[analysis]`, `[scripts]`, `[mcp]` or `[debug]`.
+  A second dropdown shows one source at a time, and Warnings and Errors count all
+  of them, not just jadx.
+- **Scripts** print into Output, which now sits under the script editor, and they
+  keep reporting while you work in another workspace. The editor gets the space
+  of the old output pane, and runs add to the log instead of clearing it.
+- The script editor has Python syntax colouring and line numbers, and `.py`
+  files opened from an APK are coloured too.
+- Output keeps 50,000 lines, up from 6,000, and no longer goes blank when old
+  lines are dropped.
+- The "Font atlas" message is gone.
+
+## Responsiveness
+
+Measured on a 50 MB APK with 15,782 decompiled sources.
+
+- **Clicks answer sooner**: a tab's contents waited on the idle timer after a
+  click, about 130 ms each time. They now appear in about 33 ms, because the
+  app keeps drawing for a few frames after input.
+- **Network** no longer freezes for half a second on first open: the strings
+  behind the "In code" column are collected in the background, and the answers
+  are remembered instead of scanning every string for every row on every frame.
+- **Zoom**: a quick run of `Ctrl+wheel` or `Ctrl+=` steps waits for the last one
+  before rebuilding the fonts (about 100 ms each time), and every step counts.
+
+## A calmer interface
+
+The rule for this pass: if it is not needed to do the job in front of you, it
+moves to where you would look for it.
+
+- **Shell**: the **View** menu replaces the row of workspace tabs, and the title
+  shows the current one. Docks lost their menu triangles and close
+  buttons, and a panel alone in its dock has no tab. A status bar shows the
+  latest message and what is running; click it for the log.
+- **Workspaces**: each keeps only what its job needs (Network is Traffic and
+  Logcat, Scripts is the script editor).
+- **Menus**: just File, View and Navigate. Analysis and debugging are driven from
+  their workspaces, where the controls already were.
+- **MCP** moved to File > Settings > AI (MCP); it is not something you work in.
+- **Analysis** starts by itself when its workspace opens.
+- Attaching the debugger starts Logcat, filtered to that process.
+- **Analysis**: methods have no per-row buttons; double-click opens, right-click
+  has the rest, `Space` opens the CFG and `X` the callers. Xrefs, Graph and
+  Compare tabs appear only when they have something to show.
+- **Native**: four views (Functions, Strings, Symbols, Sections) instead of seven
+  radio buttons. The library list is a dropdown, and the first arm64 library
+  opens by itself.
+- **Graphs**: Fit and zoom sit on the canvas, with no hint lines above it.
+- **Debugger**: keys in tooltips, and a stateful toolbar that only appears when
+  attached. The breakpoint form moved into an **Add...** popup.
+- **Devices**: no adb label or hint text; a lone device selects itself, and the
+  options moved to a **...** menu.
+- **Traffic**: **Start capture** replaces the proxy, port and routing controls.
+- **Logcat**: one filter box (`text tag:Name pid:1234`) instead of three fields.
+- **MCP settings**: three Copy buttons replace the config dumps.
+- **Script**: scripts save themselves; the Python path moved to Settings > Scripts.
+
+## Graphs, Python scripting and a round of fixes
+
+### Graphs
+- `analysis/GraphLayout`: layered layout (back edges, longest-path layers,
+  barycenter crossing reduction, orthogonal routing), top-down or left to right.
+- `ui/GraphView`: pan, zoom around the cursor, fit, selection with edge
+  highlighting and a minimap. It replaces the old fixed bytecode CFG drawing.
+- Control-flow graphs for arm64 functions (`NativeCode::controlFlow`, MCP
+  `native_cfg`), with `Space` toggling listing and graph, following calls and
+  jumps by double-click, and comments and bookmarks in the blocks.
+- Call graphs for bytecode methods and native functions.
+- `show_native` takes a `view`; new `show_method` opens a method's listing,
+  CFG or call graph.
+
+### Scripting
+- **Script** workspace: edit and run Python scripts, with live output and Stop.
+- `apkspy` module: every MCP tool as a function, over a private local endpoint.
+  No embedded interpreter: scripts use the installed Python and its packages.
+
+### Fixes
+- Debug workspace: the editor stayed empty at a stop. It now opens the code
+  there, on the exact instruction when the APK has been analysed.
+- Native code views were squeezed: the library list becomes a dropdown there
+  and the function list sits beside the code, or hides for graphs.
+- Tail calls to unnamed code now create functions, so thin wrappers have callees.
+- Entering a workspace focuses its main tool instead of whichever window came
+  next, which could flip a dock tab.
+- A detached debugger no longer reads `(running)`.
+
+### Tests
+- 232 checks: graph layout invariants (no overlaps, routed edges, cycles, a
+  4000-block graph), native basic blocks, the script runner and the `apkspy`
+  module under real Python.
+
+## Workspaces
+
+- Workspaces replace the single shared layout: **Code**, **Analysis**,
+  **Debug**, **Network** and **AI**, each giving its main tool the central
+  area. Switch with the tab row or `Ctrl+1` onwards.
+- Each workspace has its own dock tree and window per panel, so arrangements
+  are saved independently; panel objects, and so their contents, are shared.
+  Panel visibility is per workspace; **Reset Workspace Layout** resets one.
+- Tabs show live state: analysis running, debugger running or paused, sniffer
+  capturing, MCP server on.
+- Navigation switches for you: attaching the debugger opens Debug, Show in
+  Logcat, Bookmarks and `show_panel` find a workspace with the panel, and a
+  file opened without an editor in view goes to one that has it.
+- The Debugger uses its new space: Threads, Call stack and Locals in three
+  columns. Its stale-width resizers are gone, and the thread list drops the
+  Susp column (now in the row tooltip) so names stay readable.
+- The default layout is rebuilt once on upgrade; older layouts are not migrated.
+
+## Bookmarks and comments
+
+- `core/Annotations`: bookmarks and comments on file lines (APK and
+  decompiled trees) and native addresses, stored in the project file with a
+  sanity cap on untrusted counts, and removed with their APK.
+- Viewer: line selection, right-click menu, **Ctrl+B**, **;**, gutter dots and
+  inline comments. Native listing: the same actions, with orange addresses.
+- New **Bookmarks** panel with filters, jump, edit, copy and delete.
+- MCP: `list_annotations`, `add_annotation`, `remove_annotation`. The headless
+  server writes annotation changes back to the project file on exit, changing
+  nothing else in it.
+- Unsaved annotations mark the project dirty.
+
+### Bug fixes
+- Right-clicking anywhere in a document opened the tab menu: the hover check
+  ran after the document body and tested its last item instead of the tab.
+- Saved tabs never reopened: `openProject` queued them after opening the APKs,
+  so they were missed, and every reopened project with tabs looked unsaved.
+- `OpenMode::Permanent` still produced preview tabs: `Document` defaults to
+  preview and `openNode` only ever set it to true.
+
+### Tests
+- 204 checks (was 181): the annotation store, project round trip with
+  multi-line text and 64-bit addresses, hostile project values, the MCP tools,
+  removal with the APK, and permanent tabs.
+
+## Native disassembly and deeper debugging
+
+### Native code (arm64-v8a)
+- `analysis/Arm64`: an AArch64 decoder for the base A64 integer, load /
+  store (pairs, exclusives, atomics, register offsets), branch, system
+  (hints, PAC, barriers, system registers) and scalar FP instructions plus
+  the common Advanced SIMD groups (three-same, by-element, two-register,
+  across-lanes, copy, modified immediate, ld1-ld4 / st1-st4). It renders
+  objdump-style aliases (`mov`, `cmp`, `cset`, `lsl`, `uxtb`, ...). On
+  Android's libc / libz / libblas it decodes 99.91 / 99.66 / 99.76 % of the
+  instructions; the rest print as `.inst`.
+- `analysis/NativeCode`: function discovery (symbols, PLT stubs named after
+  their JUMP_SLOT relocation, call targets as `sub_<addr>`), one linear
+  sweep that indexes calls, jumps, address-taken data (`adrp` + `add`,
+  `adr`) and loads (`adrp` + `ldr`), annotated listings and string
+  references. `ElfFile` now parses named relocations (REL / RELA) and
+  demangles internal-linkage (`_ZL`) names.
+- Analysis > Native gets **Functions** (list + listing with follow / back,
+  callers, open in editor) and **Strings** views; the narrow layout keeps
+  most of the height for the listing.
+- MCP: `native_functions`, `disassemble_native`, `native_xrefs`,
+  `native_strings` and the GUI tool `show_native`. Built code analyses are
+  cached in `AnalysisService` (weak cache + the most recent library).
+
+### Debugger
+- Fixed: the call stack was always empty on ART - `ThreadReference.Frames`
+  asked for 64 frames and ART answers INVALID_LENGTH when the stack is
+  shallower; the depth is now queried first.
+- Object values name their runtime class (`MainActivity@22`,
+  `int[3]@23`), types read as Java (`int`, `long`, `String[]`).
+- Locals expand objects (instance fields along the class chain) and arrays
+  (first 200 elements); MCP `debugger_inspect`; locals carry `object_id`.
+- Exception breakpoints (class or any, caught / uncaught) in the panel and
+  through `debugger_breakpoint` `add_exception`; the stop reports throw and
+  catch locations and exposes `$exception`.
+- Readable call stack (`MainActivity.compute(int, String) : 43`) and
+  Devices panel rows: double-click to debug or monitor, context menu with
+  Attach / Monitor / Show in Logcat / copy.
+- Verified end to end on an Android 15 emulator with a debuggable test
+  app: attach, line breakpoints, stack, locals, object / array expansion,
+  step over / out, exception breakpoints, resume, detach.
+
+### Tests
+- 181 checks (was 153): 36 pinned AArch64 encodings, NativeCode on a
+  synthetic ELF (functions, xrefs, string resolution, ABI refusal,
+  cancellation), JDWP fields / object values / array regions / exception
+  requests against the fake peer, the native MCP tools end to end.
+
+## Reverse-engineering platform: analysis, debugger, MCP
+
+### Memory and performance
+- **Documents** store their text in one buffer plus 4-byte line offsets
+  instead of a `std::string` per line. A 5.8 MB / 150k-line file went from
+  35.0 MB (Debug) / 14.9 MB (Release) to ~4.6-6.4 MB in both - the per-line
+  strings each carried a debug-heap container proxy in MSVC Debug builds.
+- **Font atlas**: the CJK fallback baked all 21k unified ideographs into
+  both fonts and kept the alpha8 + RGBA32 pixel copies and both copies of
+  the ~19 MB TTC in CPU memory after the GPU upload. The CPU copies are now
+  freed after the upload and the common Chinese + Japanese subsets are
+  baked by default (opt-in setting for full coverage). Idle GUI: 646 MB ->
+  244 MB private memory, Debug and Release alike.
+- `DiskSource::readFile` does one sized read (was a byte-wise
+  `istreambuf_iterator` loop with geometric regrowth); `ApkArchive` inflates
+  entries straight into the destination buffer and refuses declared sizes
+  above a cap before allocating; the search reuses one read buffer; the
+  symbol index stores every path once; tree building and the 1.5 s jadx
+  merge use `string_view` keys and sort only folders that changed.
+- Logcat (50k lines) and the process monitor use bounded ring buffers;
+  analyses are released when their APK is removed or the project closes.
+
+### Bug fixes
+- Class and field searches bound a `std::string_view` to a temporary
+  lowered copy of each line (dangling view, undefined behaviour) - the
+  keyword scan is now done in place.
+- "Don't Save" on an edited document blanked it (the views were rebuilt
+  from the cleared edit buffer); it now returns to the original text.
+
+### New
+- `src/analysis`: DEX parser, Dalvik disassembler (all formats, payload
+  pseudo-instructions), APK-wide xref index, call graph, CFG with exception
+  edges, constant-argument data flow, class hierarchy, string heuristics,
+  ELF parser with a small Itanium demangler, APK diff, background
+  AnalysisService. Analysis panel with Classes / Xrefs / Strings / Graph /
+  Native / Compare tabs; generated listings open as virtual read-only tabs.
+- Hex viewer with offset jump, pattern search and data inspector.
+- `src/debug`: shell-free adb wrappers, JDWP client, DeviceService with
+  Logcat, CPU / memory / thread monitor and a debug session (threads,
+  frames, locals, breakpoints incl. deferred class-load breakpoints,
+  stepping). Devices, Logcat and Debugger panels; Debug menu with x64dbg
+  shortcuts; Settings page for adb.
+- `src/mcp`: JSON, MCP server core (JSON-RPC 2.0, schema validation,
+  batching, cancellation, progress, owner-thread dispatcher), 35 tools,
+  stdio and loopback HTTP transports, MCP Server panel, headless
+  `--mcp` mode.
+- `ChildProcess` moved from JadxRunner to `core/Process` (shared with adb);
+  children are now created suspended and placed in their kill-on-close job
+  before they run, and stdin is the null device.
+- New portable test suite `apkspy_platform_test` (also a Visual Studio
+  project in the solution).
+
 ## Window icon from assets/favicon.ico
 
 - **New `assets/` folder in the solution directory** (next to `ApkSpy.sln`),

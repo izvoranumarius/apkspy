@@ -48,6 +48,14 @@ private:
     std::set<const TreeNode*> drawnSelection_;  // scratch: selection entries seen while walking this frame
     const TreeNode* pressNode_ = nullptr;    // row the mouse went down on (open fires on release, so drags can select)
     bool dragMoved_ = false;                 // mouse moved past the drag threshold since the press
+    // Replaces the whole selection (keeps drawnSelection_ in sync, which
+    // otherwise re-applies the previous selection at the end of the frame).
+    void setSelection(std::set<const TreeNode*> nodes);
+    // Rows [a, b] of the tree `root` (inclusive, any order) as a selection.
+    std::set<const TreeNode*> rowRange(const Root* root, const TreeNode* a, const TreeNode* b) const;
+    const TreeNode* anchorNode_ = nullptr;   // Shift+click / drag range anchor
+    const Root* pressRoot_ = nullptr;        // tree the press happened in
+    std::vector<Row> allRows_;               // rows of every tree drawn this frame (range selection)
     bool hoveredAny_ = false;                // any tree row hovered this frame (empty-space click clears selection)
     Root* removeRequest_ = nullptr;          // APK awaiting "Remove from project?" confirmation
     FileBrowser exportFileBrowser_;          // single-file export target (M5)

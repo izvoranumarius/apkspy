@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 #include "document/SyntaxHighlighter.hpp"
 #include "image/Texture.hpp"
@@ -19,22 +20,53 @@ struct ImageView {
     ImVec2 pendingScroll = ImVec2(0.f, 0.f);
 };
 
+class ResourceTable;
+
 class Document {
 public:
     enum class Mode { Code, Hex, Image };
 
+    // `resources` (optional) names app resource references in binary XML.
     Document(std::string title, const TreeNode* node, std::vector<uint8_t> bytes,
-             RootKind rootKind = RootKind::Apk);
+             RootKind rootKind = RootKind::Apk, const ResourceTable* resources = nullptr);
+    // Generated (virtual) code document: disassembly listings, analysis
+    // reports. Read-only; `node` is the virtual root's node for the listing.
+    Document(std::string title, const TreeNode* node, std::string text, Language language,
+             RootKind rootKind);
 
     const std::string& title() const { return title_; }
     const TreeNode* node() const { return node_; }
     Mode mode() const { return mode_; }
     Language language() const { return language_; }
     const std::vector<uint8_t>& bytes() const { return bytes_; }
-    const std::vector<std::string>& lines() const;
-    // Byte offset of each line's start inside editBuffer(); used to place the
-    // caret in the syntax-highlighted editor.
-    const std::vector<size_t>& lineOffsets() const;
+    // Text of a Code document. The whole text lives in ONE buffer and lines
+    // are views into it (start offsets only): no per-line heap allocations,
+    // which matters a lot for large files - especially in MSVC Debug builds,
+    // where every std::string also carries a debug-heap container proxy.
+    // While editing (or with unsaved edits) the views point into editBuffer().
+    size_t lineCount() const;
+    // 0-based line without its terminating newline (and without a trailing
+    // CR typed into the edit buffer). Valid until the text changes.
+    std::string_view line(size_t i) const;
+    // The full current text (edit buffer when it holds the live text).
+    std::string_view text() const;
+    // Cheap value view over the lines (size() / operator[] / back()) so
+    // generic helpers such as textsearch::findAll can walk them.
+    class Lines {
+    public:
+        explicit Lines(const Document* doc) : doc_(doc) {}
+        size_t size() const { return doc_->lineCount(); }
+        bool empty() const { return size() == 0; }
+        std::string_view operator[](size_t i) const { return doc_->line(i); }
+        std::string_view back() const { return doc_->line(size() - 1); }
+
+    private:
+        const Document* doc_;
+    };
+    Lines lines() const { return Lines(this); }
+    // Byte offset of each line's start inside text(); used to place the caret
+    // in the syntax-highlighted editor.
+    const std::vector<uint32_t>& lineOffsets() const;
     bool blockStateAt(size_t line) const;
     const std::string& note() const { return note_; }
     RootKind rootKind() const { return rootKind_; }
@@ -112,9 +144,10 @@ public:
 
 private:
     bool loadImage();
-    void splitLines();
+    void setText(std::string text);    // read-only text (strips CRs)
+    bool usesEditBuffer() const { return editing_ || dirty_; }
     void computeBlockStates() const;
-    void refreshEditCaches() const;  // lines + offsets + block states from editBuffer_
+    void refreshEditCaches() const;  // offsets + block states from the live text
     static void bumpEditSerial() { sEditSerial_.fetch_add(1); }
 
     std::string title_;
@@ -124,8 +157,8 @@ private:
     std::string rootGroup_;
     Mode mode_ = Mode::Hex;
     Language language_ = Language::Plain;
-    mutable std::vector<std::string> lines_;
-    mutable std::vector<size_t> lineOffsets_;
+    std::string text_;                     // read-only text of a Code document
+    mutable std::vector<uint32_t> lineOffsets_;  // line starts in text() (4 bytes/line)
     mutable std::vector<char> blockStates_;
     mutable bool cachesDirty_ = false;  // edit buffer changed, caches are stale
     std::string note_;

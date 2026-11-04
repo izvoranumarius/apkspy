@@ -1,8 +1,10 @@
 #include "core/Workspace.hpp"
+#include "analysis/Dalvik.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <string_view>
 #include <unordered_map>
 
 #include "core/AxmlDecoder.hpp"
@@ -76,12 +78,16 @@ uint64_t fnv1a(const std::string& s) {
 // Merges the current jadx output directory into the tree without ever
 // removing nodes, so TreeNode pointers held by open documents and search
 // hits stay valid while results stream in. Children are indexed per folder
-// so wide packages don't degrade into O(n^2) lookups.
+// so wide packages don't degrade into O(n^2) lookups; the index keys are
+// views of the nodes' own names (no string copies), and only folders that
+// actually gained children are re-sorted. This runs every 1.5 s on the UI
+// thread while jadx streams results, so it must not churn the heap.
 void mergeDiskTree(TreeNode& node, const fs::path& dir) {
     std::error_code ec;
-    std::unordered_map<std::string, TreeNode*> index;
-    index.reserve(node.children().size() * 2 + 8);
+    std::unordered_map<std::string_view, TreeNode*> index;
+    index.reserve(node.children().size() + 8);
     for (const auto& c : node.children()) index.emplace(c->name(), c.get());
+    bool added = false;
     for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
         const fs::path& p = it->path();
         std::string fileName = pathutil::toUtf8(p.filename());
@@ -89,22 +95,24 @@ void mergeDiskTree(TreeNode& node, const fs::path& dir) {
         if (auto found = index.find(fileName); found != index.end()) child = found->second;
         if (it->is_directory(ec)) {
             if (!child) {
-                child = node.addChild(std::make_unique<TreeNode>(fileName, pathutil::toUtf8(p), NodeKind::Folder));
-                index.emplace(fileName, child);
-                child->sortRecursive();
+                child = node.addChild(std::make_unique<TreeNode>(std::move(fileName), pathutil::toUtf8(p), NodeKind::Folder));
+                index.emplace(child->name(), child);
+                added = true;
             }
             if (child->isFolder()) mergeDiskTree(*child, p);
         } else if (!child) {
-            child = node.addChild(std::make_unique<TreeNode>(fileName, pathutil::toUtf8(p), TreeNode::classify(fileName)));
-            index.emplace(fileName, child);
+            const NodeKind kind = TreeNode::classify(fileName);
+            child = node.addChild(std::make_unique<TreeNode>(std::move(fileName), pathutil::toUtf8(p), kind));
+            index.emplace(child->name(), child);
+            added = true;
         }
     }
+    if (added) node.sortChildren();
 }
 
 std::unique_ptr<TreeNode> buildDiskTree(const fs::path& dir, const std::string& name) {
     auto node = std::make_unique<TreeNode>(name, pathutil::toUtf8(dir), NodeKind::Folder);
-    mergeDiskTree(*node, dir);
-    node->sortRecursive();
+    mergeDiskTree(*node, dir);  // sorts every folder it fills
     return node;
 }
 
@@ -207,7 +215,7 @@ void Workspace::attachDecompiled(Root& apkRoot, const std::string& outDir) {
         roots_.push_back(std::move(root));
         bumpVersion();
         ++treeEpochs_[apkRoot.title];
-        log("Reattached decompiled results of " + apkRoot.title);
+        log("Reattached decompiled results of " + apkRoot.title, "jadx");
         applyPendingTabs(Root::Kind::Decompiled, apkRoot.title);
         ensureSymbolIndex(apkRoot.title);
     } else {
@@ -226,7 +234,7 @@ bool Workspace::removeApk(Root* apkRoot) {
     std::string outDir;
     if (const Root* dec = rootByGroup(group, Root::Kind::Decompiled)) outDir = dec->outDir;
     if (jadxActiveGroup_ == group && jadx_.state() == JadxRunner::State::Running) {
-        log("Cannot remove " + group + " while it is being decompiled - cancel it first");
+        log("Cannot remove " + group + " while it is being decompiled - cancel it first", "jadx");
         return false;
     }
     jadxQueue_.erase(std::remove(jadxQueue_.begin(), jadxQueue_.end(), group), jadxQueue_.end());
@@ -243,12 +251,15 @@ bool Workspace::removeApk(Root* apkRoot) {
     roots_.erase(std::remove_if(roots_.begin(), roots_.end(),
                                 [&](const std::unique_ptr<Root>& r) { return r->title == group; }),
                  roots_.end());
+    annotations_.removeGroup(group);
     // Free the decompiled results we own (marker-guarded); anything we did
     // not create stays on disk.
     if (!outDir.empty() && removeOutDirIfOwned(pathutil::fromUtf8(outDir)))
-        log("Deleted decompiled results of " + group);
+        log("Deleted decompiled results of " + group, "jadx");
     nav_.purgeGroup(group);  // Back/Forward must not resurrect removed APKs
     symbols_.purgeGroup(group);
+    analysis_.purge(group);  // frees the DEX data and xref tables
+    analysisReported_.erase(group);
     treeEpochs_.erase(group);
     if (export_.busy()) export_.cancel();  // items may point into the removed tree
     bumpVersion();
@@ -305,10 +316,10 @@ void Workspace::startNextJadx() {
         if (search_.group() == group) search_.stop();
         if (jadx_.start(jadxPath_, apk->apkPath, dec->outDir, jadxArgs_)) {
             jadxActiveGroup_ = group;
-            log("Running jadx on " + apk->apkPath + "...");
+            log("Running jadx on " + apk->apkPath + "...", "jadx");
             return;
         }
-        log("Could not start jadx for " + apk->apkPath);
+        log("Could not start jadx for " + apk->apkPath, "jadx");
     }
 }
 
@@ -316,13 +327,45 @@ void Workspace::cancelDecompile() {
     jadxQueue_.clear();
     if (jadx_.state() == JadxRunner::State::Running) {
         jadx_.cancel();
-        log("Cancelling decompilation...");
+        log("Cancelling decompilation...", "jadx");
     }
 }
 
+void Workspace::startAnalysis(const std::string& group, bool force) {
+    const Root* apk = rootByGroup(group, Root::Kind::Apk);
+    if (!apk) return;
+    const AnalysisService::State before = analysis_.status(apk->title).state;
+    analysis_.start(apk->title, apk->apkPath, force);
+    if (force || (before != AnalysisService::State::Running && before != AnalysisService::State::Ready))
+        log("Analysing bytecode of " + apk->title + "...", "analysis");
+}
+
 void Workspace::update() {
-    for (auto& line : jadx_.drainLog()) log_.push_back(std::move(line));
-    if (log_.size() > 6000) log_.erase(log_.begin(), log_.begin() + 1000);
+    for (auto& line : jadx_.drainLog()) log(std::move(line), "jadx");
+    analysis_.update();
+    // Report each analysis completion once.
+    for (const std::string& group : analysis_.groups()) {
+        const AnalysisService::Status st = analysis_.status(group);
+        const bool finished = st.state == AnalysisService::State::Ready || st.state == AnalysisService::State::Failed;
+        if (!finished) {
+            analysisReported_.erase(group);
+            continue;
+        }
+        if (!analysisReported_.insert(group).second) continue;
+        if (st.state == AnalysisService::State::Ready) {
+            if (auto a = analysis_.get(group))
+                log("Bytecode analysis of " + group + " finished: " + std::to_string(a->stats().classes) +
+                    " classes, " + std::to_string(a->stats().methods) + " methods, " +
+                    std::to_string(a->stats().xrefs) + " cross-references" +
+                    (st.error.empty() ? std::string() : " (warnings: " + st.error + ")"), "analysis");
+        } else {
+            log("Bytecode analysis of " + group + " failed: " + st.error, "analysis");
+        }
+    }
+    if (log_.size() > 50000) {
+        log_.erase(log_.begin(), log_.begin() + 5000);
+        ++logTrims_;
+    }
 
     // Folder export (M5): one item per frame, on the UI thread - the only
     // thread allowed to read through an APK root's ContentSource.
@@ -366,13 +409,17 @@ void Workspace::update() {
             refreshDecompiledTree(group);
             ensureSymbolIndex(group);  // index the finished tree for Ctrl+click
             decompileSwitch_ = true;
-            log("Decompilation of " + group + " finished");
+            if (jadx_.finishedWithErrors())
+                log("Decompilation of " + group + " finished; jadx reported " + std::to_string(jadx_.failedClasses()) +
+                    " error(s) (code it could not decompile). Everything else is available.", "jadx");
+            else
+                log("Decompilation of " + group + " finished", "jadx");
         } else if (s == JadxRunner::State::Cancelled) {
             decompileFailure_ = true;
-            log("Decompilation of " + group + " was cancelled - partial results were discarded");
+            log("Decompilation of " + group + " was cancelled - partial results were discarded", "jadx");
         } else if (s == JadxRunner::State::Failed) {
             decompileFailure_ = true;
-            log("Decompilation of " + group + " failed. Check the jadx path in File > Settings > JADX");
+            log("Decompilation of " + group + " failed. Check the jadx path in File > Settings > JADX", "jadx");
         }
     }
     startNextJadx();
@@ -401,8 +448,7 @@ void Workspace::refreshDecompiledTree(const std::string& group) {
     if (!dec) return;
     std::error_code ec;
     if (!fs::is_directory(pathutil::fromUtf8(sourcesDir(dec->outDir)), ec)) return;
-    mergeDiskTree(*dec->tree, pathutil::fromUtf8(sourcesDir(dec->outDir)));
-    dec->tree->sortRecursive();
+    mergeDiskTree(*dec->tree, pathutil::fromUtf8(sourcesDir(dec->outDir)));  // sorts what changed
     ++treeEpochs_[active];  // the symbol index (M3) rebuilds against this epoch
 }
 
@@ -441,11 +487,11 @@ void Workspace::openNode(Root& root, const TreeNode& node, int line, OpenMode mo
             break;
         }
     }
-    auto doc = std::make_unique<Document>(
-        node.name(), &node, std::move(bytes),
-        root.kind == Root::Kind::Decompiled ? RootKind::Decompiled : RootKind::Apk);
+    std::shared_ptr<const ResourceTable> table;
+    if (root.kind == Root::Kind::Apk && AxmlDecoder::looksLikeAxml(bytes)) table = resources(root.title);
+    auto doc = std::make_unique<Document>(node.name(), &node, std::move(bytes), root.kind, table.get());
     doc->setRootGroup(root.title);
-    if (mode == OpenMode::Preview) doc->setPreview(true);
+    doc->setPreview(mode == OpenMode::Preview);
     if (line >= 0) doc->goTo(line);
     pendingFocus_ = doc.get();
     documents_.push_back(std::move(doc));
@@ -477,7 +523,7 @@ NavLocation Workspace::locationOf(const Document& doc) const {
 
 void Workspace::navigateTo(Root& root, const TreeNode& node, int line, const NavLocation* origin) {
     NavLocation dest;
-    dest.kind = root.kind == Root::Kind::Decompiled ? RootKind::Decompiled : RootKind::Apk;
+    dest.kind = root.kind;
     dest.group = root.title;
     dest.path = node.path();
     dest.line = line < 0 ? 0 : line;
@@ -564,7 +610,7 @@ bool Workspace::exportNode(Root& root, const TreeNode& node, const std::string& 
     std::string text;
     if (decoded && AxmlDecoder::looksLikeAxml(bytes)) {
         std::string error;
-        if (AxmlDecoder::decode(bytes, text, error)) {
+        if (AxmlDecoder::decode(bytes, text, error, root.kind == Root::Kind::Apk ? resources(root.title).get() : nullptr)) {
             std::ofstream out(dest, std::ios::binary);
             out.write(text.data(), (std::streamsize)text.size());
             if (!out) {
@@ -616,6 +662,80 @@ void Workspace::exportFolder(Root& root, const TreeNode& folder, const std::stri
     log("Exporting " + folder.name() + " (" + std::to_string(export_.total()) + " file(s)) to " + destDir);
 }
 
+std::shared_ptr<const ResourceTable> Workspace::resources(const std::string& group) {
+    Root* apk = rootByGroup(group, Root::Kind::Apk);
+    if (!apk || (!group.empty() && apk->title != group)) return nullptr;
+    if (!apk->resourcesLoaded) {
+        apk->resourcesLoaded = true;
+        if (const TreeNode* node = apk->tree ? apk->tree->findChild("resources.arsc") : nullptr) {
+            std::vector<uint8_t> bytes;
+            std::string error;
+            if (apk->source->read(*node, bytes)) {
+                apk->resources = ResourceTable::parse(bytes, error);
+                if (!apk->resources) log("resources.arsc of " + group + ": " + error, "analysis");
+            }
+        }
+    }
+    return apk->resources;
+}
+
+void Workspace::openMethodListing(const std::string& group, const ApkAnalysis& a, const ApkAnalysis::MethodDef& m, uint32_t pc) {
+    const DexFile& dex = *a.dexes()[m.dex];
+    const std::string sig = a.methodSignature(m);
+    std::string text = "# " + sig + "  (" + dex.name() + ")\n";
+    std::vector<int32_t> linePcs{-1};
+    dalvik::disassembleMethod(dex, m.method, dalvik::ListingOptions{}, text, &linePcs);
+    int line = 0;
+    if (pc != UINT32_MAX)
+        for (size_t i = 0; i < linePcs.size(); ++i)
+            if (linePcs[i] == (int32_t)pc) {
+                line = (int)i;
+                break;
+            }
+    std::string path = sig;
+    for (char& c : path)
+        if (c == '/' || c == '\\' || c == ':' || c == '<' || c == '>' || c == '|' || c == '?' || c == '*' || c == '"') c = '_';
+    std::string cls = DexFile::descriptorToJava(dex.typeDescriptor(dex.methodClass(m.method.methodIdx)));
+    cls = cls.substr(cls.rfind('.') + 1);
+    openGenerated(group, "smali/" + path + ".smali", cls + "." + std::string(dex.methodName(m.method.methodIdx)) + ".smali",
+                  std::move(text), line);
+}
+
+void Workspace::openGenerated(const std::string& group, const std::string& path, const std::string& title,
+                              std::string text, int line) {
+    Root* root = nullptr;
+    for (auto& r : roots_)
+        if (r->kind == Root::Kind::Virtual && r->title == group) root = r.get();
+    if (!root) {
+        auto r = std::make_unique<Root>();
+        r->title = group;
+        r->kind = Root::Kind::Virtual;
+        r->tree = std::make_unique<TreeNode>(group, "", NodeKind::Folder);
+        r->source = std::make_shared<MemorySource>();
+        root = r.get();
+        roots_.push_back(std::move(r));
+        bumpVersion();
+    }
+    auto* memory = static_cast<MemorySource*>(root->source.get());
+    TreeNode* node = root->tree->findByPath(path);
+    // Re-generated content: drop the stale tab first (closing it also
+    // removes its node), then rebuild node + document from the new text.
+    if (node)
+        if (Document* d = findDocument(*node)) {
+            closeDocument(d);
+            node = root->tree->findByPath(path);
+        }
+    if (!node) node = root->tree->addChild(std::make_unique<TreeNode>(title, path, TreeNode::classify(path)));
+    memory->put(path, std::move(text));
+    NavLocation origin;
+    const NavLocation* originPtr = nullptr;
+    if (activeDocument_) {
+        origin = locationOf(*activeDocument_);
+        originPtr = &origin;
+    }
+    navigateTo(*root, *node, line, originPtr);
+}
+
 void Workspace::promoteDocument(Document* doc) {
     if (!doc || doc->isPreview()) return;
     doc->promote();
@@ -627,7 +747,16 @@ void Workspace::closeDocument(const Document* doc) {
     if (activeDocument_ == doc) activeDocument_ = nullptr;
     for (auto it = documents_.begin(); it != documents_.end(); ++it) {
         if (it->get() == doc) {
+            const TreeNode* node = doc->node();
+            const bool generated = doc->rootKind() == RootKind::Virtual;
+            const std::string group = doc->rootGroup();
             documents_.erase(it);
+            // Generated listings are derived data: free them with their tab.
+            if (generated && node)
+                if (Root* v = rootByGroup(group, Root::Kind::Virtual); v && v->title == group) {
+                    static_cast<MemorySource*>(v->source.get())->erase(node->path());
+                    v->tree->removeChild(node);
+                }
             bumpVersion();
             return;
         }
@@ -639,6 +768,10 @@ void Workspace::closeAllDocuments() {
     pendingFocus_ = nullptr;
     activeDocument_ = nullptr;
     documents_.clear();
+    // Generated listings have no tab left to show them: free them all.
+    roots_.erase(std::remove_if(roots_.begin(), roots_.end(),
+                                [](const std::unique_ptr<Root>& r) { return r->kind == Root::Kind::Virtual; }),
+                 roots_.end());
     bumpVersion();
 }
 
@@ -650,7 +783,10 @@ void Workspace::closeAll() {
     activeDocument_ = nullptr;
     pendingTabs_.clear();
     nav_.clear();  // history is per project session
+    annotations_.clear();
     symbols_.clear();
+    analysis_.clear();
+    analysisReported_.clear();
     treeEpochs_.clear();
     if (export_.busy()) export_.cancel();  // items point into the cleared trees
     jadxQueue_.clear();
@@ -667,7 +803,9 @@ Document* Workspace::takeFocusRequest() {
     return d;
 }
 
-void Workspace::log(std::string message) { log_.push_back(std::move(message)); }
+void Workspace::log(std::string message, const char* source) {
+    log_.push_back("[" + std::string(source) + "] " + std::move(message));
+}
 
 void Workspace::applyPendingTabs(Root::Kind kind, const std::string& group) {
     if (pendingTabs_.empty()) return;

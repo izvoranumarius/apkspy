@@ -260,6 +260,20 @@ bool ApkInfo::parseSigningBlock(const std::vector<uint8_t>& buffer, uint64_t buf
 
 ApkInfo ApkInfo::extract(Root& apkRoot) {
     ApkInfo info;
+    struct ResolveLabel {
+        Root& root;
+        ApkInfo& info;
+        ~ResolveLabel() {
+            // "@string/app_name" -> the default-configuration text.
+            if (!root.resources || info.appLabel.empty() || info.appLabel[0] != '@') return;
+            const uint32_t id = root.resources->find(info.appLabel);
+            const std::string text = id ? root.resources->value(id) : std::string();
+            if (!text.empty()) {
+                info.appLabelRef = info.appLabel;
+                info.appLabel = text;
+            }
+        }
+    } resolveLabel{apkRoot, info};
     // Manifest: decoded on the UI thread through the archive's ContentSource.
     if (apkRoot.tree) {
         if (const TreeNode* manifest = apkRoot.tree->findChild("AndroidManifest.xml")) {
@@ -268,7 +282,7 @@ ApkInfo ApkInfo::extract(Root& apkRoot) {
             if (apkRoot.source && apkRoot.source->read(*manifest, bytes)) {
                 ManifestVisitor visitor(info);
                 std::string error;
-                info.ok = AxmlDecoder::decodeEvents(bytes, visitor, error);
+                info.ok = AxmlDecoder::decodeEvents(bytes, visitor, error, apkRoot.resources.get());
             }
         }
     }

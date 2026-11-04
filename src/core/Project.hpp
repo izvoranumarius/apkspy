@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "core/Annotations.hpp"
 #include "core/RootKind.hpp"
 #include "core/Settings.hpp"
 
@@ -55,6 +56,10 @@ public:
     const std::vector<Tab>& tabs() const { return tabs_; }
     void setTabs(std::vector<Tab> tabs) { tabs_ = std::move(tabs); ++epoch_; }
 
+    // Bookmarks and comments (the live copy is Workspace::annotations()).
+    const std::vector<Annotation>& annotations() const { return annotations_; }
+    void setAnnotations(std::vector<Annotation> a) { annotations_ = std::move(a); ++epoch_; }
+
     // Bumped by every mutation; lets the title bar cache its dirty check.
     uint64_t epoch() const { return epoch_; }
 
@@ -68,4 +73,5 @@ private:
     std::string path_;
     std::vector<ProjectApk> apks_;
     std::vector<Tab> tabs_;
+    std::vector<Annotation> annotations_;
 };

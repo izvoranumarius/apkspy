@@ -51,6 +51,7 @@ void SearchService::start(const TreeNode* root, const ContentSource* source, std
 void SearchService::run(const TreeNode* root, const ContentSource* source, std::string query) {
     if (mode_ == Mode::Filenames) scanFileNames(*root, query);
     else scan(*root, *source, query);
+    std::vector<uint8_t>().swap(readBuffer_);  // give the scan buffer back
     running_ = false;
 }
 
@@ -76,6 +77,40 @@ void SearchService::scanFileNames(const TreeNode& node, const std::string& query
     for (const auto& c : node.children()) scanFileNames(*c, query);
 }
 
+bool SearchService::lineMatches(Mode mode, std::string_view line, std::string_view query) {
+    // True when the query appears somewhere in the line directly followed
+    // by `c` (used for "name(" method detection).
+    const auto followedBy = [&](char c) {
+        size_t p = 0;
+        while (true) {
+            size_t rel = tex::ciFind(line.substr(p), query);
+            if (rel == std::string_view::npos) return false;
+            size_t atEnd = p + rel + query.size();
+            if (atEnd < line.size() && line[atEnd] == c) return true;
+            p = p + rel + query.size();
+        }
+    };
+    // Case-insensitive keyword scans happen in place. (Classes/Fields used to
+    // bind a string_view to a temporary lowered copy of the line - a
+    // dangling view, plus one heap allocation per scanned line.)
+    const auto has = [&](const char* kw) { return tex::ciFind(line, kw) != std::string_view::npos; };
+    switch (mode) {
+    case Mode::Text: return tex::ciFind(line, query) != std::string_view::npos;
+    case Mode::Classes: {
+        const bool decl = has("class ") || has("interface ") || has("enum ") || has("record ") || has("object ");
+        return decl && tex::ciContainsWord(line, query);
+    }
+    case Mode::Methods: return tex::ciContainsWord(line, query) && followedBy('(');
+    case Mode::Fields: {
+        const bool decl = has("private ") || has("public ") || has("protected ") || has("val ") || has("var ") ||
+                          has("static ");
+        const bool initializer = line.find('=') != std::string_view::npos || line.find(';') != std::string_view::npos;
+        return decl && initializer && !followedBy('(') && tex::ciContainsWord(line, query);
+    }
+    default: return false;
+    }
+}
+
 void SearchService::scan(const TreeNode& node, const ContentSource& source, const std::string& query) {
     if (stop_) return;
     if (node.isFolder()) {
@@ -97,7 +132,9 @@ void SearchService::scan(const TreeNode& node, const ContentSource& source, cons
         skipped_++;
         return;
     }
-    std::vector<uint8_t> bytes;
+    // One read buffer for the whole scan (capacity kept across files)
+    // instead of a fresh multi-megabyte allocation per file.
+    std::vector<uint8_t>& bytes = readBuffer_;
     if (!source.read(node, bytes)) return;
     if (bytes.size() > kMaxFileSize) {
         skipped_++;
@@ -116,50 +153,7 @@ void SearchService::scan(const TreeNode& node, const ContentSource& source, cons
         const char* lineBegin = data + pos;
         const size_t lineLen = end - pos;
         std::string_view line(lineBegin, lineLen);
-        // True when the query appears somewhere in the line directly
-        // followed by `c` (used for "name(" method detection).
-        auto followedBy = [&](char c) {
-            size_t p = 0;
-            while (true) {
-                size_t rel = tex::ciFind(line.substr(p), query);
-                if (rel == std::string_view::npos) return false;
-                size_t atEnd = p + rel + query.size();
-                if (atEnd < line.size() && line[atEnd] == c) return true;
-                p = p + rel + query.size();
-            }
-        };
-        bool match = false;
-        switch (mode_) {
-        case Mode::Text:
-            match = tex::ciFind(line, query) != std::string_view::npos;
-            break;
-        case Mode::Classes: {
-            std::string_view low = tex::asciiLower(line);  // keyword scan needs a lowered copy
-            bool decl = low.find("class ") != std::string_view::npos ||
-                        low.find("interface ") != std::string_view::npos ||
-                        low.find("enum ") != std::string_view::npos ||
-                        low.find("record ") != std::string_view::npos ||
-                        low.find("object ") != std::string_view::npos;
-            match = decl && tex::ciContainsWord(line, query);
-            break;
-        }
-        case Mode::Methods:
-            match = tex::ciContainsWord(line, query) && followedBy('(');
-            break;
-        case Mode::Fields: {
-            std::string_view low = tex::asciiLower(line);
-            bool decl = low.find("private ") != std::string_view::npos ||
-                        low.find("public ") != std::string_view::npos ||
-                        low.find("protected ") != std::string_view::npos ||
-                        low.find("val ") != std::string_view::npos || low.find("var ") != std::string_view::npos ||
-                        low.find("static ") != std::string_view::npos;
-            bool initializer = line.find('=') != std::string_view::npos || line.find(';') != std::string_view::npos;
-            match = decl && initializer && !followedBy('(') && tex::ciContainsWord(line, query);
-            break;
-        }
-        default:
-            break;
-        }
+        const bool match = lineMatches(mode_, line, query);
         if (match) {
             const char* b = lineBegin;
             const char* e = lineBegin + lineLen;

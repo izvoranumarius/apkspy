@@ -1,4 +1,5 @@
 #include "core/AxmlDecoder.hpp"
+#include "core/ResourceTable.hpp"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -155,7 +156,11 @@ float complexToFloat(uint32_t data) {
     return (float)(int32_t)(data & 0xFFFFFF00u) * kRadixMults[(data >> 4) & 0x3];
 }
 
-std::string formatTypedValue(uint8_t type, uint32_t data) {
+std::string formatTypedValue(uint8_t type, uint32_t data, const ResourceTable* resources) {
+    if (resources && (type == 0x01 || type == 0x07)) {
+        const std::string name = resources->reference(data);
+        if (!name.empty()) return name;
+    }
     char buf[64];
     switch (type) {
     case 0x00: return "";  // NULL
@@ -210,7 +215,8 @@ bool AxmlDecoder::looksLikeAxml(const std::vector<uint8_t>& bytes) {
 // -- Event walk ---------------------------------------------------------------
 // The chunk loop below is the single decoder: decode() prints through a
 // Visitor, structured consumers (ApkInfo, M4) override the callbacks.
-bool AxmlDecoder::decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visitor, std::string& error) {
+bool AxmlDecoder::decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visitor, std::string& error,
+                               const ResourceTable* resources) {
     if (!looksLikeAxml(bytes)) {
         error = "not a binary XML chunk";
         return false;
@@ -324,7 +330,7 @@ bool AxmlDecoder::decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visit
                 } else if (rawValue != kNoIndex && dataType == 0x03) {
                     value = poolString(pool, rawValue);
                 } else {
-                    value = formatTypedValue(dataType, dataType == 0x03 ? rawValue : typedData);
+                    value = formatTypedValue(dataType, dataType == 0x03 ? rawValue : typedData, resources);
                 }
                 attrs.push_back({std::move(name), std::move(value)});
             }
@@ -409,8 +415,9 @@ private:
 };
 }  // namespace
 
-bool AxmlDecoder::decode(const std::vector<uint8_t>& bytes, std::string& out, std::string& error) {
+bool AxmlDecoder::decode(const std::vector<uint8_t>& bytes, std::string& out, std::string& error,
+                         const ResourceTable* resources) {
     out += "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
     XmlPrintVisitor printer(out);
-    return decodeEvents(bytes, printer, error);
+    return decodeEvents(bytes, printer, error, resources);
 }

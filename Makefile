@@ -4,6 +4,7 @@ BUILD := build
 OBJ := $(BUILD)/obj
 TARGET := $(BUILD)/apkspy
 TEST := $(BUILD)/apkspy_core_test
+PLATFORM_TEST := $(BUILD)/apkspy_platform_test
 IMGUI_TEST := $(BUILD)/imgui_editor_test
 LIB := lib
 
@@ -38,8 +39,8 @@ C_SRC := $(wildcard $(LIB)/miniz/*.c) $(wildcard $(LIB)/libwebp/src/dec/*.c) \
 UI_SRC := src/app/Application.cpp src/app/Theme.cpp src/app/WindowFrame.cpp src/app/main.cpp \
           src/ui/EditorPanel.cpp src/ui/ExplorerPanel.cpp src/ui/OutputPanel.cpp src/ui/SearchPanel.cpp \
           src/ui/SettingsDialog.cpp src/ui/TitleBar.cpp src/ui/FileBrowser.cpp src/ui/ImageViewer.cpp \
-          src/ui/OverviewPanel.cpp \
-          src/ui/ShellIcons.cpp src/image/Texture.cpp src/image/ImageDecoder.cpp
+          src/ui/OverviewPanel.cpp src/ui/AnalysisPanel.cpp src/ui/AnalysisNative.cpp src/ui/BookmarksPanel.cpp src/ui/GraphView.cpp src/ui/ScriptPanel.cpp src/ui/DevicePanels.cpp src/ui/McpSettings.cpp src/ui/TrafficPanel.cpp \
+          src/ui/ShellIcons.cpp src/image/Texture.cpp src/image/ImageDecoder.cpp src/app/HeadlessMcp.cpp
 CORE_SRC := $(filter-out $(UI_SRC),$(APP_SRC))
 
 # miniz must be compiled as C (gcc), not C++.
@@ -66,8 +67,9 @@ $(OBJ)/%.o: %.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-test: $(TEST) $(IMGUI_TEST)
+test: $(TEST) $(PLATFORM_TEST) $(IMGUI_TEST)
 	./$(TEST)
+	./$(PLATFORM_TEST)
 	./$(IMGUI_TEST)
 
 $(BUILD)/test_%.o: lib/miniz/%.c
@@ -78,6 +80,14 @@ $(TEST): tests/apkspy_core_test.cpp $(CORE_SRC) $(MINIZ_OBJ) $(wildcard src/*.hp
 	@mkdir -p $(@D)
 	$(CXX) -std=c++17 -O1 -g -Wall -Wextra -Wno-unused-parameter $(INCLUDES) \
             tests/apkspy_core_test.cpp $(CORE_SRC) $(MINIZ_OBJ) \
+            -o $@ -lpthread
+
+# Portable suite (analysis engine, MCP server, device tooling); also built on
+# Windows by tests/ApkSpyTests.vcxproj.
+$(PLATFORM_TEST): tests/apkspy_platform_test.cpp $(CORE_SRC) $(MINIZ_OBJ) $(wildcard src/*/*.hpp)
+	@mkdir -p $(@D)
+	$(CXX) -std=c++17 -O1 -g -Wall -Wextra -Wno-unused-parameter $(INCLUDES) \
+            tests/apkspy_platform_test.cpp $(CORE_SRC) $(MINIZ_OBJ) \
             -o $@ -lpthread
 
 $(IMGUI_TEST): tests/imgui_editor_test.cpp $(LIB)/imgui/imgui.cpp $(LIB)/imgui/imgui_draw.cpp \

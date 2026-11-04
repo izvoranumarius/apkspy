@@ -31,8 +31,23 @@ public:
     static constexpr const char* kRestoreSession = "session.restore";
     static constexpr const char* kLineNumbers = "editor.lineNumbers";
     static constexpr const char* kLastProject = "project.last";
+    static constexpr const char* kAdbPath = "adb.path";
+    static constexpr const char* kPythonPath = "scripting.python";
+    static constexpr const char* kTrafficPort = "traffic.port";
+    static constexpr const char* kFullCjkFonts = "ui.fullCjkFonts";
+    static constexpr const char* kUiZoomPercent = "ui.zoomPercent";  // text / UI zoom, 100 = default
+    static constexpr const char* kMcpPort = "mcp.port";
+    static constexpr const char* kMcpToken = "mcp.token";
+    static constexpr const char* kMcpRequireToken = "mcp.requireToken";
+    static constexpr const char* kMcpAutoStart = "mcp.autoStart";
+    // Bumped when new panels join the default dock layout: an older saved
+    // layout is reset once so they appear docked instead of floating.
+    static constexpr const char* kLayoutVersion = "layout.version";
 
-    static std::string panelKey(const std::string& title) { return "panels." + title + ".visible"; }
+    static constexpr const char* kActiveWorkspace = "workspace.active";
+    static std::string workspacePanelKey(const std::string& workspace, const std::string& title) {
+        return "workspace." + workspace + "." + title + ".visible";
+    }
     // Recently opened projects (most recent first).
     static constexpr const char* kRecentCount = "project.recent.count";
     static std::string recentKey(int i) { return "project.recent." + std::to_string(i); }

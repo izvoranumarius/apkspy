@@ -2,6 +2,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include "app/Perspective.hpp"
 #include "app/WindowFrame.hpp"
 #include "ui/Panel.hpp"
 #include "ui/TitleBar.hpp"
@@ -10,9 +11,15 @@
 #include "core/Settings.hpp"
 #include "ui/SettingsDialog.hpp"
 #include "ui/FileBrowser.hpp"
+#include "debug/DeviceService.hpp"
+#include "mcp/McpHost.hpp"
 
 struct GLFWwindow;
 class EditorPanel;
+class AnalysisPanel;
+class DebuggerPanel;
+class McpSettings;
+class ScriptPanel;
 class Texture;
 
 class Application {
@@ -44,10 +51,16 @@ private:
     void drawMenuBar();
     void drawFileMenu();
     void drawViewMenu();
+    void drawNavigateMenu();
     void drawWindowBorder();
     void updateTitle();
     void drawDockHost();
-    void buildDefaultLayout(unsigned int dockId, ImVec2 size);
+    void buildLayout(const Perspective& p, unsigned int dockId, ImVec2 size);
+    void drawStatusBar();
+    void initPerspectives();
+    void switchPerspective(int index);
+    // Shows a panel, switching to a workspace that has it when this one does not.
+    bool showPanel(const std::string& title);
 
     // Project flows ---------------------------------------------------------
     // True when the project or its open documents contain unsaved changes.
@@ -79,11 +92,32 @@ private:
     GLFWwindow* window_ = nullptr;
     float contentScale_ = 1.f;
     float pendingContentScale_ = 0.f;  // set by the DPI callback, applied next frame
+    bool fontBuildDataPending_ = true;  // atlas CPU copies to free after the texture upload
+    bool fullCjkFonts_ = false;         // Settings::kFullCjkFonts (read before the first font build)
+    float uiZoom_ = 1.f;                // View > Zoom (Ctrl+= / Ctrl+- / Ctrl+0 / Ctrl+wheel)
+    float pendingZoom_ = 0.f;           // requested zoom, applied before the next frame
+    void setZoom(float zoom);
+    float zoomTarget() const { return pendingZoom_ > 0.f ? pendingZoom_ : uiZoom_; }
+    double zoomRequestedAt_ = 0.0;
+    int settleFrames_ = 0;  // frames still to draw after input, see run()
+    void rebuildFonts();
+    std::string pendingFocusPanel_;  // MCP show_panel, applied inside the next frame
     Workspace workspace_;
     Project project_;
     Settings settings_;
+    DeviceService devices_;         // adb devices, Logcat, monitor, JDWP debugger
+    std::unique_ptr<McpHost> mcp_;  // AI integration (declared after what it references)
     std::vector<std::unique_ptr<Panel>> panels_;
+    std::vector<Perspective> perspectives_;  // the workspaces of the switcher
+    int activePerspective_ = 0;
+    int pendingPerspective_ = -1;            // applied at the start of the next dock host
+    std::vector<std::string> pendingTabs_;   // windows to bring forward once a new layout is shown
+    int pendingTabsDelay_ = 0;               // frames until their dock tab bars exist
     EditorPanel* editor_ = nullptr;  // non-owning; document commands (Find, Go to Line) go here
+    AnalysisPanel* analysisPanel_ = nullptr;  // non-owning
+    DebuggerPanel* debuggerPanel_ = nullptr;  // non-owning; global debugger shortcuts
+    std::unique_ptr<McpSettings> mcpSettings_;  // the AI page of the Settings dialog
+    ScriptPanel* scriptPanel_ = nullptr;      // non-owning
     std::unique_ptr<WindowFrame> windowFrame_;
     std::unique_ptr<TitleBar> titleBar_;
     std::unique_ptr<Texture> appIcon_;  // favicon frame drawn in the title bar
@@ -94,7 +128,8 @@ private:
     std::string windowTitle_;
     bool inFrame_ = false;
     bool settingsRequested_ = false;
-    bool resetLayout_ = false;
+    bool resetLayout_ = false;      // the active workspace
+    bool resetAllLayouts_ = false;  // every workspace (new layout version)
     bool saveRequested_ = false;
     bool addApkRequested_ = false;
     PendingAction pendingAction_ = PendingAction::None;
@@ -104,5 +139,6 @@ private:
     // Dirty-check cache (see projectHasUnsavedChanges).
     uint64_t dirtyCheckVersion_ = 0;
     uint64_t dirtyCheckEpoch_ = 0;
+    uint64_t savedAnnotations_ = 1;  // Annotations::version() of the saved state
     bool dirtyCheckResult_ = false;
 };

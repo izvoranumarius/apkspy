@@ -63,23 +63,49 @@ const ImWchar* baseRanges(ImGuiIO& io) {
     return mergedRanges(std::move(r));
 }
 
-// CJK coverage (symbols, kana, common han, fullwidth forms) used as a merged
-// fallback - Segoe UI, Consolas and DejaVu ship none of these.
-const ImWchar* cjkRanges() {
-    static const ImWchar ranges[] = {
+// CJK coverage used as a merged fallback - Segoe UI, Consolas and DejaVu ship
+// none of these. The full unified-ideograph block is ~21k glyphs per font
+// (two fonts -> an atlas of several hundred MB once the CPU, RGBA and driver
+// copies are counted), so by default only the common Chinese (2500) and
+// Japanese (2999 kanji) subsets plus kana / punctuation / fullwidth forms are
+// baked; `full` restores the whole block.
+const ImWchar* cjkRanges(ImGuiIO& io, bool full) {
+    static const ImWchar fullRanges[] = {
         0x2018, 0x201F,  // quotes used by CJK text
         0x3000, 0x30FF,  // CJK symbols + kana
         0x31F0, 0x31FF,
-        0x4E00, 0x9FFF,  // CJK unified ideographs (includes the common 2500)
+        0x4E00, 0x9FFF,  // CJK unified ideographs
         0xFF00, 0xFFEF,  // fullwidth forms
         0,
     };
-    return ranges;
+    if (full) return fullRanges;
+    static std::vector<ImWchar> common;
+    if (common.empty()) {
+        std::vector<ImWchar> r;
+        appendRanges(r, io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+        appendRanges(r, io.Fonts->GetGlyphRangesJapanese());
+        r.push_back(0x2018), r.push_back(0x201F);
+        // Merge into sorted, non-overlapping intervals (own storage: the
+        // static buffer of mergedRanges() is used by the base ranges).
+        std::vector<std::pair<ImWchar, ImWchar>> iv;
+        for (size_t i = 0; i + 1 < r.size(); i += 2) iv.emplace_back(r[i], r[i + 1]);
+        std::sort(iv.begin(), iv.end());
+        for (auto [lo, hi] : iv) {
+            if (!common.empty() && lo <= (ImWchar)(common.back() + 1)) {
+                if (hi > common.back()) common.back() = hi;
+            } else {
+                common.push_back(lo);
+                common.push_back(hi);
+            }
+        }
+        common.push_back(0);
+    }
+    return common.data();
 }
 
 }  // namespace
 
-void Theme::loadFonts(ImGuiIO& io, float scale) {
+void Theme::loadFonts(ImGuiIO& io, float scale, bool fullCjk) {
     scale = std::clamp(scale, 0.75f, 3.0f);
     const float uiSize = std::round(16.f * scale);
     const float monoSize = std::round(15.f * scale);
@@ -109,7 +135,7 @@ void Theme::loadFonts(ImGuiIO& io, float scale) {
     if (ui && cjk) {
         ImFontConfig merge;
         merge.MergeMode = true;
-        io.Fonts->AddFontFromFileTTF(cjk, uiSize, &merge, cjkRanges());
+        io.Fonts->AddFontFromFileTTF(cjk, uiSize, &merge, cjkRanges(io, fullCjk));
     }
 
     mono_ = tryLoad(io, {"C:/Windows/Fonts/consola.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
@@ -119,9 +145,16 @@ void Theme::loadFonts(ImGuiIO& io, float scale) {
     if (mono_ && cjk) {
         ImFontConfig merge;
         merge.MergeMode = true;
-        io.Fonts->AddFontFromFileTTF(cjk, monoSize, &merge, cjkRanges());
+        io.Fonts->AddFontFromFileTTF(cjk, monoSize, &merge, cjkRanges(io, fullCjk));
     }
     io.Fonts->Build();
+}
+
+void Theme::releaseFontBuildData(ImGuiIO& io) {
+    // Safe once the texture exists: rendering only needs the glyph tables
+    // and the GPU texture. A DPI change rebuilds everything from scratch.
+    io.Fonts->ClearTexData();
+    io.Fonts->ClearInputData();
 }
 
 ImFont* Theme::monoFont() { return mono_ ? mono_ : ImGui::GetFont(); }

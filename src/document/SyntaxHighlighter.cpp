@@ -1,6 +1,7 @@
 #include "document/SyntaxHighlighter.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <unordered_set>
 
 namespace {
@@ -16,15 +17,15 @@ const ImU32 kDirective = IM_COL32(197, 134, 192, 255);
 
 enum KeywordSet { KwJava, KwKotlin, KwGroovy, KwJs };
 
-const std::unordered_set<std::string>& keywordSet(int set) {
-    static const std::unordered_set<std::string> java = {
+const std::unordered_set<std::string_view>& keywordSet(int set) {
+    static const std::unordered_set<std::string_view> java = {
         "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const",
         "continue", "default", "do", "double", "else", "enum", "extends", "final", "finally", "float",
         "for", "goto", "if", "implements", "import", "instanceof", "int", "interface", "long", "native",
         "new", "package", "private", "protected", "public", "return", "short", "static", "strictfp",
         "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try", "void",
         "volatile", "while", "true", "false", "null", "var", "record", "sealed", "permits", "yield"};
-    static const std::unordered_set<std::string> kotlin = {
+    static const std::unordered_set<std::string_view> kotlin = {
         "package", "import", "class", "object", "interface", "fun", "val", "var", "if", "else", "when",
         "for", "while", "do", "return", "try", "catch", "finally", "throw", "throws", "null", "true",
         "false", "this", "super", "is", "in", "as", "open", "override", "abstract", "final", "sealed",
@@ -32,13 +33,13 @@ const std::unordered_set<std::string>& keywordSet(int set) {
         "protected", "inline", "reified", "crossinline", "noinline", "operator", "infix", "typealias",
         "init", "constructor", "field", "get", "set", "where", "out", "vararg", "dynamic", "const",
         "external", "infix", "tailrec", "expect", "actual"};
-    static const std::unordered_set<std::string> groovy = {
+    static const std::unordered_set<std::string_view> groovy = {
         "def", "package", "import", "class", "interface", "trait", "enum", "if", "else", "for", "while",
         "switch", "case", "break", "continue", "return", "try", "catch", "finally", "throw", "throws",
         "new", "this", "super", "null", "true", "false", "extends", "implements", "static", "final",
         "abstract", "public", "private", "protected", "synchronized", "volatile", "transient", "native",
         "assert", "in", "as", "it", "use", "with", "closure"};
-    static const std::unordered_set<std::string> js = {
+    static const std::unordered_set<std::string_view> js = {
         "function", "var", "let", "const", "class", "extends", "if", "else", "return", "new", "this",
         "typeof", "instanceof", "null", "undefined", "true", "false", "async", "await", "import", "export",
         "default", "try", "catch", "finally", "throw", "for", "while", "do", "switch", "case", "break",
@@ -63,7 +64,7 @@ bool isIdentStart(unsigned char c) { return std::isalpha(c) || c == '_' || c == 
 bool isIdentPart(unsigned char c) { return std::isalnum(c) || c == '_' || c == '$'; }
 }
 
-void SyntaxHighlighter::tokenize(const std::string& line, Language lang, bool& inBlock, std::vector<Span>& out) {
+void SyntaxHighlighter::tokenize(std::string_view line, Language lang, bool& inBlock, std::vector<Span>& out) {
     out.clear();
     switch (lang) {
     case Language::Java: tokenizeCLike(line, inBlock, out, KwJava); break;
@@ -75,15 +76,16 @@ void SyntaxHighlighter::tokenize(const std::string& line, Language lang, bool& i
     case Language::Smali: tokenizeSmali(line, out); break;
     case Language::Yaml: tokenizeYaml(line, out); break;
     case Language::Css: tokenizeCss(line, inBlock, out); break;
+    case Language::Python: tokenizePython(line, inBlock, out); break;
     default: push(out, 0, line.size(), kDefault); break;
     }
 }
 
 // Shared tokenizer for Java, Kotlin, Groovy and JavaScript.
-void SyntaxHighlighter::tokenizeCLike(const std::string& line, bool& inBlock, std::vector<Span>& out, int set) {
+void SyntaxHighlighter::tokenizeCLike(std::string_view line, bool& inBlock, std::vector<Span>& out, int set) {
     size_t i = 0;
     const size_t n = line.size();
-    const std::unordered_set<std::string>& words = keywordSet(set);
+    const std::unordered_set<std::string_view>& words = keywordSet(set);
     while (i < n) {
         if (inBlock) {
             size_t e = line.find("*/", i);
@@ -129,7 +131,7 @@ void SyntaxHighlighter::tokenizeCLike(const std::string& line, bool& inBlock, st
         if (isIdentStart(c)) {
             size_t j = i;
             while (j < n && isIdentPart((unsigned char)line[j])) ++j;
-            std::string word = line.substr(i, j - i);
+            std::string_view word = line.substr(i, j - i);
             ImU32 col = kDefault;
             if (words.count(word)) col = kKeyword;
             else if (std::isupper(c)) col = kType;
@@ -142,7 +144,103 @@ void SyntaxHighlighter::tokenizeCLike(const std::string& line, bool& inBlock, st
     }
 }
 
-void SyntaxHighlighter::tokenizeJson(const std::string& line, std::vector<Span>& out) {
+// inBlock means "inside a triple-quoted string". It cannot say which quote
+// opened the string, so either closing delimiter ends it.
+void SyntaxHighlighter::tokenizePython(std::string_view line, bool& inBlock, std::vector<Span>& out) {
+    static const std::unordered_set<std::string_view> keywords = {
+        "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
+        "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in",
+        "is", "lambda", "match", "case", "nonlocal", "not", "or", "pass", "raise", "return", "try",
+        "while", "with", "yield"};
+    static const std::unordered_set<std::string_view> builtins = {
+        "abs", "all", "any", "bool", "bytes", "chr", "dict", "dir", "enumerate", "filter", "float",
+        "format", "getattr", "hasattr", "hex", "int", "isinstance", "iter", "len", "list", "map", "max",
+        "min", "next", "open", "ord", "print", "range", "repr", "reversed", "set", "setattr", "sorted",
+        "str", "sum", "super", "tuple", "type", "zip", "self", "cls"};
+    const auto closeTriple = [&](size_t from) {
+        const size_t a = line.find("\"\"\"", from), b = line.find("'''", from);
+        return std::min(a, b);
+    };
+    size_t i = 0;
+    const size_t n = line.size();
+    bool nameFollows = false;  // the word after def / class
+    while (i < n) {
+        if (inBlock) {
+            const size_t e = closeTriple(i);
+            if (e == std::string_view::npos) {
+                push(out, i, n, kString);
+                return;
+            }
+            push(out, i, e + 3, kString);
+            i = e + 3;
+            inBlock = false;
+            continue;
+        }
+        const unsigned char c = (unsigned char)line[i];
+        if (c == '#') {
+            push(out, i, n, kComment);
+            return;
+        }
+        if (c == '@') {  // decorator
+            size_t j = i + 1;
+            while (j < n && (isIdentPart((unsigned char)line[j]) || line[j] == '.')) ++j;
+            push(out, i, j, j > i + 1 ? kDirective : kPunct);
+            i = j;
+            continue;
+        }
+        // A string, with any r / b / f / u prefix counted as part of it.
+        size_t quote = i;
+        while (quote < n && quote - i < 2 && std::strchr("rRbBfFuU", line[quote]) != nullptr && line[quote] != 0) ++quote;
+        if (quote < n && (line[quote] == '"' || line[quote] == '\'')) {
+            const char q = line[quote];
+            if (line.substr(quote, 3) == std::string_view(q == '"' ? "\"\"\"" : "'''")) {
+                const size_t e = closeTriple(quote + 3);
+                if (e == std::string_view::npos) {
+                    push(out, i, n, kString);
+                    inBlock = true;
+                    return;
+                }
+                push(out, i, e + 3, kString);
+                i = e + 3;
+                continue;
+            }
+            size_t j = quote + 1;
+            while (j < n && line[j] != q) {
+                if (line[j] == '\\') ++j;
+                ++j;
+            }
+            j = std::min(j + 1, n);
+            push(out, i, j, kString);
+            i = j;
+            continue;
+        }
+        if (std::isdigit(c)) {
+            size_t j = i;
+            while (j < n && (std::isalnum((unsigned char)line[j]) || line[j] == '.' || line[j] == '_')) ++j;
+            push(out, i, j, kNumber);
+            i = j;
+            continue;
+        }
+        if (isIdentStart(c)) {
+            size_t j = i;
+            while (j < n && isIdentPart((unsigned char)line[j])) ++j;
+            const std::string_view word = line.substr(i, j - i);
+            ImU32 color = kDefault;
+            if (nameFollows) color = kType;
+            else if (keywords.count(word)) color = kKeyword;
+            else if (builtins.count(word)) color = kAttr;
+            else if (std::isupper(c)) color = kType;
+            nameFollows = word == "def" || word == "class";
+            push(out, i, j, color);
+            i = j;
+            continue;
+        }
+        push(out, i, i + 1, std::isspace(c) ? kDefault : kPunct);
+        ++i;
+    }
+}
+
+void SyntaxHighlighter::tokenizeJson(std::string_view line, std::vector<Span>& out) {
     size_t i = 0;
     const size_t n = line.size();
     while (i < n) {
@@ -177,7 +275,7 @@ void SyntaxHighlighter::tokenizeJson(const std::string& line, std::vector<Span>&
         if (isIdentStart(c)) {
             size_t j = i;
             while (j < n && isIdentPart((unsigned char)line[j])) ++j;
-            std::string word = line.substr(i, j - i);
+            std::string_view word = line.substr(i, j - i);
             push(out, i, j, word == "true" || word == "false" || word == "null" ? kKeyword : kDefault);
             i = j;
             continue;
@@ -187,7 +285,7 @@ void SyntaxHighlighter::tokenizeJson(const std::string& line, std::vector<Span>&
     }
 }
 
-void SyntaxHighlighter::tokenizeSmali(const std::string& line, std::vector<Span>& out) {
+void SyntaxHighlighter::tokenizeSmali(std::string_view line, std::vector<Span>& out) {
     size_t i = 0;
     const size_t n = line.size();
     while (i < n) {
@@ -257,7 +355,7 @@ void SyntaxHighlighter::tokenizeSmali(const std::string& line, std::vector<Span>
     }
 }
 
-void SyntaxHighlighter::tokenizeYaml(const std::string& line, std::vector<Span>& out) {
+void SyntaxHighlighter::tokenizeYaml(std::string_view line, std::vector<Span>& out) {
     size_t i = 0;
     const size_t n = line.size();
     while (i < n && (line[i] == ' ' || line[i] == '-')) {
@@ -285,7 +383,7 @@ void SyntaxHighlighter::tokenizeYaml(const std::string& line, std::vector<Span>&
     if (i < n) push(out, i, n, kDefault);
 }
 
-void SyntaxHighlighter::tokenizeCss(const std::string& line, bool& inBlock, std::vector<Span>& out) {
+void SyntaxHighlighter::tokenizeCss(std::string_view line, bool& inBlock, std::vector<Span>& out) {
     size_t i = 0;
     const size_t n = line.size();
     while (i < n) {
@@ -342,7 +440,7 @@ void SyntaxHighlighter::tokenizeCss(const std::string& line, bool& inBlock, std:
     }
 }
 
-void SyntaxHighlighter::tokenizeXml(const std::string& line, bool& inBlock, std::vector<Span>& out) {
+void SyntaxHighlighter::tokenizeXml(std::string_view line, bool& inBlock, std::vector<Span>& out) {
     size_t i = 0;
     const size_t n = line.size();
     while (i < n) {

@@ -7,6 +7,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include "core/ContentSource.hpp"
 
@@ -62,14 +63,24 @@ public:
     std::string resolve(const std::string& group, const std::string& identifier,
                         const std::string& hintDir = {}) const;
 
+    // All fully qualified class names whose simple or qualified name contains
+    // `needle` (case-insensitive), capped at `limit`. Used by the MCP tools.
+    std::vector<std::pair<std::string, std::string>> findClasses(const std::string& group,
+                                                                  const std::string& needle,
+                                                                  size_t limit) const;
+
 private:
     // Immutable name -> path mapping produced by one build pass.
     struct Table {
         uint64_t epoch = 0;
-        // Short name (Foo, Bar from Foo$Bar.java) -> candidate file paths.
-        std::unordered_map<std::string, std::vector<std::string>> byName;
-        // Fully qualified name (com.example.Foo) -> file path.
-        std::unordered_map<std::string, std::string> byQualifiedName;
+        // Every indexed file path, stored exactly once; the maps refer to it
+        // by index (paths are long absolute strings - storing a copy per
+        // declared name multiplied the index size for large APKs).
+        std::vector<std::string> paths;
+        // Short name (Foo, Bar from Foo$Bar.java) -> candidate path indices.
+        std::unordered_map<std::string, std::vector<uint32_t>> byName;
+        // Fully qualified name (com.example.Foo) -> path index.
+        std::unordered_map<std::string, uint32_t> byQualifiedName;
     };
 
     struct Request {
