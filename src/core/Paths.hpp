@@ -13,9 +13,11 @@
 namespace pathutil {
 
 // UTF-8 -> fs::path (native-wide on Windows, byte string elsewhere).
+// Since C++20 UTF-8 text is typed char8_t; the char <-> char8_t copies are
+// byte-for-byte reinterpretations, not conversions.
 inline std::filesystem::path fromUtf8(const std::string& s) {
 #ifdef _WIN32
-    return std::filesystem::u8path(s);
+    return std::filesystem::path(std::u8string(s.begin(), s.end()));
 #else
     return std::filesystem::path(s);
 #endif
@@ -24,7 +26,8 @@ inline std::filesystem::path fromUtf8(const std::string& s) {
 // fs::path -> UTF-8 std::string.
 inline std::string toUtf8(const std::filesystem::path& p) {
 #ifdef _WIN32
-    return p.u8string();
+    const std::u8string u8 = p.u8string();
+    return std::string(u8.begin(), u8.end());
 #else
     return p.string();
 #endif

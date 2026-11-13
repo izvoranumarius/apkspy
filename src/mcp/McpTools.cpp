@@ -221,14 +221,15 @@ Json xrefJson(const ApkAnalysis& a, const ApkAnalysis::XrefHit& h) {
                         {"dex", a.dexes()[h.from.dex]->name()}});
     // Source line when debug info is present.
     const DexFile& dex = *a.dexes()[h.from.dex];
-    for (const auto& m : a.findMethodDefs(dex.typeDescriptor(dex.methodClass(h.from.method)), dex.methodName(h.from.method),
-                                          dex.protoDescriptor(dex.methodProto(h.from.method)))) {
+    const auto defs = a.findMethodDefs(dex.typeDescriptor(dex.methodClass(h.from.method)), dex.methodName(h.from.method),
+                                       dex.protoDescriptor(dex.methodProto(h.from.method)));
+    if (!defs.empty()) {
+        const auto& m = defs.front();
         DexFile::CodeItem code;
         if (m.method.codeOff && dex.codeItem(m.method.codeOff, code)) {
             const int line = dex.lineForPc(code, h.from.pc);
             if (line >= 0) j.set("line", line);
         }
-        break;
     }
     return j;
 }

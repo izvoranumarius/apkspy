@@ -139,7 +139,6 @@ Document::Document(std::string title, const TreeNode* node, std::vector<uint8_t>
     else if (kind == NodeKind::Groovy) language_ = Language::Groovy;
     else if (kind == NodeKind::Yaml) language_ = Language::Yaml;
     else if (kind == NodeKind::Web) {
-        std::string ext = tex::asciiLower(node_->name().substr(node_->name().find_last_of('.') + 1));
         if (ext == "css") language_ = Language::Css;
         else if (ext == "js" || ext == "mjs") language_ = Language::JavaScript;
         else language_ = Language::Xml;  // html/htm

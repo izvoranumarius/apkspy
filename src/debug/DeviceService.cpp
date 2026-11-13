@@ -354,7 +354,7 @@ void DebugSession::loadLocals() {
             if (v.name == "this") continue;
             if (frame.location.index < v.codeIndex || frame.location.index >= v.codeIndex + v.length) continue;
             const uint8_t tag = v.signature.empty() ? 'I' : (uint8_t)v.signature[0];
-            slots.emplace_back(v.slot, tag == 'L' && v.signature == "Ljava/lang/String;" ? (uint8_t)'L' : tag);
+            slots.emplace_back(v.slot, tag);
             live.push_back(&v);
         }
         std::vector<JdwpClient::Value> values;

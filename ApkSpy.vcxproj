@@ -39,7 +39,7 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpp23</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -60,6 +60,11 @@
       <Optimization>Disabled</Optimization>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
     </ClCompile>
+    <Link>
+      <!-- The prebuilt glfw3.lib is built against the release CRT (MSVCRT); the
+           Debug build links the debug CRT, so drop the release one (LNK4098). -->
+      <IgnoreSpecificDefaultLibraries>msvcrt.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+    </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
     <ClCompile>
@@ -81,6 +86,7 @@
     <ClInclude Include="src\ui\VideoPlayer.hpp" />
     <ClInclude Include="src\ui\HexView.hpp" />
     <ClInclude Include="src\ui\AudioPlayer.hpp" />
+    <ClInclude Include="src\ui\AudioConfig.hpp" />
     <ClInclude Include="src\ui\MediaViews.hpp" />
     <ClInclude Include="src\core\ScriptRunner.hpp" />
     <ClInclude Include="src\core\VtScreen.hpp" />
@@ -167,6 +173,7 @@
     <ClCompile Include="src\ui\VideoPlayer.cpp" />
     <ClCompile Include="src\ui\HexView.cpp" />
     <ClCompile Include="src\ui\AudioPlayer.cpp" />
+    <ClCompile Include="src\ui\AudioCodecs.cpp" />
     <ClCompile Include="src\ui\MediaViews.cpp" />
     <ClCompile Include="src\core\ScriptRunner.cpp" />
     <ClCompile Include="src\core\VtScreen.cpp" />
@@ -230,64 +237,180 @@
     <ClCompile Include="src\ui\SearchPanel.cpp" />
     <ClCompile Include="src\ui\SettingsDialog.cpp" />
     <ClCompile Include="src\ui\TitleBar.cpp" />
-    <ClCompile Include="lib\imgui\imgui.cpp" />
-    <ClCompile Include="lib\imgui\imgui_draw.cpp" />
-    <ClCompile Include="lib\imgui\imgui_tables.cpp" />
-    <ClCompile Include="lib\imgui\imgui_widgets.cpp" />
-    <ClCompile Include="lib\imgui\backends\imgui_impl_glfw.cpp" />
-    <ClCompile Include="lib\imgui\backends\imgui_impl_opengl3.cpp" />
-    <ClCompile Include="lib\miniz\miniz.c" />
-    <ClCompile Include="lib\miniz\miniz_tdef.c" />
-    <ClCompile Include="lib\miniz\miniz_tinfl.c" />
-    <ClCompile Include="lib\miniz\miniz_zip.c" />
-    <ClCompile Include="lib\libwebp\src\dec\alpha_dec.c" />
-    <ClCompile Include="lib\libwebp\src\dec\buffer_dec.c" />
-    <ClCompile Include="lib\libwebp\src\dec\frame_dec.c" />
-    <ClCompile Include="lib\libwebp\src\dec\idec_dec.c" />
-    <ClCompile Include="lib\libwebp\src\dec\io_dec.c" />
-    <ClCompile Include="lib\libwebp\src\dec\quant_dec.c" />
-    <ClCompile Include="lib\libwebp\src\dec\tree_dec.c" />
-    <ClCompile Include="lib\libwebp\src\dec\vp8_dec.c" />
-    <ClCompile Include="lib\libwebp\src\dec\vp8l_dec.c" />
-    <ClCompile Include="lib\libwebp\src\dec\webp_dec.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing_neon.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing_sse2.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing_sse41.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\cpu.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\dec.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\dec_clip_tables.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\dec_neon.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\dec_sse2.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\dec_sse41.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\filters.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\filters_neon.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\filters_sse2.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\lossless.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\lossless_neon.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\lossless_sse2.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\lossless_sse41.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\rescaler.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\rescaler_neon.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\rescaler_sse2.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\upsampling.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\upsampling_neon.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\upsampling_sse2.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\upsampling_sse41.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\yuv.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\yuv_neon.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\yuv_sse2.c" />
-    <ClCompile Include="lib\libwebp\src\dsp\yuv_sse41.c" />
-    <ClCompile Include="lib\libwebp\src\utils\bit_reader_utils.c" />
-    <ClCompile Include="lib\libwebp\src\utils\color_cache_utils.c" />
-    <ClCompile Include="lib\libwebp\src\utils\filters_utils.c" />
-    <ClCompile Include="lib\libwebp\src\utils\huffman_utils.c" />
-    <ClCompile Include="lib\libwebp\src\utils\palette.c" />
-    <ClCompile Include="lib\libwebp\src\utils\quant_levels_dec_utils.c" />
-    <ClCompile Include="lib\libwebp\src\utils\random_utils.c" />
-    <ClCompile Include="lib\libwebp\src\utils\rescaler_utils.c" />
-    <ClCompile Include="lib\libwebp\src\utils\thread_utils.c" />
-    <ClCompile Include="lib\libwebp\src\utils\utils.c" />
+    <ClCompile Include="lib\imgui\imgui.cpp">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\imgui\imgui_draw.cpp">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\imgui\imgui_tables.cpp">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\imgui\imgui_widgets.cpp">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\imgui\backends\imgui_impl_glfw.cpp">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\imgui\backends\imgui_impl_opengl3.cpp">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\miniz\miniz.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\miniz\miniz_tdef.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\miniz\miniz_tinfl.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\miniz\miniz_zip.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\alpha_dec.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\buffer_dec.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\frame_dec.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\idec_dec.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\io_dec.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\quant_dec.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\tree_dec.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\vp8_dec.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\vp8l_dec.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dec\webp_dec.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing_neon.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing_sse2.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\alpha_processing_sse41.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\cpu.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\dec.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\dec_clip_tables.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\dec_neon.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\dec_sse2.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\dec_sse41.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\filters.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\filters_neon.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\filters_sse2.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\lossless.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\lossless_neon.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\lossless_sse2.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\lossless_sse41.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\rescaler.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\rescaler_neon.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\rescaler_sse2.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\upsampling.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\upsampling_neon.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\upsampling_sse2.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\upsampling_sse41.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\yuv.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\yuv_neon.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\yuv_sse2.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\dsp\yuv_sse41.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\bit_reader_utils.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\color_cache_utils.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\filters_utils.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\huffman_utils.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\palette.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\quant_levels_dec_utils.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\random_utils.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\rescaler_utils.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\thread_utils.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="lib\libwebp\src\utils\utils.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

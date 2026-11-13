@@ -18,14 +18,17 @@ bool VideoPlayer::anyPlaying() { return sPlaying.load() > 0; }
 #ifdef _WIN32
 
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #include <shlwapi.h>
-#include "miniaudio/miniaudio.h"  // the implementation lives in AudioPlayer.cpp
+#include "ui/AudioConfig.hpp"
+#include "miniaudio/miniaudio.h"  // the implementation lives in AudioCodecs.cpp
 
 #pragma comment(lib, "mfplat.lib")
 #pragma comment(lib, "mfreadwrite.lib")

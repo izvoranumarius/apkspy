@@ -344,8 +344,8 @@ void AnalysisPanel::flattenTree(const ApkAnalysis& a) {
     // Packages with a single sub-package and no classes collapse into one row.
     std::vector<std::pair<uint32_t, uint8_t>> stack;
     const auto& root = packages_[0];
-    for (auto it = root.classes.rbegin(); it != root.classes.rend(); ++it) stack.push_back({*it | 0x80000000u, 0});
-    for (auto it = root.packages.rbegin(); it != root.packages.rend(); ++it) stack.push_back({*it, 0});
+    for (auto it = root.classes.rbegin(); it != root.classes.rend(); ++it) stack.push_back({*it | 0x80000000u, uint8_t{0}});
+    for (auto it = root.packages.rbegin(); it != root.packages.rend(); ++it) stack.push_back({*it, uint8_t{0}});
     while (!stack.empty()) {
         const auto [item, depth] = stack.back();
         stack.pop_back();
@@ -590,9 +590,10 @@ void AnalysisPanel::openMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDe
 
 void AnalysisPanel::openCodeRef(const ApkAnalysis& a, const ApkAnalysis::CodeRef& r, const std::string& group) {
     const DexFile& dex = *a.dexes()[r.dex];
-    for (const auto& m : a.findMethodDefs(dex.typeDescriptor(dex.methodClass(r.method)), dex.methodName(r.method),
-                                          dex.protoDescriptor(dex.methodProto(r.method)))) {
-        openMethod(a, m, group, r.pc);
+    const auto defs = a.findMethodDefs(dex.typeDescriptor(dex.methodClass(r.method)), dex.methodName(r.method),
+                                       dex.protoDescriptor(dex.methodProto(r.method)));
+    if (!defs.empty()) {
+        openMethod(a, defs.front(), group, r.pc);
         return;
     }
     workspace_.log("Method has no bytecode in this APK: " + a.methodSignature(r), "analysis");
@@ -886,7 +887,7 @@ void AnalysisPanel::showCallGraph(const ApkAnalysis& a, const ApkAnalysis::Metho
     functionMode_ = 2;
 }
 
-void AnalysisPanel::drawGraph(const ApkAnalysis& a, Root& apk) {
+void AnalysisPanel::drawGraph(const ApkAnalysis& a, Root& /*apk*/) {
     if (!graphValid_) {
         ImGui::TextDisabled("Press CFG or Calls on a method (Classes tab) to show its graph.");
         return;

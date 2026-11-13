@@ -3,7 +3,9 @@
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 
 // ConPTY entry points are looked up at run time so the app still starts on

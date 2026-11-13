@@ -226,11 +226,11 @@ GraphView::Result GraphView::draw(const char* id, ImFont* font) {
         for (const auto& n : nodes_)
             dl->AddRectFilled(ImVec2(mapMin.x + n.x * mapScale, mapMin.y + n.y * mapScale),
                               ImVec2(mapMin.x + (n.x + n.w) * mapScale, mapMin.y + (n.y + n.h) * mapScale), IM_COL32(110, 110, 130, 255));
-        const ImVec2 mapMax(mapMin.x + mapSize.x, mapMin.y + mapSize.y);
-        const ImVec2 viewLo(std::clamp(mapMin.x + pan_.x * mapScale, mapMin.x, mapMax.x), std::clamp(mapMin.y + pan_.y * mapScale, mapMin.y, mapMax.y));
-        const ImVec2 viewHi(std::clamp(mapMin.x + (pan_.x + canvas.x / zoom_) * mapScale, mapMin.x, mapMax.x),
-                            std::clamp(mapMin.y + (pan_.y + canvas.y / zoom_) * mapScale, mapMin.y, mapMax.y));
-        dl->AddRect(mapMin, mapMax, IM_COL32(80, 80, 95, 255));
+        const ImVec2 mapEnd(mapMin.x + mapSize.x, mapMin.y + mapSize.y);
+        const ImVec2 viewLo(std::clamp(mapMin.x + pan_.x * mapScale, mapMin.x, mapEnd.x), std::clamp(mapMin.y + pan_.y * mapScale, mapMin.y, mapEnd.y));
+        const ImVec2 viewHi(std::clamp(mapMin.x + (pan_.x + canvas.x / zoom_) * mapScale, mapMin.x, mapEnd.x),
+                            std::clamp(mapMin.y + (pan_.y + canvas.y / zoom_) * mapScale, mapMin.y, mapEnd.y));
+        dl->AddRect(mapMin, mapEnd, IM_COL32(80, 80, 95, 255));
         dl->AddRect(viewLo, viewHi, IM_COL32(0, 150, 240, 255));
     }
     dl->PopClipRect();

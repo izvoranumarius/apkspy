@@ -5,19 +5,8 @@
 #include <mutex>
 #include <thread>
 
-// miniaudio decodes WAV, FLAC and MP3 itself; stb_vorbis adds Ogg Vorbis when
-// it is included around the implementation like this.
-#define STB_VORBIS_HEADER_ONLY
-#include "miniaudio/stb_vorbis.c"
-#define MA_NO_ENCODING
-#define MA_NO_GENERATION
-#define MA_NO_RESOURCE_MANAGER
-#define MA_NO_NODE_GRAPH
-#define MA_NO_ENGINE
-#define MINIAUDIO_IMPLEMENTATION
-#include "miniaudio/miniaudio.h"
-#undef STB_VORBIS_HEADER_ONLY
-#include "miniaudio/stb_vorbis.c"
+#include "ui/AudioConfig.hpp"
+#include "miniaudio/miniaudio.h"  // the implementation lives in AudioCodecs.cpp
 
 namespace {
 constexpr int kBuckets = 1200;  // waveform resolution

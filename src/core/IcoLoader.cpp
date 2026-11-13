@@ -175,7 +175,7 @@ bool decodePngFrame(const uint8_t* d, size_t n, ico::Image& out, std::string& er
         return false;
     }
     std::vector<uint8_t> raw(rawSize);
-    mz_ulong rawLen = rawSize;
+    mz_ulong rawLen = (mz_ulong)rawSize;
     if (mz_uncompress(raw.data(), &rawLen, idat.data(), (mz_ulong)idat.size()) != MZ_OK || rawLen != rawSize) {
         err = "PNG frame data is corrupt";
         return false;

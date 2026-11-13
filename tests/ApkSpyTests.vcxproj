@@ -39,7 +39,7 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpp23</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <AdditionalIncludeDirectories>$(ProjectDir)..\src;$(ProjectDir)..\include;$(ProjectDir)..\include\imgui;$(ProjectDir)..\include\miniz;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
