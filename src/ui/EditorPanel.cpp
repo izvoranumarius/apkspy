@@ -880,13 +880,7 @@ void EditorPanel::sweepFindStates() {
     for (auto it = audio_.begin(); it != audio_.end();) it = alive(it->first) ? std::next(it) : audio_.erase(it);
     for (auto it = fonts_.begin(); it != fonts_.end();) it = alive(it->first) ? std::next(it) : fonts_.erase(it);
     for (auto it = videos_.begin(); it != videos_.end();) it = alive(it->first) ? std::next(it) : videos_.erase(it);
-    if (find_.empty()) return;
-    for (auto it = find_.begin(); it != find_.end();) {
-        const bool alive = std::any_of(docs.begin(), docs.end(),
-                                       [&](const std::unique_ptr<Document>& d) { return d.get() == it->first; });
-        if (alive) ++it;
-        else it = find_.erase(it);
-    }
+    for (auto it = find_.begin(); it != find_.end();) it = alive(it->first) ? std::next(it) : find_.erase(it);
 }
 
 float EditorPanel::columnToX(std::string_view line, int col) const {

@@ -6,8 +6,8 @@
 #include <unordered_map>
 #include "core/Paths.hpp"
 
-#ifdef _WIN32
-extern "C" std::FILE* _wfopen(const wchar_t* path, const wchar_t* mode);  // <cstdio> on MSVC
+#if defined(_WIN32) && !defined(_MSC_VER)
+extern "C" std::FILE* _wfopen(const wchar_t* path, const wchar_t* mode);  // MSVC's <cstdio> declares it
 #endif
 
 namespace fs = std::filesystem;

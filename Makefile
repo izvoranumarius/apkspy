@@ -16,7 +16,7 @@ UNAME := $(shell uname -s)
 # in include/glfw are for the MSVC build.
 INCLUDES := -Isrc -Iinclude -Iinclude/imgui -Iinclude/imgui/backends \
             -Iinclude/miniz -Iinclude/libwebp -Iinclude/glfw
-CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter $(INCLUDES) $(shell pkg-config --cflags glfw3 2>/dev/null)
+CXXFLAGS := -std=c++23 -O2 -Wall -Wextra -Wno-unused-parameter $(INCLUDES) $(shell pkg-config --cflags glfw3 2>/dev/null)
 CFLAGS := -O2 -w $(INCLUDES)
 LDLIBS := $(shell pkg-config --libs glfw3 2>/dev/null) -lpthread -lm
 # miniaudio loads the platform audio libraries at run time.
@@ -44,7 +44,7 @@ UI_SRC := src/app/Application.cpp src/app/Theme.cpp src/app/WindowFrame.cpp src/
           src/ui/EditorPanel.cpp src/ui/ExplorerPanel.cpp src/ui/OutputPanel.cpp src/ui/SearchPanel.cpp \
           src/ui/SettingsDialog.cpp src/ui/TitleBar.cpp src/ui/FileBrowser.cpp src/ui/ImageViewer.cpp \
           src/ui/OverviewPanel.cpp src/ui/AnalysisPanel.cpp src/ui/AnalysisNative.cpp src/ui/BookmarksPanel.cpp src/ui/GraphView.cpp src/ui/ScriptPanel.cpp src/ui/DevicePanels.cpp src/ui/McpSettings.cpp src/ui/TrafficPanel.cpp \
-          src/ui/ShellIcons.cpp src/ui/HexView.cpp src/ui/AudioPlayer.cpp src/ui/VideoPlayer.cpp src/ui/MediaViews.cpp src/ui/TerminalPanel.cpp src/ui/CommandPalette.cpp src/core/Pty.cpp src/image/Texture.cpp src/image/ImageDecoder.cpp src/app/HeadlessMcp.cpp
+          src/ui/ShellIcons.cpp src/ui/HexView.cpp src/ui/AudioPlayer.cpp src/ui/AudioCodecs.cpp src/ui/VideoPlayer.cpp src/ui/MediaViews.cpp src/ui/TerminalPanel.cpp src/ui/CommandPalette.cpp src/core/Pty.cpp src/image/Texture.cpp src/image/ImageDecoder.cpp src/app/HeadlessMcp.cpp
 CORE_SRC := $(filter-out $(UI_SRC),$(APP_SRC))
 
 # miniz must be compiled as C (gcc), not C++.
@@ -82,7 +82,7 @@ $(BUILD)/test_%.o: lib/miniz/%.c
 
 $(TEST): tests/apkspy_core_test.cpp $(CORE_SRC) $(MINIZ_OBJ) $(wildcard src/*.hpp src/*/*.hpp)
 	@mkdir -p $(@D)
-	$(CXX) -std=c++17 -O1 -g -Wall -Wextra -Wno-unused-parameter $(INCLUDES) \
+	$(CXX) -std=c++23 -O1 -g -Wall -Wextra -Wno-unused-parameter $(INCLUDES) \
             tests/apkspy_core_test.cpp $(CORE_SRC) $(MINIZ_OBJ) \
             -o $@ -lpthread
 
@@ -90,14 +90,14 @@ $(TEST): tests/apkspy_core_test.cpp $(CORE_SRC) $(MINIZ_OBJ) $(wildcard src/*.hp
 # Windows by tests/ApkSpyTests.vcxproj.
 $(PLATFORM_TEST): tests/apkspy_platform_test.cpp $(CORE_SRC) $(MINIZ_OBJ) $(wildcard src/*/*.hpp)
 	@mkdir -p $(@D)
-	$(CXX) -std=c++17 -O1 -g -Wall -Wextra -Wno-unused-parameter $(INCLUDES) \
+	$(CXX) -std=c++23 -O1 -g -Wall -Wextra -Wno-unused-parameter $(INCLUDES) \
             tests/apkspy_platform_test.cpp $(CORE_SRC) $(MINIZ_OBJ) \
             -o $@ -lpthread
 
 $(IMGUI_TEST): tests/imgui_editor_test.cpp $(LIB)/imgui/imgui.cpp $(LIB)/imgui/imgui_draw.cpp \
                  $(LIB)/imgui/imgui_tables.cpp $(LIB)/imgui/imgui_widgets.cpp
 	@mkdir -p $(@D)
-	$(CXX) -std=c++17 -O1 -Wall -Wextra -Wno-unused-parameter -Iinclude/imgui -Iinclude/imgui/backends \
+	$(CXX) -std=c++23 -O1 -Wall -Wextra -Wno-unused-parameter -Iinclude/imgui -Iinclude/imgui/backends \
 	    tests/imgui_editor_test.cpp $(LIB)/imgui/imgui.cpp $(LIB)/imgui/imgui_draw.cpp \
 	    $(LIB)/imgui/imgui_tables.cpp $(LIB)/imgui/imgui_widgets.cpp -o $@
 

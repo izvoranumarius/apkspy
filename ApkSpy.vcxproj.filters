@@ -102,6 +102,9 @@
     <ClInclude Include="src\ui\AudioPlayer.hpp">
       <Filter>Header Files\ui</Filter>
     </ClInclude>
+    <ClInclude Include="src\ui\AudioConfig.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
     <ClInclude Include="src\ui\MediaViews.hpp">
       <Filter>Header Files\ui</Filter>
     </ClInclude>
@@ -354,6 +357,9 @@
       <Filter>Source Files\ui</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\AudioPlayer.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\AudioCodecs.cpp">
       <Filter>Source Files\ui</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\MediaViews.cpp">

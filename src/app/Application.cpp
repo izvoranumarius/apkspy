@@ -260,7 +260,7 @@ void Application::saveSettings() {
     settings_.set(Settings::kUiZoomPercent, (int)std::lround(uiZoom_ * 100.f));
     if (mcpSettings_) mcpSettings_->storeSettings();
     settings_.set(Settings::kLastProject, project_.isOpen() ? project_.path() : "");
-    int n = std::min<size_t>(recents_.size(), 10);
+    const int n = (int)std::min<size_t>(recents_.size(), 10);
     settings_.set(Settings::kRecentCount, n);
     for (int i = 0; i < n; ++i) settings_.set(Settings::recentKey(i), recents_[(size_t)i]);
     settings_.save(pathutil::configFile("apkspy.settings"));

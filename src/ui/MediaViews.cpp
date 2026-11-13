@@ -8,9 +8,19 @@
 #include "ui/UiUtil.hpp"
 
 // imgui_draw.cpp compiles its own static copy; this one is private to this file.
+// Being static, the stb_truetype functions this file does not call are
+// reported as removed (C4505) at the end of the translation unit, where a
+// push/pop around the include no longer applies, so it is disabled here.
+#ifdef _MSC_VER
+#pragma warning(disable : 4505)
+#pragma warning(push, 0)
+#endif
 #define STBTT_STATIC
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "imstb_truetype.h"
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 namespace {
 
