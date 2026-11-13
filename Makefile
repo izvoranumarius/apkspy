@@ -40,7 +40,7 @@ C_SRC := $(wildcard $(LIB)/miniz/*.c) $(wildcard $(LIB)/libwebp/src/dec/*.c) \
 # Headless tests link the core (no GLFW/OpenGL needed): everything except
 # the UI panels, the app shell and the GL-backed image code; Texture and
 # ImageDecoder are stubbed inside the test.
-UI_SRC := src/app/Application.cpp src/app/Theme.cpp src/app/WindowFrame.cpp src/app/main.cpp \
+UI_SRC := src/app/Application.cpp src/app/Theme.cpp src/app/ThemePresets.cppsrc/app/WindowFrame.cpp src/app/main.cpp \
           src/ui/EditorPanel.cpp src/ui/ExplorerPanel.cpp src/ui/OutputPanel.cpp src/ui/SearchPanel.cpp \
           src/ui/SettingsDialog.cpp src/ui/TitleBar.cpp src/ui/FileBrowser.cpp src/ui/ImageViewer.cpp \
           src/ui/OverviewPanel.cpp src/ui/AnalysisPanel.cpp src/ui/AnalysisNative.cpp src/ui/BookmarksPanel.cpp src/ui/GraphView.cpp src/ui/ScriptPanel.cpp src/ui/DevicePanels.cpp src/ui/McpSettings.cpp src/ui/TrafficPanel.cpp \

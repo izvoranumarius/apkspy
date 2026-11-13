@@ -71,7 +71,7 @@ inline std::vector<Match> findAll(const Lines& lines, const std::string& query,
         for (size_t p = 0; p + needle.size() <= n; ++p) {
             if (view[p] != needle[0]) continue;  // cheap first-char reject
             if (matchesAt(view, p, needle, opt.wholeWord)) {
-                out.push_back({(int)li, (int)p, (int)needle.size()});
+                out.push_back({static_cast<int>(li), static_cast<int>(p), static_cast<int>(needle.size())});
                 if (out.size() >= maxMatches) {
                     truncated = true;
                     return out;
@@ -94,7 +94,7 @@ inline int nextIndex(const std::vector<Match>& ms, int line, int col) {
     if (ms.empty()) return -1;
     for (size_t i = 0; i < ms.size(); ++i) {
         const Match& m = ms[i];
-        if (m.line > line || (m.line == line && m.col >= col)) return (int)i;
+        if (m.line > line || (m.line == line && m.col >= col)) return static_cast<int>(i);
     }
     return 0;  // wrap: everything is before (line, col)
 }
@@ -105,9 +105,9 @@ inline int prevIndex(const std::vector<Match>& ms, int line, int col) {
     if (ms.empty()) return -1;
     for (size_t i = ms.size(); i-- > 0;) {
         const Match& m = ms[i];
-        if (m.line < line || (m.line == line && m.col < col)) return (int)i;
+        if (m.line < line || (m.line == line && m.col < col)) return static_cast<int>(i);
     }
-    return (int)ms.size() - 1;  // wrap: everything is at/after (line, col)
+    return static_cast<int>(ms.size()) - 1;  // wrap: everything is at/after (line, col)
 }
 
 }  // namespace textsearch

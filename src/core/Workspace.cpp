@@ -145,11 +145,11 @@ static std::string deriveOutDir(const std::string& apkPath) {
     if (ec) size = 0;
     uint64_t mtime = 0;
     fs::file_time_type written = fs::last_write_time(apk, ec);
-    if (!ec) mtime = (uint64_t)written.time_since_epoch().count();
+    if (!ec) mtime = static_cast<uint64_t>(written.time_since_epoch().count());
 
     std::string seed = apkPath + "|" + std::to_string(size) + "|" + std::to_string(mtime);
     char hash[17];
-    std::snprintf(hash, sizeof hash, "%012llx", (unsigned long long)(fnv1a(seed) & 0xFFFFFFFFFFFFull));
+    std::snprintf(hash, sizeof hash, "%012llx", static_cast<unsigned long long>(fnv1a(seed) & 0xFFFFFFFFFFFFull));
 
     std::string stem = pathutil::toUtf8(apk.stem());
     if (stem.empty()) stem = "apk";
@@ -621,7 +621,7 @@ Document* Workspace::openClassSource(const std::string& group, const std::string
     if (!node) {
         // The index may still be building: jadx writes sources/<package path>.java.
         std::string rel = outer;
-        std::replace(rel.begin(), rel.end(), '.', (char)fs::path::preferred_separator);
+        std::replace(rel.begin(), rel.end(), '.', static_cast<char>(fs::path::preferred_separator));
         node = dec->tree->findByPath(pathutil::toUtf8(pathutil::fromUtf8(sourcesDir(dec->outDir)) / pathutil::fromUtf8(rel + ".java")));
     }
     if (!node || node->isFolder()) return nullptr;
@@ -652,7 +652,7 @@ bool Workspace::exportNode(Root& root, const TreeNode& node, const std::string& 
         std::string error;
         if (AxmlDecoder::decode(bytes, text, error, root.kind == Root::Kind::Apk ? resources(root.title).get() : nullptr)) {
             std::ofstream out(dest, std::ios::binary);
-            out.write(text.data(), (std::streamsize)text.size());
+            out.write(text.data(), static_cast<std::streamsize>(text.size()));
             if (!out) {
                 log("Export failed: cannot write " + pathutil::toUtf8(dest));
                 return false;
@@ -667,7 +667,7 @@ bool Workspace::exportNode(Root& root, const TreeNode& node, const std::string& 
         log("Export failed: cannot write " + pathutil::toUtf8(dest));
         return false;
     }
-    out.write(reinterpret_cast<const char*>(bytes.data()), (std::streamsize)bytes.size());
+    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     if (!out) {
         log("Export failed: cannot write " + pathutil::toUtf8(dest));
         return false;
@@ -728,8 +728,8 @@ void Workspace::openMethodListing(const std::string& group, const ApkAnalysis& a
     int line = 0;
     if (pc != UINT32_MAX)
         for (size_t i = 0; i < linePcs.size(); ++i)
-            if (linePcs[i] == (int32_t)pc) {
-                line = (int)i;
+            if (linePcs[i] == static_cast<int32_t>(pc)) {
+                line = static_cast<int>(i);
                 break;
             }
     std::string path = sig;

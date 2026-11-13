@@ -58,7 +58,7 @@ bool ImageDecoder::decodeWebp(const std::vector<uint8_t>& bytes, DecodedImage& o
     }
     out.width = w;
     out.height = h;
-    out.rgba.assign(pixels, pixels + (size_t)w * (size_t)h * 4);
+    out.rgba.assign(pixels, pixels + static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
     WebPFree(pixels);
     return true;
 }
@@ -67,7 +67,7 @@ bool ImageDecoder::decodeStb(const std::vector<uint8_t>& bytes, DecodedImage& ou
     int w = 0, h = 0, channels = 0;
     // Probe the header first: decoding a crafted image with huge dimensions
     // would allocate width * height * 4 bytes before anything can stop it.
-    if (!stbi_info_from_memory(bytes.data(), (int)bytes.size(), &w, &h, &channels)) {
+    if (!stbi_info_from_memory(bytes.data(), static_cast<int>(bytes.size()), &w, &h, &channels)) {
         const char* reason = stbi_failure_reason();
         error = reason ? std::string("Decoding failed (") + reason + ")" : std::string("Unsupported image format");
         return false;
@@ -76,7 +76,7 @@ bool ImageDecoder::decodeStb(const std::vector<uint8_t>& bytes, DecodedImage& ou
         error = "Image dimensions are out of range";
         return false;
     }
-    stbi_uc* pixels = stbi_load_from_memory(bytes.data(), (int)bytes.size(), &w, &h, &channels, 4);
+    stbi_uc* pixels = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &w, &h, &channels, 4);
     if (!pixels) {
         const char* reason = stbi_failure_reason();
         error = reason ? std::string("Decoding failed (") + reason + ")" : std::string("Unsupported image format");
@@ -84,7 +84,7 @@ bool ImageDecoder::decodeStb(const std::vector<uint8_t>& bytes, DecodedImage& ou
     }
     out.width = w;
     out.height = h;
-    out.rgba.assign(pixels, pixels + (size_t)w * (size_t)h * 4);
+    out.rgba.assign(pixels, pixels + static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
     stbi_image_free(pixels);
     return true;
 }

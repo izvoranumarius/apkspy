@@ -26,8 +26,8 @@ std::string extensionOf(const std::string& name) {
 }
 
 bool startsWith(const std::vector<uint8_t>& b, const char* magic, size_t len, size_t at = 0) {
-    return b.size() >= at + len && std::equal(magic, magic + len, b.begin() + (ptrdiff_t)at,
-                                               [](char m, uint8_t v) { return (uint8_t)m == v; });
+    return b.size() >= at + len && std::equal(magic, magic + len, b.begin() + static_cast<ptrdiff_t>(at),
+                                               [](char m, uint8_t v) { return static_cast<uint8_t>(m) == v; });
 }
 
 // Played by the audio view: by extension, or by content for files without one.
@@ -56,8 +56,8 @@ std::string fingerprint(const std::string& hex) {
     std::string out;
     for (size_t i = 0; i + 1 < hex.size(); i += 2) {
         if (i) out.push_back(':');
-        out.push_back((char)std::toupper((unsigned char)hex[i]));
-        out.push_back((char)std::toupper((unsigned char)hex[i + 1]));
+        out.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(hex[i]))));
+        out.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(hex[i + 1]))));
     }
     return out;
 }
@@ -66,7 +66,7 @@ void lineOffsetsOf(std::string_view text, std::vector<uint32_t>& offsets) {
     offsets.clear();
     offsets.push_back(0);
     for (size_t i = 0; i < text.size(); ++i)
-        if (text[i] == '\n') offsets.push_back((uint32_t)(i + 1));
+        if (text[i] == '\n') offsets.push_back(static_cast<uint32_t>(i + 1));
     offsets.shrink_to_fit();
 }
 }  // namespace
@@ -146,7 +146,7 @@ Document::Document(std::string title, const TreeNode* node, std::vector<uint8_t>
                tex::asciiLower(node_->name().substr(node_->name().size() - 3)) == ".py") {
         language_ = Language::Python;
     }
-    setText(std::string((const char*)bytes_.data(), bytes_.size()));
+    setText(std::string(reinterpret_cast<const char*>(bytes_.data()), bytes_.size()));
     bytes_.clear();
     bytes_.shrink_to_fit();
 }
@@ -199,7 +199,7 @@ std::string_view Document::line(size_t i) const {
     if (i >= lineOffsets_.size()) return {};
     const std::string_view all = text();
     const size_t begin = std::min<size_t>(lineOffsets_[i], all.size());
-    size_t end = i + 1 < lineOffsets_.size() ? (size_t)lineOffsets_[i + 1] - 1 : all.size();
+    size_t end = i + 1 < lineOffsets_.size() ? static_cast<size_t>(lineOffsets_[i + 1]) - 1 : all.size();
     end = std::max(begin, std::min(end, all.size()));
     if (end > begin && all[end - 1] == '\r') --end;  // CRLF pasted into the edit buffer
     return all.substr(begin, end - begin);
@@ -224,7 +224,7 @@ void Document::computeBlockStates() const {
     for (size_t i = 0; i < n; ++i) {
         blockStates_[i] = inBlock;
         const size_t begin = lineOffsets_[i];
-        const size_t end = i + 1 < n ? (size_t)lineOffsets_[i + 1] - 1 : all.size();
+        const size_t end = i + 1 < n ? static_cast<size_t>(lineOffsets_[i + 1]) - 1 : all.size();
         SyntaxHighlighter::tokenize(all.substr(begin, end - begin), language_, inBlock, scratch);
     }
 }
@@ -267,7 +267,7 @@ bool Document::save() {
     if (!canEdit()) return false;
     std::ofstream out(pathutil::fromUtf8(node_->path()), std::ios::binary);
     if (!out) return false;
-    out.write(editBuffer_.data(), (std::streamsize)editBuffer_.size());
+    out.write(editBuffer_.data(), static_cast<std::streamsize>(editBuffer_.size()));
     out.close();
     if (!out) return false;
     dirty_ = false;

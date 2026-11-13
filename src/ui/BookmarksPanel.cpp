@@ -12,7 +12,7 @@ std::string fileName(const std::string& path) {
 
 std::string hex(uint64_t v) {
     char b[32];
-    std::snprintf(b, sizeof b, "0x%llx", (unsigned long long)v);
+    std::snprintf(b, sizeof b, "0x%llx", static_cast<unsigned long long>(v));
     return b;
 }
 }  // namespace
@@ -72,11 +72,9 @@ void BookmarksPanel::go(const Annotation& a) {
 
 void BookmarksPanel::drawContents() {
     Annotations& notes = workspace_.annotations();
-    ImGui::RadioButton("All", &kindFilter_, 0);
-    ui::sameLineIfFits(ui::checkboxWidth("Bookmarks"));
-    ImGui::RadioButton("Bookmarks", &kindFilter_, 1);
-    ui::sameLineIfFits(ui::checkboxWidth("Comments"));
-    ImGui::RadioButton("Comments", &kindFilter_, 2);
+    // Same chip switch as the other view filters (radio circles looked heavy).
+    static const char* const kKinds[] = {"All", "Bookmarks", "Comments"};
+    ui::segmented(kKinds, 3, kindFilter_);
     ui::sameLineIfFits(ui::em(10.f));
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##flt", "Filter text or file...", filter_, sizeof filter_);
@@ -94,16 +92,16 @@ void BookmarksPanel::drawContents() {
         ImGui::TableSetupColumn("Note", ImGuiTableColumnFlags_WidthStretch, 2.f);
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
-        clipper.Begin((int)rows_.size());
+        clipper.Begin(static_cast<int>(rows_.size()));
         while (clipper.Step())
             for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; ++r) {
-                const Annotation* a = notes.find(rows_[(size_t)r]);
+                const Annotation* a = notes.find(rows_[static_cast<size_t>(r)]);
                 ImGui::TableNextRow();
                 if (!a) continue;
                 const bool bookmark = a->kind == Annotation::Kind::Bookmark;
                 ImGui::TableNextColumn();
                 ImGui::PushID(a->id);
-                ImGui::TextColored(bookmark ? ui::kBookmarkColor : ui::kNoteColor, bookmark ? "B" : "C");
+                ImGui::TextColored(bookmark ? ui::kBookmarkColor() : ui::kNoteColor(), bookmark ? "B" : "C");
                 ImGui::SameLine();
                 const bool activated =
                     ImGui::Selectable("##row", false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick) &&

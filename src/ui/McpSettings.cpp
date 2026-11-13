@@ -98,10 +98,10 @@ void McpSettings::draw() {
     ImGui::Checkbox("Require bearer token", &requireToken_);
     ImGui::EndDisabled();
     if (requireToken_) {
-        if (ImGui::SmallButton("Copy token")) ImGui::SetClipboardText(token_.c_str());
+        if (ui::smallButton("Copy token")) ImGui::SetClipboardText(token_.c_str());
         ImGui::SameLine();
         ImGui::BeginDisabled(running);
-        if (ImGui::SmallButton("New token")) token_ = McpHttpServer::randomToken();
+        if (ui::smallButton("New token")) token_ = McpHttpServer::randomToken();
         ImGui::EndDisabled();
     } else {
         ui::wrappedColored(kWarn, "Without a token any local process can use the endpoint.");

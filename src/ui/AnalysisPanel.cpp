@@ -1,4 +1,5 @@
 #include "ui/AnalysisPanel.hpp"
+#include "app/Icons.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -14,9 +15,9 @@
 
 namespace {
 
-const ImVec4 kDim(0.6f, 0.6f, 0.6f, 1.f);
-const ImVec4 kAccent(0.55f, 0.75f, 0.95f, 1.f);
-const ImVec4 kWarn(0.95f, 0.65f, 0.35f, 1.f);
+ImVec4 kDim() { return theme::vec(Col::TextMuted); }
+ImVec4 kAccent() { return theme::vec(Col::Info); }
+ImVec4 kWarn() { return theme::vec(Col::Warning); }
 
 template <typename T>
 bool ready(std::future<T>& f) {
@@ -25,7 +26,7 @@ bool ready(std::future<T>& f) {
 
 std::string hexAddr(uint64_t v) {
     char b[32];
-    std::snprintf(b, sizeof b, "0x%llx", (unsigned long long)v);
+    std::snprintf(b, sizeof b, "0x%llx", static_cast<unsigned long long>(v));
     return b;
 }
 
@@ -159,11 +160,11 @@ void AnalysisPanel::drawContents() {
         ImGui::TextDisabled("Open an APK to analyse it.");
         return;
     }
-    if (apkIdx_ >= (int)apks.size()) apkIdx_ = 0;
+    if (apkIdx_ >= static_cast<int>(apks.size())) apkIdx_ = 0;
     Workspace::NativeViewRequest nativeReq;
     if (workspace_.takeNativeView(nativeReq)) {
-        for (int i = 0; i < (int)apks.size(); ++i)
-            if (apks[(size_t)i]->title == nativeReq.group && i != apkIdx_) {
+        for (int i = 0; i < static_cast<int>(apks.size()); ++i)
+            if (apks[static_cast<size_t>(i)]->title == nativeReq.group && i != apkIdx_) {
                 apkIdx_ = i;
                 resetCaches();
             }
@@ -176,23 +177,23 @@ void AnalysisPanel::drawContents() {
     Workspace::MethodViewRequest methodReq;
     const bool methodRequested = workspace_.takeMethodView(methodReq);
     if (methodRequested)
-        for (int i = 0; i < (int)apks.size(); ++i)
-            if (apks[(size_t)i]->title == methodReq.group && i != apkIdx_) {
+        for (int i = 0; i < static_cast<int>(apks.size()); ++i)
+            if (apks[static_cast<size_t>(i)]->title == methodReq.group && i != apkIdx_) {
                 apkIdx_ = i;
                 resetCaches();
             }
     if (apks.size() > 1) {
         ImGui::SetNextItemWidth(-FLT_MIN);
-        if (ImGui::BeginCombo("##apk", apks[(size_t)apkIdx_]->title.c_str())) {
-            for (int i = 0; i < (int)apks.size(); ++i)
-                if (ImGui::Selectable(apks[(size_t)i]->title.c_str(), i == apkIdx_) && i != apkIdx_) {
+        if (ImGui::BeginCombo("##apk", apks[static_cast<size_t>(apkIdx_)]->title.c_str())) {
+            for (int i = 0; i < static_cast<int>(apks.size()); ++i)
+                if (ImGui::Selectable(apks[static_cast<size_t>(i)]->title.c_str(), i == apkIdx_) && i != apkIdx_) {
                     apkIdx_ = i;
                     resetCaches();
                 }
             ImGui::EndCombo();
         }
     }
-    Root& apk = *apks[(size_t)apkIdx_];
+    Root& apk = *apks[static_cast<size_t>(apkIdx_)];
     // Opening the workspace is the request: everything here needs the result.
     if (workspace_.analysis().status(apk.title).state == AnalysisService::State::None) workspace_.startAnalysis(apk.title);
     const AnalysisService::Status st = workspace_.analysis().status(apk.title);
@@ -218,12 +219,12 @@ void AnalysisPanel::drawContents() {
     // What to browse: one row of views, the list below.
     std::vector<const char*> views = {"Classes", "Strings", "Native", "Resources"};
     if (apks.size() > 1) views.push_back("Compare");
-    int view = (int)nav_;
-    if (view >= (int)views.size()) view = 0;
+    int view = static_cast<int>(nav_);
+    if (view >= static_cast<int>(views.size())) view = 0;
     ImGui::PushID("nav");
-    if (ui::segmented(views.data(), (int)views.size(), view)) nav_ = (Nav)view;
+    if (ui::segmented(views.data(), static_cast<int>(views.size()), view)) nav_ = static_cast<Nav>(view);
     ImGui::PopID();
-    nav_ = (Nav)view;
+    nav_ = static_cast<Nav>(view);
     switch (nav_) {
     case Nav::Classes:
         if (analysis) drawClassTree(*analysis, apk);
@@ -254,21 +255,21 @@ void AnalysisPanel::drawHeader(Root& apk, const AnalysisService::Status& st) {
     case AnalysisService::State::Failed:
         if (ui::flowButton("Analyze again")) workspace_.startAnalysis(apk.title, true);
         if (st.state == AnalysisService::State::Failed)
-            ui::wrappedColored(kWarn, "failed: " + st.error);
+            ui::wrappedColored(kWarn(), "failed: " + st.error);
         else if (st.state == AnalysisService::State::Cancelled)
             ui::flowTextDisabled("cancelled");
         break;
     case AnalysisService::State::Running: {
-        const float frac = st.total ? (float)st.done / (float)st.total : 0.f;
+        const float frac = st.total ? static_cast<float>(st.done) / static_cast<float>(st.total) : 0.f;
         char overlay[96];
         std::snprintf(overlay, sizeof overlay, "%s %zu / %zu", st.phase.c_str(), st.done, st.total);
-        ImGui::ProgressBar(st.total ? frac : -1.f * (float)ImGui::GetTime(),
+        ImGui::ProgressBar(st.total ? frac : -1.f * static_cast<float>(ImGui::GetTime()),
                            ImVec2(std::min(ui::em(16.f), ImGui::GetContentRegionAvail().x), 0), overlay);
         if (ui::flowButton("Cancel")) workspace_.analysis().cancel(apk.title);
         break;
     }
     case AnalysisService::State::Ready: {
-        if (!st.error.empty()) ui::wrappedColored(kWarn, st.error);
+        if (!st.error.empty()) ui::wrappedColored(kWarn(), st.error);
         break;
     }
     }
@@ -282,7 +283,7 @@ void AnalysisPanel::buildPackageTree(const ApkAnalysis& a) {
     packages_.assign(1, PackageNode{});
     std::unordered_map<std::string, uint32_t> byPath;
     const auto& classes = a.classes();
-    for (uint32_t i = 0; i < (uint32_t)classes.size(); ++i) {
+    for (uint32_t i = 0; i < static_cast<uint32_t>(classes.size()); ++i) {
         const std::string name = DexFile::descriptorToJava(a.classDescriptor(classes[i]));
         uint32_t node = 0;
         size_t start = 0;
@@ -290,7 +291,7 @@ void AnalysisPanel::buildPackageTree(const ApkAnalysis& a) {
             const std::string path = name.substr(0, dot);
             auto it = byPath.find(path);
             if (it == byPath.end()) {
-                const uint32_t child = (uint32_t)packages_.size();
+                const uint32_t child = static_cast<uint32_t>(packages_.size());
                 packages_.push_back(PackageNode{name.substr(start, dot - start), {}, {}});
                 packages_[node].packages.push_back(child);
                 it = byPath.emplace(path, child).first;
@@ -322,7 +323,7 @@ void AnalysisPanel::flattenTree(const ApkAnalysis& a) {
     const auto addMethods = [&](uint32_t cls, uint8_t depth) {
         const auto& methods = methodsOfClass(a, cls);
         const DexFile& dex = *a.dexes()[classes[cls].dex];
-        for (uint32_t k = 0; k < (uint32_t)methods.size(); ++k) {
+        for (uint32_t k = 0; k < static_cast<uint32_t>(methods.size()); ++k) {
             const uint32_t idx = methods[k].method.methodIdx;
             rows_.push_back({TreeRow::Method, depth, cls, k,
                              prettyMethod(dex.typeDescriptor(dex.methodClass(idx)), dex.methodName(idx),
@@ -332,12 +333,12 @@ void AnalysisPanel::flattenTree(const ApkAnalysis& a) {
     const auto addClass = [&](uint32_t cls, uint8_t depth, bool fullName) {
         const std::string_view desc = a.classDescriptor(classes[cls]);
         rows_.push_back({TreeRow::Class, depth, cls, 0, fullName ? DexFile::descriptorToJava(desc) : shortName(desc)});
-        if (classOpen_.count(cls)) addMethods(cls, (uint8_t)(depth + 1));
+        if (classOpen_.count(cls)) addMethods(cls, static_cast<uint8_t>(depth + 1));
     };
     std::string needle = classFilter_;
     if (!needle.empty()) {  // filtered: a flat list of matching classes
         std::replace(needle.begin(), needle.end(), '.', '/');
-        for (uint32_t i = 0; i < (uint32_t)classes.size() && rows_.size() < 20000; ++i)
+        for (uint32_t i = 0; i < static_cast<uint32_t>(classes.size()) && rows_.size() < 20000; ++i)
             if (tex::ciFind(a.classDescriptor(classes[i]), needle) != std::string_view::npos) addClass(i, 0, true);
         return;
     }
@@ -362,8 +363,8 @@ void AnalysisPanel::flattenTree(const ApkAnalysis& a) {
         rows_.push_back({TreeRow::Package, depth, node, 0, std::move(label)});
         if (!packageOpen_[node]) continue;
         const auto& p = packages_[node];
-        for (auto it = p.classes.rbegin(); it != p.classes.rend(); ++it) stack.push_back({*it | 0x80000000u, (uint8_t)(depth + 1)});
-        for (auto it = p.packages.rbegin(); it != p.packages.rend(); ++it) stack.push_back({*it, (uint8_t)(depth + 1)});
+        for (auto it = p.classes.rbegin(); it != p.classes.rend(); ++it) stack.push_back({*it | 0x80000000u, static_cast<uint8_t>(depth + 1)});
+        for (auto it = p.packages.rbegin(); it != p.packages.rend(); ++it) stack.push_back({*it, static_cast<uint8_t>(depth + 1)});
     }
 }
 
@@ -386,18 +387,18 @@ void AnalysisPanel::drawClassTree(const ApkAnalysis& a, Root& apk) {
             if ((sel_ == Selection::Class && rows_[i].kind == TreeRow::Class && rows_[i].index == selClass_) ||
                 (sel_ == Selection::Method && rows_[i].kind == TreeRow::Method && rows_[i].index == selClass_ &&
                  methodsOfClass(a, selClass_)[rows_[i].method].method.methodIdx == selMethod_.method.methodIdx)) {
-                ImGui::SetScrollY(std::max(0.f, (float)i * ImGui::GetTextLineHeightWithSpacing() - ImGui::GetWindowHeight() * 0.3f));
+                ImGui::SetScrollY(std::max(0.f, static_cast<float>(i) * ImGui::GetTextLineHeightWithSpacing() - ImGui::GetWindowHeight() * 0.3f));
                 break;
             }
     }
     bool toggled = false;
     ImGuiListClipper clipper;
-    clipper.Begin((int)rows_.size());
+    clipper.Begin(static_cast<int>(rows_.size()));
     while (clipper.Step()) {
         for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; ++r) {
-            const TreeRow& row = rows_[(size_t)r];
+            const TreeRow& row = rows_[static_cast<size_t>(r)];
             ImGui::PushID(r);
-            const float x0 = ImGui::GetCursorPosX() + (float)row.depth * indent;
+            const float x0 = ImGui::GetCursorPosX() + static_cast<float>(row.depth) * indent;
             bool selected = false;
             if (row.kind == TreeRow::Class) selected = sel_ == Selection::Class && selClass_ == row.index;
             if (row.kind == TreeRow::Method)
@@ -408,7 +409,7 @@ void AnalysisPanel::drawClassTree(const ApkAnalysis& a, Root& apk) {
             const bool clicked = ImGui::Selectable("##row", selected, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap);
             const bool hovered = ImGui::IsItemHovered();
             const bool doubleClick = clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-            const bool onArrow = hovered && ImGui::GetIO().MousePos.x < rowMin.x + (float)row.depth * indent + h;
+            const bool onArrow = hovered && ImGui::GetIO().MousePos.x < rowMin.x + static_cast<float>(row.depth) * indent + h;
             ImGui::SameLine(x0);
             // Expand arrow (packages and classes).
             if (row.kind != TreeRow::Method) {
@@ -529,7 +530,7 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
     selMethod_ = m;
     selClass_ = UINT32_MAX;
     if (const auto* entry = a.findClass(DexFile::descriptorToJava(cls))) {
-        for (uint32_t i = 0; i < (uint32_t)a.classes().size(); ++i)
+        for (uint32_t i = 0; i < static_cast<uint32_t>(a.classes().size()); ++i)
             if (a.classes()[i].dex == entry->dex && a.classes()[i].def == entry->def) {
                 selClass_ = i;
                 break;
@@ -567,8 +568,8 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
             const std::string_view l = lines[i];
             const size_t at = l.find(name + "(");
             if (at == std::string_view::npos || l.find(';') < at || l.find("=") < at) continue;
-            if (at > 0 && (std::isalnum((unsigned char)l[at - 1]) || l[at - 1] == '_' || l[at - 1] == '.')) continue;
-            doc->goTo((int)i);
+            if (at > 0 && (std::isalnum(static_cast<unsigned char>(l[at - 1])) || l[at - 1] == '_' || l[at - 1] == '.')) continue;
+            doc->goTo(static_cast<int>(i));
             break;
         }
         if (showPanel_) showPanel_("Editor");
@@ -634,17 +635,17 @@ void AnalysisPanel::drawQueryResults(const ApkAnalysis& a, Root& apk) {
         if (at != std::string::npos) xrefTitle_.resize(at);
     } else if (xrefJob_.valid()) {
         ImGui::TextDisabled("%s", xrefTitle_.c_str());
-        ImGui::ProgressBar(-1.f * (float)ImGui::GetTime(), ImVec2(ui::em(12.f), 0), "scanning methods");
+        ImGui::ProgressBar(-1.f * static_cast<float>(ImGui::GetTime()), ImVec2(ui::em(12.f), 0), "scanning methods");
         return;
     }
     if (xrefTitle_.empty()) {
         ImGui::TextDisabled("Use Callers / Callees on a method, a class context menu, or a string to fill this list.");
         return;
     }
-    if (ImGui::SmallButton("<")) refsQuery_ = false;
+    if (ui::smallButton("<")) refsQuery_ = false;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back to the callers and callees of the selection");
     ImGui::SameLine();
-    ImGui::TextColored(kAccent, "%s", xrefTitle_.c_str());
+    ImGui::TextColored(kAccent(), "%s", xrefTitle_.c_str());
     ImGui::SameLine();
     ImGui::TextDisabled("(%zu)", xrefs_.size());
     if (ImGui::BeginTable("##xr", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
@@ -654,10 +655,10 @@ void AnalysisPanel::drawQueryResults(const ApkAnalysis& a, Root& apk) {
         ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthStretch, 1.f);
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
-        clipper.Begin((int)xrefs_.size());
+        clipper.Begin(static_cast<int>(xrefs_.size()));
         while (clipper.Step()) {
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                const XrefRow& r = xrefs_[(size_t)i];
+                const XrefRow& r = xrefs_[static_cast<size_t>(i)];
                 ImGui::PushID(i);
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -671,7 +672,7 @@ void AnalysisPanel::drawQueryResults(const ApkAnalysis& a, Root& apk) {
                         if (!defs.empty()) {
                             selectMethod(a, defs.front(), apk.title, false);
                             refsQuery_ = true;  // stay on the results
-                            listingPc_ = (int32_t)r.ref.pc;
+                            listingPc_ = static_cast<int32_t>(r.ref.pc);
                             listingScroll_ = true;
                             showFunction(0);
                         }
@@ -718,10 +719,10 @@ void AnalysisPanel::drawStrings(const ApkAnalysis& a, Root& apk) {
         ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthStretch, 1.f);
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
-        clipper.Begin((int)strings_.size());
+        clipper.Begin(static_cast<int>(strings_.size()));
         while (clipper.Step()) {
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                const auto& s = strings_[(size_t)i];
+                const auto& s = strings_[static_cast<size_t>(i)];
                 ImGui::PushID(i);
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -729,9 +730,9 @@ void AnalysisPanel::drawStrings(const ApkAnalysis& a, Root& apk) {
                 // and would otherwise show as blank rows.
                 std::string shown;
                 for (size_t k = 0; k < s.value.size() && shown.size() < 300; ++k) {
-                    const unsigned char ch = (unsigned char)s.value[k];
+                    const unsigned char ch = static_cast<unsigned char>(s.value[k]);
                     if (ch >= 0x20) {
-                        shown.push_back((char)ch);
+                        shown.push_back(static_cast<char>(ch));
                     } else {
                         char esc[8];
                         std::snprintf(esc, sizeof esc, ch == 0 ? "\\0" : ch == '\n' ? "\\n" : ch == '\t' ? "\\t" : "\\x%02X", ch);
@@ -801,31 +802,31 @@ void AnalysisPanel::showGraph(const ApkAnalysis& a, const ApkAnalysis::MethodDef
 
     std::vector<GraphView::Block> blocks(graphBlocks_.size());
     std::vector<graphlayout::Edge> edges;
-    for (uint32_t b = 0; b < (uint32_t)graphBlocks_.size(); ++b) {
+    for (uint32_t b = 0; b < static_cast<uint32_t>(graphBlocks_.size()); ++b) {
         const auto& block = graphBlocks_[b];
         for (const auto& l : lines)
-            if (l.first >= (int32_t)block.startPc && l.first < (int32_t)block.endPc) {
+            if (l.first >= static_cast<int32_t>(block.startPc) && l.first < static_cast<int32_t>(block.endPc)) {
                 std::string text = l.second.size() > 90 ? l.second.substr(0, 90) + "..." : l.second;
-                ImU32 color = IM_COL32(212, 212, 212, 255);
-                if (text.rfind("invoke", 0) == 0) color = IM_COL32(140, 190, 240, 255);
+                Col color = Col::Text;
+                if (text.rfind("invoke", 0) == 0) color = Col::Blue;
                 else if (text.rfind("if-", 0) == 0 || text.rfind("goto", 0) == 0 || text.rfind("packed-", 0) == 0 || text.rfind("sparse-", 0) == 0)
-                    color = IM_COL32(240, 205, 100, 255);
-                else if (text.rfind("return", 0) == 0 || text.rfind("throw", 0) == 0) color = IM_COL32(240, 125, 125, 255);
+                    color = Col::Yellow;
+                else if (text.rfind("return", 0) == 0 || text.rfind("throw", 0) == 0) color = Col::Red;
                 blocks[b].lines.push_back({{std::move(text), color}});
             }
-        if (block.exit) blocks[b].border = IM_COL32(200, 120, 120, 255);
+        if (block.exit) blocks[b].border = Col::Red;
         const bool branch = block.successors.size() == 2;
         for (size_t k = 0; k < block.successors.size(); ++k) {
             graphlayout::Edge e;
-            e.from = (int)b;
-            e.to = (int)block.successors[k];
+            e.from = static_cast<int>(b);
+            e.to = static_cast<int>(block.successors[k]);
             e.kind = branch ? (k == 0 ? graphlayout::EdgeKind::Taken : graphlayout::EdgeKind::Fallthrough) : graphlayout::EdgeKind::Jump;
             edges.push_back(std::move(e));
         }
         for (uint32_t h : block.exceptional) {
             graphlayout::Edge e;
-            e.from = (int)b;
-            e.to = (int)h;
+            e.from = static_cast<int>(b);
+            e.to = static_cast<int>(h);
             e.kind = graphlayout::EdgeKind::Exception;
             edges.push_back(std::move(e));
         }
@@ -852,17 +853,17 @@ void AnalysisPanel::showCallGraph(const ApkAnalysis& a, const ApkAnalysis::Metho
     graphIsCalls_ = true;
     graphRefs_ = {graphTitle_};
     std::vector<GraphView::Block> blocks(1);
-    blocks[0].lines.push_back({{shortRef(graphTitle_), IM_COL32(255, 255, 255, 255)}});
-    blocks[0].border = IM_COL32(0, 150, 240, 255);
-    blocks[0].fill = IM_COL32(32, 48, 66, 255);
+    blocks[0].lines.push_back({{shortRef(graphTitle_), Col::Text}});
+    blocks[0].border = Col::Accent;
+    blocks[0].fill = Col::RowSelected;
     std::vector<graphlayout::Edge> edges;
     const auto addNode = [&](const std::string& ref, bool caller) {
         const auto seen = std::find(graphRefs_.begin(), graphRefs_.end(), ref);
-        int index = (int)(seen - graphRefs_.begin());
+        int index = static_cast<int>(seen - graphRefs_.begin());
         if (seen == graphRefs_.end()) {
             graphRefs_.push_back(ref);
             GraphView::Block block;
-            block.lines.push_back({{shortRef(ref), IM_COL32(212, 212, 212, 255)}});
+            block.lines.push_back({{shortRef(ref), Col::Text}});
             blocks.push_back(std::move(block));
         }
         graphlayout::Edge e;
@@ -894,21 +895,24 @@ void AnalysisPanel::drawGraph(const ApkAnalysis& a, Root& /*apk*/) {
     }
     // The method is named in the Function header above.
     if (!graphIsCalls_) {
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Copy DOT")) ImGui::SetClipboardText(a.cfgToDot(graphMethod_, graphBlocks_).c_str());
+        // An action, not a view: kept apart from the Smali / Graph / Calls switch.
+        ImGui::SameLine(0.f, ui::em(1.2f));
+        if (ui::smallButton(ui::icon(icons::COPY, "Copy DOT").c_str()))
+            ImGui::SetClipboardText(a.cfgToDot(graphMethod_, graphBlocks_).c_str());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy the graph in Graphviz DOT format");
     }
     const GraphView::Result r = graph_.draw("##graph", Theme::monoFont());
     if (!r.activated || r.block < 0) return;
     if (!graphIsCalls_) {
-        if (r.block < (int)graphBlocks_.size()) {  // the block's code in the listing
+        if (r.block < static_cast<int>(graphBlocks_.size())) {  // the block's code in the listing
             functionMode_ = 0;
-            listingPc_ = (int32_t)graphBlocks_[(size_t)r.block].startPc;
+            listingPc_ = static_cast<int32_t>(graphBlocks_[static_cast<size_t>(r.block)].startPc);
             listingScroll_ = true;
         }
         return;
     }
-    if (r.block >= (int)graphRefs_.size()) return;
-    const std::string ref = graphRefs_[(size_t)r.block];
+    if (r.block >= static_cast<int>(graphRefs_.size())) return;
+    const std::string ref = graphRefs_[static_cast<size_t>(r.block)];
     std::string cls, name, proto;
     std::vector<ApkAnalysis::MethodDef> defs;
     if (ApkAnalysis::splitMethodRef(ref, cls, name, proto)) defs = a.findMethodDefs(cls, name, proto);
@@ -936,7 +940,7 @@ void AnalysisPanel::drawFunctionView() {
 }
 
 void AnalysisPanel::drawMethodView(const ApkAnalysis& a, Root& apk) {
-    ui::wrappedColored(kAccent, prettyRef(a.methodSignature(selMethod_)));
+    ui::wrappedColored(kAccent(), prettyRef(a.methodSignature(selMethod_)));
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", a.methodSignature(selMethod_).c_str());
     static const char* const kModes[] = {"Smali", "Graph", "Calls"};
     int mode = functionMode_;
@@ -971,16 +975,16 @@ void AnalysisPanel::drawMethodListing(const ApkAnalysis& a, Root& apk) {
         listingScroll_ = false;
         for (size_t i = 0; i < methodListing_.size(); ++i)
             if (methodListing_[i].pc == listingPc_) {
-                ImGui::SetScrollY(std::max(0.f, (float)i * lh - ImGui::GetWindowHeight() * 0.3f));
+                ImGui::SetScrollY(std::max(0.f, static_cast<float>(i) * lh - ImGui::GetWindowHeight() * 0.3f));
                 break;
             }
     }
     std::vector<Span> spans;
     ImGuiListClipper clipper;
-    clipper.Begin((int)methodListing_.size(), lh);
+    clipper.Begin(static_cast<int>(methodListing_.size()), lh);
     while (clipper.Step())
         for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-            const ListingLine& l = methodListing_[(size_t)i];
+            const ListingLine& l = methodListing_[static_cast<size_t>(i)];
             ImGui::PushID(i);
             const ImVec2 pos = ImGui::GetCursorScreenPos();
             const bool focus = l.pc >= 0 && l.pc == listingPc_;
@@ -1007,7 +1011,7 @@ void AnalysisPanel::drawMethodListing(const ApkAnalysis& a, Root& apk) {
             for (const Span& s : spans) {
                 const char* b = l.text.data() + s.begin;
                 const char* e = l.text.data() + s.end;
-                ImGui::GetWindowDrawList()->AddText(ImVec2(x, pos.y), s.color, b, e);
+                ImGui::GetWindowDrawList()->AddText(ImVec2(x, pos.y), theme::syntax(s.token), b, e);
                 x += ImGui::CalcTextSize(b, e).x;
             }
             ImGui::PopID();
@@ -1037,15 +1041,15 @@ void AnalysisPanel::drawReferences() {
         ImGui::TableHeadersRow();
         const size_t rows = std::max(nLeft, nRight);
         ImGuiListClipper clipper;
-        clipper.Begin((int)rows);
+        clipper.Begin(static_cast<int>(rows));
         while (clipper.Step())
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
                 ImGui::TableNextRow();
                 ImGui::PushID(i);
                 ImGui::TableNextColumn();
-                if ((size_t)i < nLeft) drawLeft((size_t)i);
+                if (static_cast<size_t>(i) < nLeft) drawLeft(static_cast<size_t>(i));
                 ImGui::TableNextColumn();
-                if ((size_t)i < nRight) drawRight((size_t)i);
+                if (static_cast<size_t>(i) < nRight) drawRight(static_cast<size_t>(i));
                 ImGui::PopID();
             }
         ImGui::EndTable();
@@ -1091,7 +1095,7 @@ void AnalysisPanel::drawReferences() {
                                                           dex.protoDescriptor(dex.methodProto(h.from.method)));
                        if (!defs.empty()) {
                            selectMethod(a, defs.front(), apk->title, true);
-                           listingPc_ = (int32_t)h.from.pc;
+                           listingPc_ = static_cast<int32_t>(h.from.pc);
                            listingScroll_ = true;
                        }
                    }
@@ -1108,7 +1112,7 @@ void AnalysisPanel::drawReferences() {
                    if (ImGui::Selectable(label.c_str())) {
                        if (!defs.empty()) selectMethod(a, defs.front(), apk->title, true);
                        else {
-                           listingPc_ = (int32_t)c.pc;  // framework method: show the call site
+                           listingPc_ = static_cast<int32_t>(c.pc);  // framework method: show the call site
                            listingScroll_ = true;
                            showFunction(0);
                        }
@@ -1130,7 +1134,7 @@ void AnalysisPanel::selectLib(Root& apk, int index) {
     elfError_.clear();
     resetNative();
     AnalysisService* service = &workspace_.analysis();
-    const std::string apkPath = apk.apkPath, entry = libs_[(size_t)index].path;
+    const std::string apkPath = apk.apkPath, entry = libs_[static_cast<size_t>(index)].path;
     // Parsed on a worker with its own archive handle.
     elfLoad_ = std::async(std::launch::async, [service, apkPath, entry] {
         std::string err;
@@ -1165,38 +1169,38 @@ void AnalysisPanel::drawNative(Root& apk) {
         elfError_ = std::move(r.second);
     }
     if (!pendingLib_.empty() && !elfLoad_.valid()) {
-        for (int i = 0; i < (int)libs_.size(); ++i)
-            if (libs_[(size_t)i].path == pendingLib_ && i != selectedLib_) selectLib(apk, i);
+        for (int i = 0; i < static_cast<int>(libs_.size()); ++i)
+            if (libs_[static_cast<size_t>(i)].path == pendingLib_ && i != selectedLib_) selectLib(apk, i);
         pendingLib_.clear();
     }
     // Code views get the whole panel: the library list shrinks to a dropdown.
     if (selectedLib_ < 0 && !elfLoad_.valid()) {  // open on something: arm64 can be disassembled
         int first = 0;
-        for (int i = (int)libs_.size() - 1; i >= 0; --i)
-            if (libs_[(size_t)i].abi == "arm64-v8a") first = i;
+        for (int i = static_cast<int>(libs_.size()) - 1; i >= 0; --i)
+            if (libs_[static_cast<size_t>(i)].abi == "arm64-v8a") first = i;
         selectLib(apk, first);
     }
     const bool compactLibs = true;  // the navigator is narrow: a dropdown
     const bool sideBySide = false;
     const auto libLabel = [&](int i) {
         char label[512];
-        std::snprintf(label, sizeof label, "%s  (%.0f KB)", libs_[(size_t)i].path.c_str(), (double)libs_[(size_t)i].size / 1024.0);
+        std::snprintf(label, sizeof label, "%s  (%.0f KB)", libs_[static_cast<size_t>(i)].path.c_str(), static_cast<double>(libs_[static_cast<size_t>(i)].size) / 1024.0);
         return std::string(label);
     };
     if (compactLibs) {
         ImGui::SetNextItemWidth(-FLT_MIN);
         if (ImGui::BeginCombo("##lib", libLabel(selectedLib_).c_str())) {
-            for (int i = 0; i < (int)libs_.size(); ++i)
+            for (int i = 0; i < static_cast<int>(libs_.size()); ++i)
                 if (ImGui::Selectable(libLabel(i).c_str(), selectedLib_ == i) && !elfLoad_.valid() && selectedLib_ != i) selectLib(apk, i);
             ImGui::EndCombo();
         }
     } else {
     // Stacked: just tall enough for the library list (resizable).
-    const float libsH = std::min(ui::em(8.f), ImGui::GetTextLineHeightWithSpacing() * ((float)libs_.size() + 0.6f) +
+    const float libsH = std::min(ui::em(8.f), ImGui::GetTextLineHeightWithSpacing() * (static_cast<float>(libs_.size()) + 0.6f) +
                                                   ImGui::GetStyle().WindowPadding.y * 2.f);
     ImGui::BeginChild("##libs", sideBySide ? ImVec2(ui::em(15.f), 0) : ImVec2(0, libsH),
                       ImGuiChildFlags_Borders | (sideBySide ? ImGuiChildFlags_ResizeX : ImGuiChildFlags_ResizeY));
-    for (int i = 0; i < (int)libs_.size(); ++i)
+    for (int i = 0; i < static_cast<int>(libs_.size()); ++i)
         if (ImGui::Selectable(libLabel(i).c_str(), selectedLib_ == i) && !elfLoad_.valid() && selectedLib_ != i) selectLib(apk, i);
     ImGui::EndChild();
     if (sideBySide) ImGui::SameLine();
@@ -1205,11 +1209,11 @@ void AnalysisPanel::drawNative(Root& apk) {
     if (elfLoad_.valid()) {
         ImGui::TextDisabled("Parsing...");
     } else if (!elfError_.empty()) {
-        ImGui::TextColored(kWarn, "%s", elfError_.c_str());
+        ImGui::TextColored(kWarn(), "%s", elfError_.c_str());
     } else if (elf_) {
         const bool codeView = symbolView_ != 3 && symbolView_ != 4;  // file facts belong with the sections
         if (!codeView) {
-            ImGui::TextColored(kAccent, "%s", elf_->name().c_str());
+            ImGui::TextColored(kAccent(), "%s", elf_->name().c_str());
             ImGui::SameLine();
             ImGui::TextDisabled("%s %s, %s", elf_->is64() ? "ELF64" : "ELF32", elf_->typeName().c_str(), elf_->machineName().c_str());
         }
@@ -1219,8 +1223,8 @@ void AnalysisPanel::drawNative(Root& apk) {
             for (const auto& n : elf_->needed()) needed += (needed.empty() ? "" : ", ") + n;
             ImGui::TextWrapped("NEEDED: %s", needed.c_str());
         }
-        if (!codeView && selectedLib_ >= 0 && ImGui::SmallButton("Open hex view")) {
-            if (const TreeNode* node = apk.tree->findByPath(libs_[(size_t)selectedLib_].path))
+        if (!codeView && selectedLib_ >= 0 && ui::smallButton("Open hex view")) {
+            if (const TreeNode* node = apk.tree->findByPath(libs_[static_cast<size_t>(selectedLib_)].path))
                 workspace_.openNode(apk, *node, -1, Workspace::OpenMode::Permanent);
         }
         ImGui::Separator();
@@ -1260,10 +1264,10 @@ void AnalysisPanel::drawNative(Root& apk) {
                 ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, ui::em(4.f));
                 ImGui::TableHeadersRow();
                 ImGuiListClipper clipper;
-                clipper.Begin((int)shown.size());
+                clipper.Begin(static_cast<int>(shown.size()));
                 while (clipper.Step())
                     for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                        const auto* s = shown[(size_t)i];
+                        const auto* s = shown[static_cast<size_t>(i)];
                         ImGui::TableNextRow();
                         ImGui::TableNextColumn();
                         const std::string dem = ElfFile::demangle(s->name);
@@ -1278,9 +1282,9 @@ void AnalysisPanel::drawNative(Root& apk) {
                         if (ImGui::IsItemHovered())
                             ImGui::SetTooltip("%s%s", s->name.c_str(), defined ? "\ndouble-click: disassemble" : "");
                         ImGui::TableNextColumn();
-                        ImGui::Text("0x%llx", (unsigned long long)s->value);
+                        ImGui::Text("0x%llx", static_cast<unsigned long long>(s->value));
                         ImGui::TableNextColumn();
-                        ImGui::Text("%llu", (unsigned long long)s->size);
+                        ImGui::Text("%llu", static_cast<unsigned long long>(s->size));
                     }
                 ImGui::EndTable();
             }
@@ -1297,11 +1301,11 @@ void AnalysisPanel::drawNative(Root& apk) {
                     ImGui::TableNextColumn();
                     ImGui::TextUnformatted(s.name.c_str());
                     ImGui::TableNextColumn();
-                    ImGui::Text("0x%llx", (unsigned long long)s.addr);
+                    ImGui::Text("0x%llx", static_cast<unsigned long long>(s.addr));
                     ImGui::TableNextColumn();
-                    ImGui::Text("0x%llx", (unsigned long long)s.offset);
+                    ImGui::Text("0x%llx", static_cast<unsigned long long>(s.offset));
                     ImGui::TableNextColumn();
-                    ImGui::Text("%llu", (unsigned long long)s.size);
+                    ImGui::Text("%llu", static_cast<unsigned long long>(s.size));
                 }
                 ImGui::EndTable();
             }
@@ -1320,11 +1324,11 @@ void AnalysisPanel::drawNative(Root& apk) {
                     ImGui::TableNextColumn();
                     ImGui::Text("%c%c%c", s.flags & 4 ? 'R' : '-', s.flags & 2 ? 'W' : '-', s.flags & 1 ? 'X' : '-');
                     ImGui::TableNextColumn();
-                    ImGui::Text("0x%llx", (unsigned long long)s.vaddr);
+                    ImGui::Text("0x%llx", static_cast<unsigned long long>(s.vaddr));
                     ImGui::TableNextColumn();
-                    ImGui::Text("0x%llx", (unsigned long long)s.offset);
+                    ImGui::Text("0x%llx", static_cast<unsigned long long>(s.offset));
                     ImGui::TableNextColumn();
-                    ImGui::Text("%llu / %llu", (unsigned long long)s.filesz, (unsigned long long)s.memsz);
+                    ImGui::Text("%llu / %llu", static_cast<unsigned long long>(s.filesz), static_cast<unsigned long long>(s.memsz));
                 }
                 ImGui::EndTable();
             }
@@ -1345,16 +1349,16 @@ void AnalysisPanel::drawCompare(Root& apk) {
         ImGui::TextDisabled("Add a second APK (another version) to the project to compare them.");
         return;
     }
-    if (compareWith_ < 0 || compareWith_ >= (int)apks.size() || apks[(size_t)compareWith_] == &apk)
-        for (int i = 0; i < (int)apks.size(); ++i)
-            if (apks[(size_t)i] != &apk) compareWith_ = i;
-    Root& other = *apks[(size_t)compareWith_];
+    if (compareWith_ < 0 || compareWith_ >= static_cast<int>(apks.size()) || apks[static_cast<size_t>(compareWith_)] == &apk)
+        for (int i = 0; i < static_cast<int>(apks.size()); ++i)
+            if (apks[static_cast<size_t>(i)] != &apk) compareWith_ = i;
+    Root& other = *apks[static_cast<size_t>(compareWith_)];
     ImGui::Text("Compare %s with", apk.title.c_str());
     ImGui::SameLine();
     ImGui::SetNextItemWidth(std::min(ui::em(12.f), ImGui::GetContentRegionAvail().x));
     if (ImGui::BeginCombo("##other", other.title.c_str())) {
-        for (int i = 0; i < (int)apks.size(); ++i)
-            if (apks[(size_t)i] != &apk && ImGui::Selectable(apks[(size_t)i]->title.c_str(), i == compareWith_)) compareWith_ = i;
+        for (int i = 0; i < static_cast<int>(apks.size()); ++i)
+            if (apks[static_cast<size_t>(i)] != &apk && ImGui::Selectable(apks[static_cast<size_t>(i)]->title.c_str(), i == compareWith_)) compareWith_ = i;
         ImGui::EndCombo();
     }
     ImGui::SameLine();
@@ -1399,29 +1403,29 @@ void AnalysisPanel::drawCompare(Root& apk) {
     if (!workspace_.analysis().get(apk.title) || !workspace_.analysis().get(other.title))
         ImGui::TextDisabled("Tip: analyse both APKs to also compare classes and method bodies.");
     if (!diffValid_) return;
-    ImGui::TextColored(kAccent, "%s", diffTitle_.c_str());
+    ImGui::TextColored(kAccent(), "%s", diffTitle_.c_str());
     ImGui::Text("%zu entries changed, %zu unchanged", diff_.entries.size(), diff_.entriesUnchanged);
     const auto list = [](const char* title, const std::vector<std::string>& items) {
         char header[128];
         std::snprintf(header, sizeof header, "%s (%zu)###%s", title, items.size(), title);
         if (ImGui::CollapsingHeader(header)) {
-            ImGui::BeginChild(title, ImVec2(0, std::min(240.f, 20.f + 18.f * (float)items.size())), ImGuiChildFlags_Borders);
+            ImGui::BeginChild(title, ImVec2(0, std::min(240.f, 20.f + 18.f * static_cast<float>(items.size()))), ImGuiChildFlags_Borders);
             ImGuiListClipper clipper;
-            clipper.Begin((int)items.size());
+            clipper.Begin(static_cast<int>(items.size()));
             while (clipper.Step())
-                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) ImGui::TextUnformatted(items[(size_t)i].c_str());
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) ImGui::TextUnformatted(items[static_cast<size_t>(i)].c_str());
             ImGui::EndChild();
         }
     };
     if (ImGui::CollapsingHeader("Archive entries")) {
         ImGui::BeginChild("##entries", ImVec2(0, 240.f), ImGuiChildFlags_Borders);
         for (const auto& e : diff_.entries) {
-            const ImVec4 col = e.kind == ApkDiff::Kind::Added ? ImVec4(0.4f, 0.8f, 0.4f, 1.f)
-                               : e.kind == ApkDiff::Kind::Removed ? ImVec4(0.9f, 0.45f, 0.4f, 1.f)
-                                                                  : ImVec4(0.9f, 0.8f, 0.4f, 1.f);
+            const ImVec4 col = e.kind == ApkDiff::Kind::Added ? theme::vec(Col::Success)
+                               : e.kind == ApkDiff::Kind::Removed ? theme::vec(Col::Error)
+                                                                  : theme::vec(Col::Warning);
             ImGui::TextColored(col, "%-8s", ApkDiff::kindName(e.kind));
             ImGui::SameLine();
-            ImGui::Text("%s  (%llu -> %llu bytes)", e.path.c_str(), (unsigned long long)e.sizeA, (unsigned long long)e.sizeB);
+            ImGui::Text("%s  (%llu -> %llu bytes)", e.path.c_str(), static_cast<unsigned long long>(e.sizeA), static_cast<unsigned long long>(e.sizeB));
         }
         ImGui::EndChild();
     }
@@ -1453,11 +1457,11 @@ void AnalysisPanel::drawResources(Root& apk) {
         resType_ = 0;
         resKey_ = "\x01";
     }
-    ui::wrappedColored(kDim, table->packageName() + " - " + std::to_string(table->size()) + " resources");
+    ui::wrappedColored(kDim(), table->packageName() + " - " + std::to_string(table->size()) + " resources");
     ImGui::SetNextItemWidth(std::min(ui::em(9.f), ImGui::GetContentRegionAvail().x));
-    if (ImGui::BeginCombo("##restype", resTypes_[(size_t)resType_].c_str())) {
-        for (int i = 0; i < (int)resTypes_.size(); ++i)
-            if (ImGui::Selectable(resTypes_[(size_t)i].c_str(), i == resType_)) resType_ = i;
+    if (ImGui::BeginCombo("##restype", resTypes_[static_cast<size_t>(resType_)].c_str())) {
+        for (int i = 0; i < static_cast<int>(resTypes_.size()); ++i)
+            if (ImGui::Selectable(resTypes_[static_cast<size_t>(i)].c_str(), i == resType_)) resType_ = i;
         ImGui::EndCombo();
     }
     ui::sameLineIfFits(ui::em(10.f));
@@ -1466,7 +1470,7 @@ void AnalysisPanel::drawResources(Root& apk) {
     const std::string key = std::to_string(resType_) + "|" + resFilter_;
     if (key != resKey_) {
         resKey_ = key;
-        resItems_ = table->list(resType_ ? resTypes_[(size_t)resType_] : std::string(), resFilter_, 50000);
+        resItems_ = table->list(resType_ ? resTypes_[static_cast<size_t>(resType_)] : std::string(), resFilter_, 50000);
     }
     // Narrow panels show "type/name" + value; wide ones add id and type columns.
     const bool wideRes = ImGui::GetContentRegionAvail().x > ui::em(30.f);
@@ -1481,10 +1485,10 @@ void AnalysisPanel::drawResources(Root& apk) {
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.2f);
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
-        clipper.Begin((int)resItems_.size());
+        clipper.Begin(static_cast<int>(resItems_.size()));
         while (clipper.Step())
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                const ResourceTable::Item& it = resItems_[(size_t)i];
+                const ResourceTable::Item& it = resItems_[static_cast<size_t>(i)];
                 ImGui::PushID(i);
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -1503,7 +1507,7 @@ void AnalysisPanel::drawResources(Root& apk) {
                         // Every method is scanned: run it off the UI thread.
                         xrefs_.clear();
                         xrefTitle_ = "Code referencing @" + it.type + "/" + it.name + " (searching...)";
-                        const std::string literal = std::to_string((int32_t)it.id);
+                        const std::string literal = std::to_string(static_cast<int32_t>(it.id));
                         xrefJob_ = std::async(std::launch::async, [a, literal] {
                             std::vector<XrefRow> rows;
                             for (const auto& cls : a->classes())

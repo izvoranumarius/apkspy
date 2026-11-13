@@ -1,4 +1,5 @@
 #include "ui/MediaViews.hpp"
+#include "app/Theme.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -26,16 +27,16 @@ namespace {
 
 std::string clock(double seconds) {
     if (seconds < 0) seconds = 0;
-    const int total = (int)seconds;
+    const int total = static_cast<int>(seconds);
     char b[32];
-    std::snprintf(b, sizeof b, "%d:%02d.%d", total / 60, total % 60, (int)((seconds - total) * 10));
+    std::snprintf(b, sizeof b, "%d:%02d.%d", total / 60, total % 60, static_cast<int>((seconds - total) * 10));
     return b;
 }
 
 // Hex / back toggle shared by the media views.
 bool hexToggle(bool& showHex) {
     ui::sameLineIfFits(ui::em(4.f));
-    if (ImGui::SmallButton(showHex ? "Back" : "Hex")) showHex = !showHex;
+    if (ui::smallButton(showHex ? "Back" : "Hex")) showHex = !showHex;
     return showHex;
 }
 
@@ -47,11 +48,11 @@ std::string nameString(const stbtt_fontinfo& font, int nameId) {
     std::string out;
     if (s) {
         for (int i = 0; i + 1 < len; i += 2)
-            if (s[i] == 0 && (unsigned char)s[i + 1] >= 0x20 && (unsigned char)s[i + 1] < 0x7F) out.push_back(s[i + 1]);
+            if (s[i] == 0 && static_cast<unsigned char>(s[i + 1]) >= 0x20 && static_cast<unsigned char>(s[i + 1]) < 0x7F) out.push_back(s[i + 1]);
         return out;
     }
     s = stbtt_GetFontNameString(&font, &len, STBTT_PLATFORM_ID_MAC, 0, 0, nameId);
-    if (s) out.assign(s, (size_t)len);
+    if (s) out.assign(s, static_cast<size_t>(len));
     return out;
 }
 
@@ -81,11 +82,11 @@ void AudioView::draw(const std::vector<uint8_t>& bytes) {
     }
     ImGui::Separator();
     if (!player_.isOpen()) {
-        ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.35f, 1.f), "%s", error_.c_str());
+        ImGui::TextColored(theme::vec(Col::Warning), "%s", error_.c_str());
         ImGui::TextDisabled("Use Hex to inspect the file, or export it.");
         return;
     }
-    if (!player_.deviceError().empty()) ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.35f, 1.f), "%s", player_.deviceError().c_str());
+    if (!player_.deviceError().empty()) ImGui::TextColored(theme::vec(Col::Warning), "%s", player_.deviceError().c_str());
 
     // Transport. The controls stay out of keyboard navigation so Space always
     // means play / pause (nav would otherwise claim it for the clicked button).
@@ -107,9 +108,9 @@ void AudioView::draw(const std::vector<uint8_t>& bytes) {
     ImGui::Text("%s / %s", clock(player_.position()).c_str(), clock(player_.duration()).c_str());
     ImGui::SameLine();
     ImGui::SetNextItemWidth(ui::em(8.f));
-    int percent = (int)std::lround(volume_ * 100.f);
+    int percent = static_cast<int>(std::lround(volume_ * 100.f));
     if (ImGui::SliderInt("##vol", &percent, 0, 100, "Volume %d%%")) {
-        volume_ = (float)percent / 100.f;
+        volume_ = static_cast<float>(percent) / 100.f;
         player_.setVolume(volume_);
     }
 
@@ -123,23 +124,23 @@ void AudioView::draw(const std::vector<uint8_t>& bytes) {
     ImGui::InvisibleButton("##wave", size);
     ImGui::PopItemFlag();
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), IM_COL32(24, 26, 30, 255));
+    dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), theme::u32(Col::EditorBackground));
     const float mid = p.y + size.y * 0.5f;
     const std::vector<float> peaks = player_.peaks();
     if (peaks.empty()) {
-        dl->AddText(ImVec2(p.x + 8.f, mid - ImGui::GetTextLineHeight() * 0.5f), IM_COL32(120, 120, 120, 255), "Reading waveform...");
+        dl->AddText(ImVec2(p.x + 8.f, mid - ImGui::GetTextLineHeight() * 0.5f), theme::u32(Col::TextMuted), "Reading waveform...");
     } else {
-        const int columns = std::max(1, (int)size.x);
+        const int columns = std::max(1, static_cast<int>(size.x));
         for (int x = 0; x < columns; ++x) {
-            const float v = peaks[(size_t)x * peaks.size() / (size_t)columns];
+            const float v = peaks[static_cast<size_t>(x) * peaks.size() / static_cast<size_t>(columns)];
             const float h = std::max(1.f, v * size.y * 0.48f);
-            dl->AddLine(ImVec2(p.x + (float)x + 0.5f, mid - h), ImVec2(p.x + (float)x + 0.5f, mid + h), IM_COL32(70, 150, 220, 255));
+            dl->AddLine(ImVec2(p.x + static_cast<float>(x) + 0.5f, mid - h), ImVec2(p.x + static_cast<float>(x) + 0.5f, mid + h), theme::u32(Col::Accent));
         }
     }
     const double d = player_.duration();
     if (d > 0) {
-        const float x = p.x + (float)(player_.position() / d) * size.x;
-        dl->AddLine(ImVec2(x, p.y), ImVec2(x, p.y + size.y), IM_COL32(255, 255, 255, 220), 1.5f);
+        const float x = p.x + static_cast<float>(player_.position() / d) * size.x;
+        dl->AddLine(ImVec2(x, p.y), ImVec2(x, p.y + size.y), theme::u32(Col::Text, 0.9f), 1.5f);
         if (ImGui::IsItemActive()) {
             const float t = std::clamp((ImGui::GetIO().MousePos.x - p.x) / size.x, 0.f, 1.f);
             player_.seek(t * d);
@@ -181,7 +182,7 @@ void VideoView::draw(const std::vector<uint8_t>& bytes) {
     ImGui::Separator();
     if (!player_.isOpen()) {
         ImGui::PushTextWrapPos(0.f);
-        ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.35f, 1.f), "%s", error_.c_str());
+        ImGui::TextColored(theme::vec(Col::Warning), "%s", error_.c_str());
         ImGui::PopTextWrapPos();
         ImGui::TextDisabled("Use Hex to inspect the file, or export it.");
         return;
@@ -208,9 +209,9 @@ void VideoView::draw(const std::vector<uint8_t>& bytes) {
     if (player_.hasAudio()) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ui::em(8.f));
-        int percent = (int)std::lround(volume_ * 100.f);
+        int percent = static_cast<int>(std::lround(volume_ * 100.f));
         if (ImGui::SliderInt("##vol", &percent, 0, 100, "Volume %d%%")) {
-            volume_ = (float)percent / 100.f;
+            volume_ = static_cast<float>(percent) / 100.f;
             player_.setVolume(volume_);
         }
     }
@@ -221,10 +222,10 @@ void VideoView::draw(const std::vector<uint8_t>& bytes) {
     ImGui::InvisibleButton("##seek", ImVec2(barW, barH + 6.f));
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float y = bp.y + 3.f;
-    dl->AddRectFilled(ImVec2(bp.x, y), ImVec2(bp.x + barW, y + barH), IM_COL32(50, 52, 58, 255), barH * 0.5f);
+    dl->AddRectFilled(ImVec2(bp.x, y), ImVec2(bp.x + barW, y + barH), theme::u32(Col::Control), barH * 0.5f);
     if (d > 0) {
-        const float t = (float)std::clamp(player_.position() / d, 0.0, 1.0);
-        dl->AddRectFilled(ImVec2(bp.x, y), ImVec2(bp.x + barW * t, y + barH), IM_COL32(0, 122, 204, 255), barH * 0.5f);
+        const float t = static_cast<float>(std::clamp(player_.position() / d, 0.0, 1.0));
+        dl->AddRectFilled(ImVec2(bp.x, y), ImVec2(bp.x + barW * t, y + barH), theme::u32(Col::Accent), barH * 0.5f);
         if (ImGui::IsItemActive()) player_.seek(std::clamp((ImGui::GetIO().MousePos.x - bp.x) / barW, 0.f, 1.f) * d);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", clock(std::clamp((ImGui::GetIO().MousePos.x - bp.x) / barW, 0.f, 1.f) * d).c_str());
     }
@@ -241,12 +242,12 @@ void VideoView::draw(const std::vector<uint8_t>& bytes) {
     }
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     if (!texture_ || avail.x < 8.f || avail.y < 8.f) return;
-    const float scale = std::min(avail.x / (float)texture_->width(), avail.y / (float)texture_->height());
-    const ImVec2 size((float)texture_->width() * scale, (float)texture_->height() * scale);
+    const float scale = std::min(avail.x / static_cast<float>(texture_->width()), avail.y / static_cast<float>(texture_->height()));
+    const ImVec2 size(static_cast<float>(texture_->width()) * scale, static_cast<float>(texture_->height()) * scale);
     const ImVec2 p = ImGui::GetCursorScreenPos();
     dl->AddRectFilled(p, ImVec2(p.x + avail.x, p.y + avail.y), IM_COL32(0, 0, 0, 255));
     ImGui::SetCursorScreenPos(ImVec2(p.x + (avail.x - size.x) * 0.5f, p.y + (avail.y - size.y) * 0.5f));
-    ImGui::Image((ImTextureID)(intptr_t)texture_->id(), size);
+    ImGui::Image(static_cast<ImTextureID>(static_cast<intptr_t>(texture_->id())), size);
     // Clicking the picture plays or pauses, as in most players.
     if (ImGui::IsItemClicked()) {
         if (player_.playing()) player_.pause();
@@ -281,31 +282,31 @@ void FontView::render(const std::vector<uint8_t>& bytes) {
     const int gridCell = 40, gridCols = width / gridCell;
     const int gridGlyphs = std::min(glyphs_, gridCols * 8);
     int height = 0;
-    for (float s : kSizes) height += (int)(s * 1.35f);
+    for (float s : kSizes) height += static_cast<int>(s * 1.35f);
     height += 12 + (gridGlyphs + gridCols - 1) / gridCols * gridCell;
-    std::vector<uint8_t> alpha((size_t)width * (size_t)height, 0);
+    std::vector<uint8_t> alpha(static_cast<size_t>(width) * static_cast<size_t>(height), 0);
 
     int y = 0;
     for (float px : kSizes) {
         const float scale = stbtt_ScaleForPixelHeight(&font, px);
         int ascent = 0, descent = 0, gap = 0;
         stbtt_GetFontVMetrics(&font, &ascent, &descent, &gap);
-        const int baseline = y + (int)std::lround(ascent * scale);
+        const int baseline = y + static_cast<int>(std::lround(ascent * scale));
         float x = 4.f;
         for (const char* c = kSample; *c; ++c) {
             int advance = 0, lsb = 0;
             stbtt_GetCodepointHMetrics(&font, *c, &advance, &lsb);
             int x0, y0, x1, y1;
             stbtt_GetCodepointBitmapBox(&font, *c, scale, scale, &x0, &y0, &x1, &y1);
-            const int gx = (int)x + x0, gy = baseline + y0;
+            const int gx = static_cast<int>(x) + x0, gy = baseline + y0;
             const int gw = x1 - x0, gh = y1 - y0;
             if (gx >= 0 && gy >= 0 && gx + gw < width && gy + gh < height && gw > 0 && gh > 0)
-                stbtt_MakeCodepointBitmap(&font, &alpha[(size_t)gy * width + (size_t)gx], gw, gh, width, scale, scale, *c);
+                stbtt_MakeCodepointBitmap(&font, &alpha[static_cast<size_t>(gy) * width + static_cast<size_t>(gx)], gw, gh, width, scale, scale, *c);
             x += advance * scale;
             if (c[1]) x += scale * stbtt_GetCodepointKernAdvance(&font, c[0], c[1]);
             if (x > width - px) break;
         }
-        y += (int)(px * 1.35f);
+        y += static_cast<int>(px * 1.35f);
     }
     y += 12;
     const float gridScale = stbtt_ScaleForPixelHeight(&font, gridCell * 0.7f);
@@ -316,9 +317,9 @@ void FontView::render(const std::vector<uint8_t>& bytes) {
         const int cx = (g % gridCols) * gridCell + (gridCell - gw) / 2;
         const int cy = y + (g / gridCols) * gridCell + (gridCell - gh) / 2;
         if (gw > 0 && gh > 0 && cx + gw < width && cy + gh < height)
-            stbtt_MakeGlyphBitmap(&font, &alpha[(size_t)cy * width + (size_t)cx], gw, gh, width, gridScale, gridScale, g);
+            stbtt_MakeGlyphBitmap(&font, &alpha[static_cast<size_t>(cy) * width + static_cast<size_t>(cx)], gw, gh, width, gridScale, gridScale, g);
     }
-    std::vector<uint8_t> rgba((size_t)width * (size_t)height * 4);
+    std::vector<uint8_t> rgba(static_cast<size_t>(width) * static_cast<size_t>(height) * 4);
     for (size_t i = 0; i < alpha.size(); ++i) {
         rgba[i * 4 + 0] = 230;
         rgba[i * 4 + 1] = 230;
@@ -331,7 +332,7 @@ void FontView::render(const std::vector<uint8_t>& bytes) {
 void FontView::draw(const std::vector<uint8_t>& bytes) {
     if (!rendered_) render(bytes);
     if (!error_.empty()) {
-        ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.35f, 1.f), "%s", error_.c_str());
+        ImGui::TextColored(theme::vec(Col::Warning), "%s", error_.c_str());
     } else {
         ImGui::TextUnformatted(fullName_.empty() ? (family_.empty() ? "Font" : family_.c_str()) : fullName_.c_str());
         ImGui::SameLine();
@@ -345,6 +346,6 @@ void FontView::draw(const std::vector<uint8_t>& bytes) {
     ImGui::Separator();
     if (!texture_) return;
     ImGui::BeginChild("##font", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
-    ImGui::Image((ImTextureID)(intptr_t)texture_->id(), ImVec2((float)texture_->width(), (float)texture_->height()));
+    ImGui::Image(static_cast<ImTextureID>(static_cast<intptr_t>(texture_->id())), ImVec2(static_cast<float>(texture_->width()), static_cast<float>(texture_->height())));
     ImGui::EndChild();
 }

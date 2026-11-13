@@ -29,9 +29,9 @@ namespace {
 
 std::wstring widen(const std::string& s) {
     if (s.empty()) return {};
-    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
-    std::wstring w((size_t)n, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), w.data(), n);
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    std::wstring w(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
     return w;
 }
 
@@ -73,9 +73,10 @@ bool Pty::start(const std::vector<std::string>& argv, const std::string& cwd, co
                 int cols, int rows, std::string& error) {
     Impl& d = *impl_;
     HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
-    d.create = (CreatePseudoConsoleFn)(void*)GetProcAddress(kernel, "CreatePseudoConsole");
-    d.resize = (ResizePseudoConsoleFn)(void*)GetProcAddress(kernel, "ResizePseudoConsole");
-    d.close = (ClosePseudoConsoleFn)(void*)GetProcAddress(kernel, "ClosePseudoConsole");
+    // FARPROC -> the real signature: function-pointer to function-pointer is a reinterpret_cast.
+    d.create = reinterpret_cast<CreatePseudoConsoleFn>(GetProcAddress(kernel, "CreatePseudoConsole"));
+    d.resize = reinterpret_cast<ResizePseudoConsoleFn>(GetProcAddress(kernel, "ResizePseudoConsole"));
+    d.close = reinterpret_cast<ClosePseudoConsoleFn>(GetProcAddress(kernel, "ClosePseudoConsole"));
     if (!d.create || !d.resize || !d.close) {
         error = "The terminal needs Windows 10 version 1809 or later (ConPTY)";
         return false;
@@ -85,7 +86,7 @@ bool Pty::start(const std::vector<std::string>& argv, const std::string& cwd, co
         error = "Could not create the terminal pipes";
         return false;
     }
-    const COORD size{(SHORT)std::max(1, cols), (SHORT)std::max(1, rows)};
+    const COORD size{static_cast<SHORT>(std::max(1, cols)), static_cast<SHORT>(std::max(1, rows))};
     if (FAILED(d.create(size, inRead, outWrite, 0, &d.console))) {
         CloseHandle(inRead);
         CloseHandle(outWrite);
@@ -123,6 +124,10 @@ bool Pty::start(const std::vector<std::string>& argv, const std::string& cwd, co
     STARTUPINFOEXW si{};
     si.StartupInfo.cb = sizeof(si);
     si.lpAttributeList = attrs;
+    // Explicit (null) std handles: otherwise a redirected stdin/stdout of
+    // ApkSpy itself (launched from a script or IDE) is handed to the shell
+    // instead of the pseudo-console, and the shell exits at once on EOF.
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     PROCESS_INFORMATION pi{};
     std::wstring cmd = commandLine(argv);
     const std::wstring dir = widen(cwd);
@@ -156,7 +161,7 @@ bool Pty::start(const std::vector<std::string>& argv, const std::string& cwd, co
             if (pending_.size() > (8u << 20)) pending_.erase(0, pending_.size() - (4u << 20));
         }
         DWORD code = 0;
-        if (impl_->process && GetExitCodeProcess(impl_->process, &code)) exitCode_ = (int)code;
+        if (impl_->process && GetExitCodeProcess(impl_->process, &code)) exitCode_ = static_cast<int>(code);
         running_ = false;
     });
     return true;
@@ -168,18 +173,18 @@ bool Pty::running() const {
     if (!running_.load() || !impl_->process) return false;
     if (WaitForSingleObject(impl_->process, 0) != WAIT_OBJECT_0) return true;
     DWORD code = 0;
-    if (GetExitCodeProcess(impl_->process, &code)) const_cast<Pty*>(this)->exitCode_ = (int)code;
+    if (GetExitCodeProcess(impl_->process, &code)) const_cast<Pty*>(this)->exitCode_ = static_cast<int>(code);
     return false;
 }
 
 void Pty::write(const std::string& bytes) {
     if (!impl_->inWrite || bytes.empty()) return;
     DWORD written = 0;
-    WriteFile(impl_->inWrite, bytes.data(), (DWORD)bytes.size(), &written, nullptr);
+    WriteFile(impl_->inWrite, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
 }
 
 void Pty::resize(int cols, int rows) {
-    if (impl_->console && impl_->resize) impl_->resize(impl_->console, COORD{(SHORT)std::max(1, cols), (SHORT)std::max(1, rows)});
+    if (impl_->console && impl_->resize) impl_->resize(impl_->console, COORD{static_cast<SHORT>(std::max(1, cols)), static_cast<SHORT>(std::max(1, rows))});
 }
 
 void Pty::stop() {
@@ -243,8 +248,8 @@ bool Pty::start(const std::vector<std::string>& argv, const std::string& cwd, co
         return false;
     }
     struct winsize ws{};
-    ws.ws_col = (unsigned short)std::max(1, cols);
-    ws.ws_row = (unsigned short)std::max(1, rows);
+    ws.ws_col = static_cast<unsigned short>(std::max(1, cols));
+    ws.ws_row = static_cast<unsigned short>(std::max(1, rows));
     int fd = -1;
     const pid_t pid = forkpty(&fd, nullptr, nullptr, &ws);
     if (pid < 0) {
@@ -274,7 +279,7 @@ bool Pty::start(const std::vector<std::string>& argv, const std::string& cwd, co
             const ssize_t n = read(impl_->fd, buf, sizeof buf);
             if (n <= 0) break;
             std::lock_guard<std::mutex> lock(mutex_);
-            pending_.append(buf, (size_t)n);
+            pending_.append(buf, static_cast<size_t>(n));
             if (pending_.size() > (8u << 20)) pending_.erase(0, pending_.size() - (4u << 20));
         }
         int status = 0;
@@ -292,15 +297,15 @@ void Pty::write(const std::string& bytes) {
     while (done < bytes.size()) {
         const ssize_t n = ::write(impl_->fd, bytes.data() + done, bytes.size() - done);
         if (n <= 0) break;
-        done += (size_t)n;
+        done += static_cast<size_t>(n);
     }
 }
 
 void Pty::resize(int cols, int rows) {
     if (impl_->fd < 0) return;
     struct winsize ws{};
-    ws.ws_col = (unsigned short)std::max(1, cols);
-    ws.ws_row = (unsigned short)std::max(1, rows);
+    ws.ws_col = static_cast<unsigned short>(std::max(1, cols));
+    ws.ws_row = static_cast<unsigned short>(std::max(1, rows));
     ioctl(impl_->fd, TIOCSWINSZ, &ws);
 }
 

@@ -7,6 +7,7 @@
 #include <vector>
 #include "document/SyntaxHighlighter.hpp"
 #include "image/Texture.hpp"
+#include "imgui.h"
 #include "core/TreeNode.hpp"
 #include "core/RootKind.hpp"
 

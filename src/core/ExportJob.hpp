@@ -37,7 +37,7 @@ public:
 
     bool busy() const { return state_ == State::Running; }
     State state() const { return state_; }
-    int total() const { return (int)items_.size(); }
+    int total() const { return static_cast<int>(items_.size()); }
     int done() const { return done_; }
     int failed() const { return failed_; }
     const std::string& currentName() const { return currentName_; }

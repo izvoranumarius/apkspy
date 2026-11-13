@@ -122,7 +122,7 @@ const std::array<OpInfo, 256>& table() {
     return t;
 }
 
-int32_t s4(uint32_t v) { return (v & 0x8) ? (int32_t)v - 16 : (int32_t)v; }
+int32_t s4(uint32_t v) { return (v & 0x8) ? static_cast<int32_t>(v) - 16 : static_cast<int32_t>(v); }
 
 void appendf(std::string& out, const char* fmt, ...) {
     char buf[256];
@@ -130,14 +130,14 @@ void appendf(std::string& out, const char* fmt, ...) {
     va_start(ap, fmt);
     int n = std::vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
-    if (n > 0) out.append(buf, (size_t)std::min(n, (int)sizeof buf - 1));
+    if (n > 0) out.append(buf, static_cast<size_t>(std::min(n, static_cast<int>(sizeof buf) - 1)));
 }
 
 // Escapes a string constant for the listing (smali style, ASCII-safe).
 std::string quote(const std::string& s, size_t max = 400) {
     std::string out = "\"";
     for (size_t i = 0; i < s.size() && i < max; ++i) {
-        const unsigned char c = (unsigned char)s[i];
+        const unsigned char c = static_cast<unsigned char>(s[i]);
         switch (c) {
         case '"': out += "\\\""; break;
         case '\\': out += "\\\\"; break;
@@ -146,7 +146,7 @@ std::string quote(const std::string& s, size_t max = 400) {
         case '\t': out += "\\t"; break;
         default:
             if (c < 0x20) appendf(out, "\\u%04x", c);
-            else out.push_back((char)c);
+            else out.push_back(static_cast<char>(c));
         }
     }
     if (s.size() > max) out += "...";
@@ -177,7 +177,7 @@ Insn decode(const DexFile::CodeItem& code, uint32_t pc) {
     in.pc = pc;
     if (pc >= code.insnsSize) return in;
     const uint16_t u0 = code.unit(pc);
-    in.opcode = (uint8_t)(u0 & 0xFF);
+    in.opcode = static_cast<uint8_t>(u0 & 0xFF);
 
     // Data payloads live inside the instruction stream, introduced by a nop
     // whose high byte identifies the payload kind.
@@ -185,14 +185,14 @@ Insn decode(const DexFile::CodeItem& code, uint32_t pc) {
         const uint16_t ident = u0;
         uint32_t size = 0;
         if (ident == 0x0100 && pc + 2 <= code.insnsSize) {  // packed-switch: size, first_key, targets
-            size = 4 + (uint32_t)code.unit(pc + 1) * 2;
+            size = 4 + static_cast<uint32_t>(code.unit(pc + 1)) * 2;
         } else if (ident == 0x0200 && pc + 2 <= code.insnsSize) {  // sparse-switch: size, keys, targets
-            size = 2 + (uint32_t)code.unit(pc + 1) * 4;
+            size = 2 + static_cast<uint32_t>(code.unit(pc + 1)) * 4;
         } else if (ident == 0x0300 && pc + 4 <= code.insnsSize) {  // fill-array-data
             const uint32_t width = code.unit(pc + 1);
-            const uint32_t count = code.unit(pc + 2) | ((uint32_t)code.unit(pc + 3) << 16);
-            const uint64_t bytes = (uint64_t)width * count;
-            size = (uint32_t)std::min<uint64_t>(4 + (bytes + 1) / 2, code.insnsSize);
+            const uint32_t count = code.unit(pc + 2) | (static_cast<uint32_t>(code.unit(pc + 3)) << 16);
+            const uint64_t bytes = static_cast<uint64_t>(width) * count;
+            size = static_cast<uint32_t>(std::min<uint64_t>(4 + (bytes + 1) / 2, code.insnsSize));
         }
         if (size > 0 && pc + size <= code.insnsSize) {
             in.payload = true;
@@ -217,15 +217,15 @@ Insn decode(const DexFile::CodeItem& code, uint32_t pc) {
     case F::k12x: in.regs[0] = a4; in.regs[1] = b4; in.regCount = 2; break;
     case F::k11n: in.regs[0] = a4; in.regCount = 1; in.literal = s4(b4); in.hasLiteral = true; break;
     case F::k11x: in.regs[0] = a8; in.regCount = 1; break;
-    case F::k10t: in.branch = (int8_t)a8; in.hasBranch = true; break;
-    case F::k20t: in.branch = (int16_t)u(1); in.hasBranch = true; break;
+    case F::k10t: in.branch = static_cast<int8_t>(a8); in.hasBranch = true; break;
+    case F::k20t: in.branch = static_cast<int16_t>(u(1)); in.hasBranch = true; break;
     case F::k22x: in.regs[0] = a8; in.regs[1] = u(1); in.regCount = 2; break;
-    case F::k21t: in.regs[0] = a8; in.regCount = 1; in.branch = (int16_t)u(1); in.hasBranch = true; break;
-    case F::k21s: in.regs[0] = a8; in.regCount = 1; in.literal = (int16_t)u(1); in.hasLiteral = true; break;
+    case F::k21t: in.regs[0] = a8; in.regCount = 1; in.branch = static_cast<int16_t>(u(1)); in.hasBranch = true; break;
+    case F::k21s: in.regs[0] = a8; in.regCount = 1; in.literal = static_cast<int16_t>(u(1)); in.hasLiteral = true; break;
     case F::k21h:
         in.regs[0] = a8;
         in.regCount = 1;
-        in.literal = in.opcode == 0x15 ? (int64_t)(int32_t)(u(1) << 16) : (int64_t)((uint64_t)u(1) << 48);
+        in.literal = in.opcode == 0x15 ? static_cast<int64_t>(static_cast<int32_t>(u(1) << 16)) : static_cast<int64_t>(static_cast<uint64_t>(u(1)) << 48);
         in.hasLiteral = true;
         break;
     case F::k21c: in.regs[0] = a8; in.regCount = 1; in.index = u(1); break;
@@ -234,24 +234,24 @@ Insn decode(const DexFile::CodeItem& code, uint32_t pc) {
         break;
     case F::k22b:
         in.regs[0] = a8; in.regs[1] = u(1) & 0xFF; in.regCount = 2;
-        in.literal = (int8_t)(u(1) >> 8); in.hasLiteral = true;
+        in.literal = static_cast<int8_t>(u(1) >> 8); in.hasLiteral = true;
         break;
     case F::k22t:
-        in.regs[0] = a4; in.regs[1] = b4; in.regCount = 2; in.branch = (int16_t)u(1); in.hasBranch = true;
+        in.regs[0] = a4; in.regs[1] = b4; in.regCount = 2; in.branch = static_cast<int16_t>(u(1)); in.hasBranch = true;
         break;
     case F::k22s:
-        in.regs[0] = a4; in.regs[1] = b4; in.regCount = 2; in.literal = (int16_t)u(1); in.hasLiteral = true;
+        in.regs[0] = a4; in.regs[1] = b4; in.regCount = 2; in.literal = static_cast<int16_t>(u(1)); in.hasLiteral = true;
         break;
     case F::k22c: case F::k22cs:
         in.regs[0] = a4; in.regs[1] = b4; in.regCount = 2; in.index = u(1);
         break;
-    case F::k30t: in.branch = (int32_t)(u(1) | (u(2) << 16)); in.hasBranch = true; break;
+    case F::k30t: in.branch = static_cast<int32_t>(u(1) | (u(2) << 16)); in.hasBranch = true; break;
     case F::k32x: in.regs[0] = u(1); in.regs[1] = u(2); in.regCount = 2; break;
     case F::k31i:
-        in.regs[0] = a8; in.regCount = 1; in.literal = (int32_t)(u(1) | (u(2) << 16)); in.hasLiteral = true;
+        in.regs[0] = a8; in.regCount = 1; in.literal = static_cast<int32_t>(u(1) | (u(2) << 16)); in.hasLiteral = true;
         break;
     case F::k31t:
-        in.regs[0] = a8; in.regCount = 1; in.branch = (int32_t)(u(1) | (u(2) << 16)); in.hasBranch = true;
+        in.regs[0] = a8; in.regCount = 1; in.branch = static_cast<int32_t>(u(1) | (u(2) << 16)); in.hasBranch = true;
         break;
     case F::k31c: in.regs[0] = a8; in.regCount = 1; in.index = u(1) | (u(2) << 16); break;
     case F::k35c: case F::k35ms: case F::k35mi: case F::k45cc: {
@@ -261,7 +261,7 @@ Insn decode(const DexFile::CodeItem& code, uint32_t pc) {
         const uint32_t list[5] = {regsUnit & 0xF, (regsUnit >> 4) & 0xF, (regsUnit >> 8) & 0xF,
                                   (regsUnit >> 12) & 0xF, g};
         for (uint32_t k = 0; k < count; ++k) in.regs[k] = list[k];
-        in.regCount = (uint8_t)count;
+        in.regCount = static_cast<uint8_t>(count);
         in.index = u(1);
         if (info.format == F::k45cc) in.index2 = u(3);
         break;
@@ -269,14 +269,14 @@ Insn decode(const DexFile::CodeItem& code, uint32_t pc) {
     case F::k3rc: case F::k3rms: case F::k3rmi: case F::k4rcc:
         in.range = true;
         in.regs[0] = u(2);
-        in.regCount = (uint8_t)std::min<uint32_t>(a8, 255);
+        in.regCount = static_cast<uint8_t>(std::min<uint32_t>(a8, 255));
         in.index = u(1);
         if (info.format == F::k4rcc) in.index2 = u(3);
         break;
     case F::k51l: {
         uint64_t v = 0;
-        for (int k = 0; k < 4; ++k) v |= (uint64_t)u((uint32_t)(1 + k)) << (16 * k);
-        in.regs[0] = a8; in.regCount = 1; in.literal = (int64_t)v; in.hasLiteral = true;
+        for (int k = 0; k < 4; ++k) v |= static_cast<uint64_t>(u(static_cast<uint32_t>(1 + k))) << (16 * k);
+        in.regs[0] = a8; in.regCount = 1; in.literal = static_cast<int64_t>(v); in.hasLiteral = true;
         break;
     }
     case F::k20bc: in.index = u(1); break;
@@ -294,11 +294,11 @@ std::vector<uint32_t> switchTargets(const DexFile::CodeItem& code, uint32_t swit
     if (ident == 0x0100) targetsAt = payloadPc + 4;
     else if (ident == 0x0200) targetsAt = payloadPc + 2 + count * 2;
     else return out;
-    if ((uint64_t)targetsAt + (uint64_t)count * 2 > code.insnsSize) return out;
+    if (static_cast<uint64_t>(targetsAt) + static_cast<uint64_t>(count) * 2 > code.insnsSize) return out;
     out.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
-        const int32_t rel = (int32_t)(code.unit(targetsAt + 2 * i) | ((uint32_t)code.unit(targetsAt + 2 * i + 1) << 16));
-        out.push_back((uint32_t)((int64_t)switchPc + rel));
+        const int32_t rel = static_cast<int32_t>(code.unit(targetsAt + 2 * i) | (static_cast<uint32_t>(code.unit(targetsAt + 2 * i + 1)) << 16));
+        out.push_back(static_cast<uint32_t>(static_cast<int64_t>(switchPc) + rel));
     }
     return out;
 }
@@ -344,7 +344,7 @@ void appendInsn(const DexFile& dex, const Insn& in, std::string& out) {
     out += info.name;
     const auto target = [&](int32_t rel) {
         char buf[32];
-        std::snprintf(buf, sizeof buf, ":L%04x", (unsigned)((int64_t)in.pc + rel));
+        std::snprintf(buf, sizeof buf, ":L%04x", static_cast<unsigned>(static_cast<int64_t>(in.pc) + rel));
         return std::string(buf);
     };
     switch (info.format) {
@@ -375,8 +375,8 @@ void appendInsn(const DexFile& dex, const Insn& in, std::string& out) {
     }
     if (in.hasLiteral) {
         sep();
-        if (in.literal < 0) appendf(out, "-0x%llx", (unsigned long long)(-(in.literal + 1)) + 1ull);
-        else appendf(out, "0x%llx", (unsigned long long)in.literal);
+        if (in.literal < 0) appendf(out, "-0x%llx", static_cast<unsigned long long>(-(in.literal + 1)) + 1ull);
+        else appendf(out, "0x%llx", static_cast<unsigned long long>(in.literal));
     }
     if (info.ref != R::None && in.index != DexFile::kNoIndex) {
         sep();
@@ -417,10 +417,10 @@ void disassembleMethod(const DexFile& dex, const DexFile::EncodedMethod& m, cons
     for (uint32_t pc = 0; pc < code.insnsSize && insns.size() < opt.maxInstructions;) {
         Insn in = decode(code, pc);
         if (in.valid && !in.payload && in.hasBranch) {
-            const int64_t t = (int64_t)pc + in.branch;
-            if (t >= 0 && t < code.insnsSize) labels.insert((uint32_t)t);
+            const int64_t t = static_cast<int64_t>(pc) + in.branch;
+            if (t >= 0 && t < code.insnsSize) labels.insert(static_cast<uint32_t>(t));
             if (opInfo(in.opcode).flow == W::Switch)
-                for (uint32_t st : switchTargets(code, pc, (uint32_t)t)) labels.insert(st);
+                for (uint32_t st : switchTargets(code, pc, static_cast<uint32_t>(t))) labels.insert(st);
         }
         pc += std::max<uint32_t>(in.size, 1);
         insns.push_back(in);
@@ -430,13 +430,13 @@ void disassembleMethod(const DexFile& dex, const DexFile::EncodedMethod& m, cons
     for (const Insn& in : insns) {
         if (labels.count(in.pc)) {
             appendf(out, "    :L%04x\n", in.pc);
-            mark((int32_t)in.pc);
+            mark(static_cast<int32_t>(in.pc));
         }
         if (opt.showLines && !in.payload) {
             const int line = dex.lineForPc(code, in.pc);
             if (line >= 0 && line != lastLine) {
                 appendf(out, "    .line %d\n", line);
-                mark((int32_t)in.pc);
+                mark(static_cast<int32_t>(in.pc));
                 lastLine = line;
             }
         }
@@ -457,7 +457,7 @@ void disassembleMethod(const DexFile& dex, const DexFile::EncodedMethod& m, cons
             appendInsn(dex, in, out);
         }
         out += '\n';
-        mark((int32_t)in.pc);
+        mark(static_cast<int32_t>(in.pc));
     }
     if (insns.size() >= opt.maxInstructions) {
         out += "    # listing truncated\n";

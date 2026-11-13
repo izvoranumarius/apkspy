@@ -38,14 +38,27 @@ inline void sameLineIfFits(float nextWidth) {
     if (rowEnd <= limit) ImGui::SameLine();
 }
 
+// Compact toolbar button. ImGui::SmallButton has no vertical padding, so its
+// label touched the button edges; this keeps a little room on every side.
+inline ImVec2 smallButtonPadding() { return ImVec2(em(0.5f), em(0.12f)); }
+inline float smallButtonWidth(const char* label) {
+    return ImGui::CalcTextSize(label, nullptr, true).x + smallButtonPadding().x * 2.f;
+}
+inline bool smallButton(const char* label) {
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, smallButtonPadding());
+    const bool clicked = ImGui::Button(label);
+    ImGui::PopStyleVar();
+    return clicked;
+}
+
 // Flow-layout variants of common widgets.
 inline bool flowButton(const char* label) {
     sameLineIfFits(buttonWidth(label));
     return ImGui::Button(label);
 }
 inline bool flowSmallButton(const char* label) {
-    sameLineIfFits(ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.f);
-    return ImGui::SmallButton(label);
+    sameLineIfFits(smallButtonWidth(label));
+    return smallButton(label);
 }
 inline bool flowCheckbox(const char* label, bool* v) {
     sameLineIfFits(checkboxWidth(label));
@@ -55,15 +68,17 @@ inline bool flowCheckbox(const char* label, bool* v) {
 inline bool segmented(const char* const* labels, int count, int& active) {
     bool changed = false;
     for (int i = 0; i < count; ++i) {
-        if (i) ImGui::SameLine(0.f, 2.f);
+        if (i) ImGui::SameLine(0.f, em(0.15f));
         const bool on = i == active;
-        ImGui::PushStyleColor(ImGuiCol_Button, on ? ImVec4(0.f, 0.42f, 0.72f, 1.f) : ImVec4(0.f, 0.f, 0.f, 0.f));
-        ImGui::PushStyleColor(ImGuiCol_Text, on ? ImVec4(1.f, 1.f, 1.f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        if (ImGui::SmallButton(labels[i]) && !on) {
+        ImGui::PushStyleColor(ImGuiCol_Button, on ? theme::vec(Col::Accent) : ImVec4(0.f, 0.f, 0.f, 0.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, on ? theme::vec(Col::Accent) : theme::vec(Col::RowHover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, on ? theme::vec(Col::Accent) : theme::vec(Col::ControlHover));
+        ImGui::PushStyleColor(ImGuiCol_Text, on ? theme::vec(Col::TextOnAccent) : theme::vec(Col::TextMuted));
+        if (smallButton(labels[i]) && !on) {
             active = i;
             changed = true;
         }
-        ImGui::PopStyleColor(2);
+        ImGui::PopStyleColor(4);
     }
     return changed;
 }

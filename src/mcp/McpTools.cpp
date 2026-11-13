@@ -118,18 +118,18 @@ std::string hexDump(const uint8_t* data, size_t len, uint64_t baseOffset) {
     std::string out;
     char buf[96];
     for (size_t row = 0; row < len; row += 16) {
-        int n = std::snprintf(buf, sizeof buf, "%08llx  ", (unsigned long long)(baseOffset + row));
-        out.append(buf, (size_t)n);
+        int n = std::snprintf(buf, sizeof buf, "%08llx  ", static_cast<unsigned long long>(baseOffset + row));
+        out.append(buf, static_cast<size_t>(n));
         for (size_t k = 0; k < 16; ++k) {
             if (row + k < len) n = std::snprintf(buf, sizeof buf, "%02x ", data[row + k]);
             else n = std::snprintf(buf, sizeof buf, "   ");
-            out.append(buf, (size_t)n);
+            out.append(buf, static_cast<size_t>(n));
             if (k == 7) out.push_back(' ');
         }
         out += " |";
         for (size_t k = 0; k < 16 && row + k < len; ++k) {
             const uint8_t c = data[row + k];
-            out.push_back(c >= 32 && c < 127 ? (char)c : '.');
+            out.push_back(c >= 32 && c < 127 ? static_cast<char>(c) : '.');
         }
         out += "|\n";
     }
@@ -153,13 +153,13 @@ Json renderContent(const std::vector<uint8_t>& bytes, int64_t startLine, int64_t
         if (AxmlDecoder::decode(bytes, text, err, resources)) format = "xml (decoded from binary XML)";
     }
     if (format.empty() && looksText(bytes)) {
-        text.assign((const char*)bytes.data(), bytes.size());
+        text.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
         format = "text";
     }
     if (format.empty()) {
         const size_t n = std::min<size_t>(bytes.size(), 4096);
         return Json::obj({{"format", "binary"},
-                          {"size", (unsigned long long)bytes.size()},
+                          {"size", static_cast<unsigned long long>(bytes.size())},
                           {"hexdump", hexDump(bytes.data(), n, 0)},
                           {"note", n < bytes.size() ? "first 4096 bytes shown; use hexdump for other ranges" : ""}});
     }
@@ -173,26 +173,26 @@ Json renderContent(const std::vector<uint8_t>& bytes, int64_t startLine, int64_t
             lines.push_back(l);
             start = i + 1;
         }
-    const int64_t total = (int64_t)lines.size();
+    const int64_t total = static_cast<int64_t>(lines.size());
     const int64_t first = std::clamp<int64_t>(startLine, 1, std::max<int64_t>(total, 1));
     const int64_t last = std::min<int64_t>(total, first + maxLines - 1);
     std::string window;
     for (int64_t i = first; i <= last; ++i) {
-        window.append(lines[(size_t)(i - 1)]);
+        window.append(lines[static_cast<size_t>(i - 1)]);
         window.push_back('\n');
     }
     return Json::obj({{"format", format},
-                      {"total_lines", (long long)total},
-                      {"start_line", (long long)first},
-                      {"end_line", (long long)last},
+                      {"total_lines", static_cast<long long>(total)},
+                      {"start_line", static_cast<long long>(first)},
+                      {"end_line", static_cast<long long>(last)},
                       {"truncated", last < total},
                       {"content", json::sanitizeUtf8(window)}});
 }
 
 Json analysisStateJson(const AnalysisService::Status& st) {
     const char* names[] = {"not_started", "running", "ready", "failed", "cancelled"};
-    Json j = Json::obj({{"state", names[(int)st.state]}});
-    if (st.total) j.set("progress", Json::obj({{"done", (unsigned long long)st.done}, {"total", (unsigned long long)st.total}}));
+    Json j = Json::obj({{"state", names[static_cast<int>(st.state)]}});
+    if (st.total) j.set("progress", Json::obj({{"done", static_cast<unsigned long long>(st.done)}, {"total", static_cast<unsigned long long>(st.total)}}));
     if (!st.phase.empty()) j.set("phase", st.phase);
     if (!st.error.empty()) j.set("message", st.error);
     return j;
@@ -215,8 +215,8 @@ std::shared_ptr<const ApkAnalysis> requireAnalysis(Workspace& ws, Root& apk, std
 Json xrefJson(const ApkAnalysis& a, const ApkAnalysis::XrefHit& h) {
     static const char* kinds[] = {"call", "field_read", "field_write", "string", "type"};
     Json j = Json::obj({{"from", a.methodSignature(h.from)},
-                        {"pc", (unsigned long long)h.from.pc},
-                        {"kind", kinds[(int)h.kind]},
+                        {"pc", static_cast<unsigned long long>(h.from.pc)},
+                        {"kind", kinds[static_cast<int>(h.kind)]},
                         {"target", json::sanitizeUtf8(h.target)},
                         {"dex", a.dexes()[h.from.dex]->name()}});
     // Source line when debug info is present.
@@ -259,8 +259,8 @@ Json methodJson(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m) {
                         {"access", DexFile::accessFlagsToString(m.method.accessFlags, true)}});
     DexFile::CodeItem code;
     if (m.method.codeOff && dex.codeItem(m.method.codeOff, code)) {
-        j.set("registers", (int)code.registers);
-        j.set("code_units", (unsigned long long)code.insnsSize);
+        j.set("registers", static_cast<int>(code.registers));
+        j.set("code_units", static_cast<unsigned long long>(code.insnsSize));
     } else {
         j.set("code_units", 0);
     }
@@ -304,7 +304,7 @@ std::string resolveSerial(DeviceService& dev, const Json& args, std::string& err
 // pid from "pid" or "package" args.
 int resolvePid(DeviceService& dev, const std::string& serial, const Json& args, std::string& error) {
     const int64_t pid = argInt(args, "pid", 0);
-    if (pid > 0) return (int)pid;
+    if (pid > 0) return static_cast<int>(pid);
     const std::string pkg = argStr(args, "package");
     if (pkg.empty()) {
         error = "pass \"pid\" or \"package\"";
@@ -320,21 +320,21 @@ int resolvePid(DeviceService& dev, const std::string& serial, const Json& args, 
 Json debugSnapshotJson(const DebugSession::Snapshot& s) {
     Json threads = Json::array();
     for (const auto& t : s.threads)
-        threads.push(Json::obj({{"id", (unsigned long long)t.id},
+        threads.push(Json::obj({{"id", static_cast<unsigned long long>(t.id)},
                                 {"name", json::sanitizeUtf8(t.name)},
                                 {"status", DebugSession::threadStatusName(t.status)},
                                 {"suspended", t.suspend != 0}}));
     Json frames = Json::array();
     for (size_t i = 0; i < s.frames.size(); ++i) {
         const auto& f = s.frames[i];
-        Json fj = Json::obj({{"index", (unsigned long long)i}, {"method", f.method}, {"bytecode_index", (unsigned long long)f.location.index}});
+        Json fj = Json::obj({{"index", static_cast<unsigned long long>(i)}, {"method", f.method}, {"bytecode_index", static_cast<unsigned long long>(f.location.index)}});
         if (f.line >= 0) fj.set("line", f.line);
         frames.push(std::move(fj));
     }
     Json locals = Json::array();
     for (const auto& l : s.locals) {
         Json lj = Json::obj({{"name", l.name}, {"type", l.type}, {"value", json::sanitizeUtf8(l.value)}});
-        if (l.objectId) lj.set("object_id", (unsigned long long)l.objectId);  // expandable with debugger_inspect
+        if (l.objectId) lj.set("object_id", static_cast<unsigned long long>(l.objectId));  // expandable with debugger_inspect
         locals.push(std::move(lj));
     }
     Json bps = Json::array();
@@ -360,7 +360,7 @@ Json debugSnapshotJson(const DebugSession::Snapshot& s) {
                         {"serial", s.serial},
                         {"pid", s.pid},
                         {"vm", s.vm},
-                        {"current_thread", (unsigned long long)s.currentThread},
+                        {"current_thread", static_cast<unsigned long long>(s.currentThread)},
                         {"selected_frame", s.selectedFrame},
                         {"threads", std::move(threads)},
                         {"frames", std::move(frames)},
@@ -407,7 +407,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             const auto size = fs::file_size(pathutil::fromUtf8(r->apkPath), ec);
                             list.push(Json::obj({{"apk", r->title},
                                                  {"path", r->apkPath},
-                                                 {"size", ec ? 0ull : (unsigned long long)size},
+                                                 {"size", ec ? 0ull : static_cast<unsigned long long>(size)},
                                                  {"decompiled", decState},
                                                  {"analysis", analysisStateJson(ws.analysis().status(r->title))}}));
                         }
@@ -487,7 +487,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                         auto table = ws.resources(apk->title);
                         if (!table) return McpToolResult::error("the APK has no readable resources.arsc");
                         Json list = Json::array();
-                        for (const auto& it : table->list(argStr(args, "type"), argStr(args, "filter"), (size_t)argInt(args, "limit", 300))) {
+                        for (const auto& it : table->list(argStr(args, "type"), argStr(args, "filter"), static_cast<size_t>(argInt(args, "limit", 300)))) {
                             char id[16];
                             std::snprintf(id, sizeof id, "0x%08X", it.id);
                             Json j = Json::obj({{"id", id}, {"type", it.type}, {"name", it.name}});
@@ -499,7 +499,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                         Json types = Json::array();
                         for (const auto& t : table->types()) types.push(t);
                         return McpToolResult::ok(Json::obj({{"package", table->packageName()},
-                                                            {"total", (unsigned long long)table->size()},
+                                                            {"total", static_cast<unsigned long long>(table->size())},
                                                             {"types", std::move(types)},
                                                             {"resources", std::move(list)}}));
                     }});
@@ -517,12 +517,12 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                         const std::string spec = argStr(args, "resource");
                         uint32_t id = 0;
                         if (spec.find('/') != std::string::npos) id = table->find(spec);
-                        else id = (uint32_t)std::strtoll(spec.c_str(), nullptr, spec.rfind("0x", 0) == 0 || spec.rfind("0X", 0) == 0 ? 16 : 10);
+                        else id = static_cast<uint32_t>(std::strtoll(spec.c_str(), nullptr, spec.rfind("0x", 0) == 0 || spec.rfind("0X", 0) == 0 ? 16 : 10));
                         ResourceTable::Item it;
                         if (!id || !table->lookup(id, it)) return McpToolResult::error("unknown resource " + spec);
                         char hex[16];
                         std::snprintf(hex, sizeof hex, "0x%08X", it.id);
-                        return McpToolResult::ok(Json::obj({{"id", hex}, {"decimal", (long long)(int32_t)it.id},
+                        return McpToolResult::ok(Json::obj({{"id", hex}, {"decimal", static_cast<long long>(static_cast<int32_t>(it.id))},
                                                             {"reference", "@" + it.type + "/" + it.name},
                                                             {"value", json::sanitizeUtf8(it.value)},
                                                             {"complex", it.complex}, {"configs", it.configs}}));
@@ -546,8 +546,8 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                         if (!folder) return McpToolResult::error("path not found");
                         if (!folder->isFolder()) return McpToolResult::error("not a folder");
                         const bool recursive = argBool(args, "recursive", false);
-                        const size_t offset = (size_t)argInt(args, "offset", 0);
-                        const size_t limit = (size_t)argInt(args, "limit", 500);
+                        const size_t offset = static_cast<size_t>(argInt(args, "offset", 0));
+                        const size_t limit = static_cast<size_t>(argInt(args, "limit", 500));
                         Json entries = Json::array();
                         size_t index = 0, total = 0;
                         std::vector<const TreeNode*> stack{folder};
@@ -565,13 +565,13 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                                     {"type", c->isFolder() ? "folder" : "file"},
                                                     {"kind", kindName(c->kind())}});
                                 uint64_t size = 0;
-                                if (!c->isFolder() && root->source->sizeOf(*c, size)) e.set("size", (unsigned long long)size);
+                                if (!c->isFolder() && root->source->sizeOf(*c, size)) e.set("size", static_cast<unsigned long long>(size));
                                 entries.push(std::move(e));
                             }
                         }
                         return McpToolResult::ok(Json::obj({{"root", root->kind == Root::Kind::Apk ? "apk" : "decompiled"},
-                                                            {"total", (unsigned long long)total},
-                                                            {"offset", (unsigned long long)offset},
+                                                            {"total", static_cast<unsigned long long>(total)},
+                                                            {"offset", static_cast<unsigned long long>(offset)},
                                                             {"entries", std::move(entries)}}));
                     }});
 
@@ -628,15 +628,15 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                         const TreeNode* node = findNode(*apk, argStr(args, "path"));
                         if (!node || node->isFolder()) return McpToolResult::error("entry not found");
                         const std::string apkPath = apk->apkPath, entry = node->path();
-                        const uint64_t offset = (uint64_t)argInt(args, "offset", 0);
-                        const size_t length = (size_t)argInt(args, "length", 512);
+                        const uint64_t offset = static_cast<uint64_t>(argInt(args, "offset", 0));
+                        const size_t length = static_cast<size_t>(argInt(args, "length", 512));
                         return McpToolOutcome::later([apkPath, entry, offset, length](McpToolContext&) {
                             ApkArchive archive;  // private handle: safe off the UI thread
                             std::vector<uint8_t> bytes;
                             if (!archive.open(apkPath) || !archive.readEntry(entry, bytes, 256ull << 20))
                                 return McpToolResult::error("cannot read entry");
                             if (offset >= bytes.size()) return McpToolResult::error("offset beyond end of entry");
-                            const size_t n = (size_t)std::min<uint64_t>(length, bytes.size() - offset);
+                            const size_t n = static_cast<size_t>(std::min<uint64_t>(length, bytes.size() - offset));
                             McpToolResult r;
                             r.text = entry + " (" + std::to_string(bytes.size()) + " bytes)\n" +
                                      hexDump(bytes.data() + offset, n, offset);
@@ -681,7 +681,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             }
                         }
                         const std::string query = tex::asciiLower(argStr(args, "query"));
-                        const size_t limit = (size_t)argInt(args, "limit", 200);
+                        const size_t limit = static_cast<size_t>(argInt(args, "limit", 200));
                         return McpToolOutcome::later([files = std::move(files), query, mode, limit](McpToolContext& ctx) {
                             Json hits = Json::array();
                             size_t scanned = 0, skipped = 0;
@@ -689,7 +689,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             for (const FileRef& f : files) {
                                 if (ctx.cancelled() || hits.size() >= limit) break;
                                 if (ctx.progress && scanned % 500 == 0)
-                                    ctx.progress((double)scanned, (double)files.size(), "searching");
+                                    ctx.progress(static_cast<double>(scanned), static_cast<double>(files.size()), "searching");
                                 ++scanned;
                                 const std::string_view name(f.shown);
                                 if (mode == SearchService::Mode::Filenames) {
@@ -706,13 +706,16 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                     continue;
                                 }
                                 if (!DiskSource::readFile(f.disk, buf)) continue;
-                                const std::string_view text((const char*)buf.data(), buf.size());
+                                const std::string_view text(reinterpret_cast<const char*>(buf.data()), buf.size());
                                 size_t pos = 0;
                                 int lineNo = 1;
                                 while (pos <= text.size() && hits.size() < limit) {
                                     size_t end = text.find('\n', pos);
                                     if (end == std::string_view::npos) end = text.size();
                                     std::string_view line = text.substr(pos, end - pos);
+                                    // jadx writes CRLF on Windows; match and report without the '\r'
+                                    // (the same trim SearchService::scan does for the GUI search).
+                                    if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
                                     if (SearchService::lineMatches(mode, line, query)) {
                                         while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.remove_prefix(1);
                                         if (line.size() > 300) line = line.substr(0, 300);
@@ -723,10 +726,12 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                     ++lineNo;
                                 }
                             }
+                            // Read the size before `hits` is moved into the result.
+                            const bool limitReached = hits.size() >= limit;
                             return McpToolResult::ok(Json::obj({{"hits", std::move(hits)},
-                                                                {"files_scanned", (unsigned long long)scanned},
-                                                                {"files_skipped_large", (unsigned long long)skipped},
-                                                                {"limit_reached", hits.size() >= limit}}));
+                                                                {"files_scanned", static_cast<unsigned long long>(scanned)},
+                                                                {"files_skipped_large", static_cast<unsigned long long>(skipped)},
+                                                                {"limit_reached", limitReached}}));
                         });
                     }});
 
@@ -791,11 +796,11 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                         Json dexes = Json::array();
                                         for (const auto& d : a->dexes()) dexes.push(d->name());
                                         j.set("stats", Json::obj({{"dex_files", std::move(dexes)},
-                                                                  {"classes", (unsigned long long)s.classes},
-                                                                  {"methods", (unsigned long long)s.methods},
-                                                                  {"methods_with_code", (unsigned long long)s.methodsWithCode},
-                                                                  {"instructions", (unsigned long long)s.instructions},
-                                                                  {"xrefs", (unsigned long long)s.xrefs}}));
+                                                                  {"classes", static_cast<unsigned long long>(s.classes)},
+                                                                  {"methods", static_cast<unsigned long long>(s.methods)},
+                                                                  {"methods_with_code", static_cast<unsigned long long>(s.methodsWithCode)},
+                                                                  {"instructions", static_cast<unsigned long long>(s.instructions)},
+                                                                  {"xrefs", static_cast<unsigned long long>(s.xrefs)}}));
                                     }
                                     return st.state == AnalysisService::State::Failed ? McpToolResult::error(j.dump(true))
                                                                                       : McpToolResult::ok(std::move(j));
@@ -806,7 +811,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                 }
                                 if (std::chrono::steady_clock::now() > deadline)
                                     return McpToolResult::ok(analysisStateJson(st));  // still running
-                                if (ctx.progress) ctx.progress((double)st.done, (double)st.total, st.phase);
+                                if (ctx.progress) ctx.progress(static_cast<double>(st.done), static_cast<double>(st.total), st.phase);
                                 std::this_thread::sleep_for(std::chrono::milliseconds(150));
                             }
                         });
@@ -832,16 +837,16 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                      Json list = Json::array();
                      for (const auto& d : a.dexes())
                          list.push(Json::obj({{"name", d->name()}, {"version", d->version()},
-                                              {"size", (unsigned long long)d->sizeBytes()},
+                                              {"size", static_cast<unsigned long long>(d->sizeBytes())},
                                               {"strings", d->stringCount()}, {"types", d->typeCount()},
                                               {"methods", d->methodCount()}, {"fields", d->fieldCount()},
-                                              {"classes", (unsigned long long)d->classes().size()}}));
+                                              {"classes", static_cast<unsigned long long>(d->classes().size())}}));
                      const auto& s = a.stats();
                      return McpToolResult::ok(Json::obj({{"dex_files", std::move(list)},
-                                                         {"classes", (unsigned long long)s.classes},
-                                                         {"methods", (unsigned long long)s.methods},
-                                                         {"code_bytes", (unsigned long long)s.codeBytes},
-                                                         {"xrefs", (unsigned long long)s.xrefs}}));
+                                                         {"classes", static_cast<unsigned long long>(s.classes)},
+                                                         {"methods", static_cast<unsigned long long>(s.methods)},
+                                                         {"code_bytes", static_cast<unsigned long long>(s.codeBytes)},
+                                                         {"xrefs", static_cast<unsigned long long>(s.xrefs)}}));
                  });
 
     analysisTool("list_classes", "List classes", "Classes defined in the APK's bytecode, filtered by name.",
@@ -850,7 +855,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                  {"offset", integer("Skip", 0, 100000000)},
                                  {"limit", integer("Max (default 500)", 1, 5000)}}),
                  [](const ApkAnalysis& a, const Json& args, McpToolContext&) {
-                     const size_t offset = (size_t)argInt(args, "offset", 0), limit = (size_t)argInt(args, "limit", 500);
+                     const size_t offset = static_cast<size_t>(argInt(args, "offset", 0)), limit = static_cast<size_t>(argInt(args, "limit", 500));
                      auto all = a.searchClasses(argStr(args, "filter"), offset + limit);
                      Json list = Json::array();
                      for (size_t i = offset; i < all.size(); ++i) {
@@ -858,7 +863,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                          list.push(Json::obj({{"class", DexFile::descriptorToJava(a.classDescriptor(*all[i]))},
                                               {"access", DexFile::accessFlagsToString(def.accessFlags, false)}}));
                      }
-                     return McpToolResult::ok(Json::obj({{"classes", std::move(list)}, {"offset", (unsigned long long)offset},
+                     return McpToolResult::ok(Json::obj({{"classes", std::move(list)}, {"offset", static_cast<unsigned long long>(offset)},
                                                          {"has_more", all.size() >= offset + limit}}));
                  });
 
@@ -943,7 +948,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                 {"kind", "target"}),
                  [](const ApkAnalysis& a, const Json& args, McpToolContext&) {
                      const std::string kind = argStr(args, "kind"), target = argStr(args, "target");
-                     const size_t limit = (size_t)argInt(args, "limit", 200);
+                     const size_t limit = static_cast<size_t>(argInt(args, "limit", 200));
                      std::vector<ApkAnalysis::XrefHit> hits;
                      if (kind == "method") {
                          std::string cls, name, proto;
@@ -963,7 +968,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                      }
                      Json list = Json::array();
                      for (const auto& h : hits) list.push(xrefJson(a, h));
-                     return McpToolResult::ok(Json::obj({{"count", (unsigned long long)hits.size()},
+                     return McpToolResult::ok(Json::obj({{"count", static_cast<unsigned long long>(hits.size())},
                                                          {"truncated", hits.size() >= limit},
                                                          {"xrefs", std::move(list)}}));
                  });
@@ -981,8 +986,8 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                      std::string cls, name, proto, err;
                      if (!resolveMethodArg(a, args, defs, cls, name, proto, err)) return McpToolResult::error(err);
                      const bool callers = argStr(args, "direction", "callees") == "callers";
-                     const int depth = (int)argInt(args, "depth", 2);
-                     const size_t limit = (size_t)argInt(args, "limit", 300);
+                     const int depth = static_cast<int>(argInt(args, "depth", 2));
+                     const size_t limit = static_cast<size_t>(argInt(args, "limit", 300));
                      Json edges = Json::array();
                      std::set<std::string> seen;
                      std::vector<std::string> frontier;
@@ -1013,7 +1018,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                      }
                      return McpToolResult::ok(Json::obj({{"direction", callers ? "callers" : "callees"},
                                                          {"edges", std::move(edges)},
-                                                         {"nodes", (unsigned long long)seen.size()}}));
+                                                         {"nodes", static_cast<unsigned long long>(seen.size())}}));
                  });
 
     analysisTool("control_flow_graph", "Control-flow graph",
@@ -1037,7 +1042,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                          Json succ = Json::array(), exc = Json::array();
                          for (auto s : blocks[i].successors) succ.push(s);
                          for (auto s : blocks[i].exceptional) exc.push(s);
-                         bj.push(Json::obj({{"id", (unsigned long long)i}, {"start_pc", blocks[i].startPc},
+                         bj.push(Json::obj({{"id", static_cast<unsigned long long>(i)}, {"start_pc", blocks[i].startPc},
                                             {"end_pc", blocks[i].endPc}, {"successors", std::move(succ)},
                                             {"exception_handlers", std::move(exc)}, {"exit", blocks[i].exit}}));
                      }
@@ -1073,7 +1078,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                      else if (cat == "secret") c = ApkAnalysis::StringCategory::Secret;
                      else if (cat == "email") c = ApkAnalysis::StringCategory::Email;
                      const bool withXrefs = argBool(args, "with_xrefs", false);
-                     const auto hits = a.strings(argStr(args, "query"), c, (size_t)argInt(args, "limit", 300));
+                     const auto hits = a.strings(argStr(args, "query"), c, static_cast<size_t>(argInt(args, "limit", 300)));
                      Json list = Json::array();
                      for (const auto& h : hits) {
                          Json j = Json::obj({{"value", json::sanitizeUtf8(h.value)}, {"category", ApkAnalysis::categoryName(h.category)}});
@@ -1084,14 +1089,14 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                          }
                          list.push(std::move(j));
                      }
-                     return McpToolResult::ok(Json::obj({{"count", (unsigned long long)hits.size()}, {"strings", std::move(list)}}));
+                     return McpToolResult::ok(Json::obj({{"count", static_cast<unsigned long long>(hits.size())}, {"strings", std::move(list)}}));
                  });
 
     analysisTool("find_endpoints", "Network endpoints",
                  "Aggregates URLs, IP addresses and API-like paths from the bytecode with the methods using them.",
                  schema::object({{"apk", apkArg()}, {"limit", integer("Max per category (default 200)", 1, 2000)}}),
                  [](const ApkAnalysis& a, const Json& args, McpToolContext&) {
-                     const size_t limit = (size_t)argInt(args, "limit", 200);
+                     const size_t limit = static_cast<size_t>(argInt(args, "limit", 200));
                      Json out = Json::object();
                      for (auto c : {ApkAnalysis::StringCategory::Url, ApkAnalysis::StringCategory::Ip,
                                     ApkAnalysis::StringCategory::Path}) {
@@ -1121,7 +1126,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                     if (so->isFolder()) continue;
                                     uint64_t size = 0;
                                     apk->source->sizeOf(*so, size);
-                                    list.push(Json::obj({{"path", so->path()}, {"abi", abi->name()}, {"size", (unsigned long long)size}}));
+                                    list.push(Json::obj({{"path", so->path()}, {"abi", abi->name()}, {"size", static_cast<unsigned long long>(size)}}));
                                 }
                         return McpToolResult::ok(Json::obj({{"libraries", std::move(list)}}));
                     }});
@@ -1147,14 +1152,14 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             auto elf = service->loadElf(apkPath, entry, e);
                             if (!elf) return McpToolResult::error(e);
                             const std::string filter = argStr(args, "symbol_filter");
-                            const size_t limit = (size_t)argInt(args, "limit", 300);
+                            const size_t limit = static_cast<size_t>(argInt(args, "limit", 300));
                             const auto symList = [&](const std::vector<const ElfFile::Symbol*>& syms) {
                                 Json l = Json::array();
                                 for (const auto* s : syms) {
                                     if (l.size() >= limit) break;
                                     if (!filter.empty() && tex::ciFind(s->name, filter) == std::string_view::npos) continue;
-                                    Json j = Json::obj({{"name", json::sanitizeUtf8(s->name)}, {"value", (unsigned long long)s->value},
-                                                        {"size", (unsigned long long)s->size}});
+                                    Json j = Json::obj({{"name", json::sanitizeUtf8(s->name)}, {"value", static_cast<unsigned long long>(s->value)},
+                                                        {"size", static_cast<unsigned long long>(s->size)}});
                                     const std::string dem = ElfFile::demangle(s->name);
                                     if (dem != s->name) j.set("demangled", json::sanitizeUtf8(dem));
                                     l.push(std::move(j));
@@ -1163,14 +1168,14 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             };
                             Json sections = Json::array();
                             for (const auto& s : elf->sections())
-                                sections.push(Json::obj({{"name", s.name}, {"type", s.type}, {"addr", (unsigned long long)s.addr},
-                                                         {"offset", (unsigned long long)s.offset}, {"size", (unsigned long long)s.size}}));
+                                sections.push(Json::obj({{"name", s.name}, {"type", s.type}, {"addr", static_cast<unsigned long long>(s.addr)},
+                                                         {"offset", static_cast<unsigned long long>(s.offset)}, {"size", static_cast<unsigned long long>(s.size)}}));
                             Json segs = Json::array();
                             for (const auto& s : elf->segments()) {
                                 std::string flags = std::string(s.flags & 4 ? "R" : "-") + (s.flags & 2 ? "W" : "-") + (s.flags & 1 ? "X" : "-");
-                                segs.push(Json::obj({{"type", s.type}, {"flags", flags}, {"vaddr", (unsigned long long)s.vaddr},
-                                                     {"offset", (unsigned long long)s.offset}, {"filesz", (unsigned long long)s.filesz},
-                                                     {"memsz", (unsigned long long)s.memsz}}));
+                                segs.push(Json::obj({{"type", s.type}, {"flags", flags}, {"vaddr", static_cast<unsigned long long>(s.vaddr)},
+                                                     {"offset", static_cast<unsigned long long>(s.offset)}, {"filesz", static_cast<unsigned long long>(s.filesz)},
+                                                     {"memsz", static_cast<unsigned long long>(s.memsz)}}));
                             }
                             Json needed = Json::array();
                             for (const auto& n : elf->needed()) needed.push(n);
@@ -1191,7 +1196,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             if (argBool(args, "include_strings", false)) {
                                 Json strs = Json::array();
                                 for (const auto& s : elf->strings(6, limit))
-                                    strs.push(Json::obj({{"offset", (unsigned long long)s.offset}, {"value", s.value}}));
+                                    strs.push(Json::obj({{"offset", static_cast<unsigned long long>(s.offset)}, {"value", s.value}}));
                                 j.set("strings", std::move(strs));
                             }
                             return McpToolResult::ok(std::move(j));
@@ -1232,7 +1237,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
     };
     const auto hexStr = [](uint64_t v) {
         char b[32];
-        std::snprintf(b, sizeof b, "0x%llx", (unsigned long long)v);
+        std::snprintf(b, sizeof b, "0x%llx", static_cast<unsigned long long>(v));
         return std::string(b);
     };
     const auto parseAddr = [](const std::string& s, uint64_t& out) {
@@ -1255,7 +1260,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                {}, [hexStr](const NativeCode& nc, const Json& args) {
                    const std::string filter = argStr(args, "filter");
                    const bool exportedOnly = argBool(args, "exported_only", false);
-                   const size_t limit = (size_t)argInt(args, "limit", 300);
+                   const size_t limit = static_cast<size_t>(argInt(args, "limit", 300));
                    Json list = Json::array();
                    size_t matched = 0;
                    for (const auto& f : nc.functions()) {
@@ -1266,7 +1271,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                            continue;
                        if (++matched > limit) continue;
                        Json j = Json::obj({{"name", json::sanitizeUtf8(f.name)}, {"address", hexStr(f.addr)},
-                                           {"size", (unsigned long long)f.size},
+                                           {"size", static_cast<unsigned long long>(f.size)},
                                            {"kind", f.kind == NativeCode::FunctionKind::Plt ? "import_stub"
                                                     : f.kind == NativeCode::FunctionKind::Discovered ? "discovered"
                                                                                                      : "symbol"}});
@@ -1274,9 +1279,9 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                        if (f.exported) j.set("exported", true);
                        list.push(std::move(j));
                    }
-                   return McpToolResult::ok(Json::obj({{"total_functions", (unsigned long long)nc.functions().size()},
-                                                       {"matched", (unsigned long long)matched},
-                                                       {"instructions", (unsigned long long)nc.instructionCount()},
+                   return McpToolResult::ok(Json::obj({{"total_functions", static_cast<unsigned long long>(nc.functions().size())},
+                                                       {"matched", static_cast<unsigned long long>(matched)},
+                                                       {"instructions", static_cast<unsigned long long>(nc.instructionCount())},
                                                        {"functions", std::move(list)}}));
                });
 
@@ -1288,7 +1293,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                           {"address", str("Start address (0x...) instead of a function")},
                           {"count", integer("Max instructions (default 400)", 1, 20000)}}),
                {}, [hexStr, parseAddr](const NativeCode& nc, const Json& args) {
-                   const size_t count = (size_t)argInt(args, "count", 400);
+                   const size_t count = static_cast<size_t>(argInt(args, "count", 400));
                    std::vector<NativeCode::Line> lines;
                    Json head = Json::object();
                    const std::string fn = argStr(args, "function"), at = argStr(args, "address");
@@ -1297,25 +1302,25 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                        if (!f) return McpToolResult::error("no function matches '" + fn + "' (see native_functions)");
                        lines = nc.disassembleFunction(*f, count);
                        head = Json::obj({{"function", json::sanitizeUtf8(NativeCode::displayName(*f))},
-                                         {"address", hexStr(f->addr)}, {"size", (unsigned long long)f->size}});
+                                         {"address", hexStr(f->addr)}, {"size", static_cast<unsigned long long>(f->size)}});
                    } else {
                        uint64_t a = 0;
                        if (!parseAddr(at, a)) return McpToolResult::error("give function or address (0x...)");
                        lines = nc.disassemble(a, UINT64_MAX, count);
                        if (lines.empty()) return McpToolResult::error("no code at " + at);
-                       if (const auto* f = nc.functionAt(a)) head.set("function", json::sanitizeUtf8(nc.symbolize(a)));
+                       if (nc.functionAt(a)) head.set("function", json::sanitizeUtf8(nc.symbolize(a)));
                        head.set("address", hexStr(a));
                    }
                    std::string text;
                    for (const auto& l : lines) {
                        char row[64];
-                       std::snprintf(row, sizeof row, "%08llx  %-8s ", (unsigned long long)l.insn.addr, l.insn.mnemonic.c_str());
+                       std::snprintf(row, sizeof row, "%08llx  %-8s ", static_cast<unsigned long long>(l.insn.addr), l.insn.mnemonic.c_str());
                        text += row + l.insn.operands;
                        if (!l.targetName.empty()) text += " <" + l.targetName + ">";
                        if (!l.comment.empty()) text += "    ; " + l.comment;
                        text += "\n";
                    }
-                   head.set("instructions", (unsigned long long)lines.size());
+                   head.set("instructions", static_cast<unsigned long long>(lines.size()));
                    head.set("listing", json::sanitizeUtf8(text));
                    return McpToolResult::ok(std::move(head));
                });
@@ -1328,7 +1333,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                           {"limit", integer("Max references (default 300)", 1, 20000)}}),
                {"target"}, [hexStr, parseAddr, refKind](const NativeCode& nc, const Json& args) {
                    const std::string target = argStr(args, "target");
-                   const size_t limit = (size_t)argInt(args, "limit", 300);
+                   const size_t limit = static_cast<size_t>(argInt(args, "limit", 300));
                    uint64_t addr = 0;
                    const NativeCode::Function* f = nullptr;
                    if (parseAddr(target, addr)) {
@@ -1369,20 +1374,20 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                    const std::string fn = argStr(args, "function");
                    const NativeCode::Function* f = nc.findFunction(fn);
                    if (!f) return McpToolResult::error("no function matches '" + fn + "' (see native_functions)");
-                   const auto cfg = nc.controlFlow(*f, (size_t)argInt(args, "max_instructions", 20000));
+                   const auto cfg = nc.controlFlow(*f, static_cast<size_t>(argInt(args, "max_instructions", 20000)));
                    Json blocks = Json::array();
                    for (size_t i = 0; i < cfg.blocks.size(); ++i) {
                        const auto& b = cfg.blocks[i];
                        Json successors = Json::array();
                        for (size_t k = 0; k < b.successors.size(); ++k) {
                            const int to = b.successors[k];
-                           Json edge = Json::obj({{"block", to}, {"address", hexStr(cfg.lines[cfg.blocks[(size_t)to].firstLine].insn.addr)}});
+                           Json edge = Json::obj({{"block", to}, {"address", hexStr(cfg.lines[cfg.blocks[static_cast<size_t>(to)].firstLine].insn.addr)}});
                            if (b.conditional) edge.set("kind", k == 0 ? "taken" : "fallthrough");
                            successors.push(std::move(edge));
                        }
-                       Json j = Json::obj({{"block", (int)i},
+                       Json j = Json::obj({{"block", static_cast<int>(i)},
                                            {"address", hexStr(cfg.lines[b.firstLine].insn.addr)},
-                                           {"instructions", (unsigned long long)b.lineCount},
+                                           {"instructions", static_cast<unsigned long long>(b.lineCount)},
                                            {"successors", std::move(successors)}});
                        if (b.exit) j.set("exit", true);
                        blocks.push(std::move(j));
@@ -1399,7 +1404,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                           {"limit", integer("Max results (default 300)", 1, 20000)}}),
                {}, [hexStr](const NativeCode& nc, const Json& args) {
                    Json list = Json::array();
-                   for (const auto& s : nc.stringRefs(argStr(args, "filter"), (size_t)argInt(args, "limit", 300))) {
+                   for (const auto& s : nc.stringRefs(argStr(args, "filter"), static_cast<size_t>(argInt(args, "limit", 300)))) {
                        Json j = Json::obj({{"string", json::sanitizeUtf8(s.text)}, {"address", hexStr(s.addr)},
                                            {"used_at", hexStr(s.from)}});
                        if (std::string fn = nc.symbolize(s.from); !fn.empty()) j.set("function", json::sanitizeUtf8(fn));
@@ -1436,7 +1441,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                     {"limit", integer("Max results (default 500)", 1, 100000)}}),
                     true, false, [&ws, annotationJson](const Json& args, McpToolContext&) -> McpToolOutcome {
                         const std::string group = argStr(args, "apk"), kind = argStr(args, "kind"), filter = argStr(args, "filter");
-                        const size_t limit = (size_t)argInt(args, "limit", 500);
+                        const size_t limit = static_cast<size_t>(argInt(args, "limit", 500));
                         Json list = Json::array();
                         for (const Annotation& a : ws.annotations().all()) {
                             if (list.size() >= limit) break;
@@ -1448,7 +1453,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                 continue;
                             list.push(annotationJson(a));
                         }
-                        return McpToolResult::ok(Json::obj({{"total", (unsigned long long)ws.annotations().all().size()},
+                        return McpToolResult::ok(Json::obj({{"total", static_cast<unsigned long long>(ws.annotations().all().size())},
                                                             {"annotations", std::move(list)}}));
                     }});
 
@@ -1483,7 +1488,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             if (!parseAddr(argStr(args, "address"), a.addr)) return McpToolResult::error("address must be 0x...");
                         } else {
                             a.root = root->kind;
-                            a.line = (int)argInt(args, "line", 1) - 1;
+                            a.line = static_cast<int>(argInt(args, "line", 1)) - 1;
                         }
                         const int id = ws.annotations().set(std::move(a));
                         if (!id) return McpToolResult::error("annotation rejected (limit reached)");
@@ -1493,7 +1498,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
     server.addTool({"remove_annotation", "Remove bookmark or comment", "Deletes an annotation by the id from list_annotations.",
                     schema::object({{"id", integer("Annotation id", 1, 1 << 30)}}, {"id"}), false, false,
                     [&ws](const Json& args, McpToolContext&) -> McpToolOutcome {
-                        if (!ws.annotations().remove((int)argInt(args, "id", 0))) return McpToolResult::error("no such annotation");
+                        if (!ws.annotations().remove(static_cast<int>(argInt(args, "id", 0)))) return McpToolResult::error("no such annotation");
                         return McpToolResult::ok(Json::obj({{"removed", true}}));
                     }});
 
@@ -1518,14 +1523,14 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                         ws.resources(b->title);
                         const ApkInfo ia = ApkInfo::extract(*a), ib = ApkInfo::extract(*b);
                         auto anA = ws.analysis().get(a->title), anB = ws.analysis().get(b->title);
-                        const size_t limit = (size_t)argInt(args, "limit", 300);
+                        const size_t limit = static_cast<size_t>(argInt(args, "limit", 300));
                         return McpToolOutcome::later([diff = std::move(diff), ia, ib, anA, anB, limit](McpToolContext& ctx) mutable {
                             if (anA && anB) diff.compareCode(*anA, *anB, limit, ctx.cancel);
                             Json entries = Json::array();
                             for (const auto& e : diff.entries) {
                                 if (entries.size() >= limit) break;
                                 entries.push(Json::obj({{"path", e.path}, {"change", ApkDiff::kindName(e.kind)},
-                                                        {"size_a", (unsigned long long)e.sizeA}, {"size_b", (unsigned long long)e.sizeB}}));
+                                                        {"size_a", static_cast<unsigned long long>(e.sizeA)}, {"size_b", static_cast<unsigned long long>(e.sizeB)}}));
                             }
                             std::set<std::string> pa(ia.permissions.begin(), ia.permissions.end());
                             std::set<std::string> pb(ib.permissions.begin(), ib.permissions.end());
@@ -1541,8 +1546,8 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             };
                             Json j = Json::obj({{"version_a", ia.versionName + " (" + ia.versionCode + ")"},
                                                 {"version_b", ib.versionName + " (" + ib.versionCode + ")"},
-                                                {"entries_changed", (unsigned long long)diff.entries.size()},
-                                                {"entries_unchanged", (unsigned long long)diff.entriesUnchanged},
+                                                {"entries_changed", static_cast<unsigned long long>(diff.entries.size())},
+                                                {"entries_unchanged", static_cast<unsigned long long>(diff.entriesUnchanged)},
                                                 {"entries", std::move(entries)},
                                                 {"permissions_added", std::move(permAdded)},
                                                 {"permissions_removed", std::move(permRemoved)}});
@@ -1594,7 +1599,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                 origin = ws.locationOf(*d);
                                 originPtr = &origin;
                             }
-                            ws.navigateTo(*root, *node, (int)argInt(args, "line", 1) - 1, originPtr);
+                            ws.navigateTo(*root, *node, static_cast<int>(argInt(args, "line", 1)) - 1, originPtr);
                             return McpToolResult::ok(Json::obj({{"opened", displayPath(*root, node->path())}}));
                         }});
     }
@@ -1682,13 +1687,13 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             std::string jerr;
                             const auto jdwp = dev.adb().jdwpPids(serial, 1200, jerr);
                             const std::string filter = argStr(args, "filter");
-                            const size_t limit = (size_t)argInt(args, "limit", 300);
+                            const size_t limit = static_cast<size_t>(argInt(args, "limit", 300));
                             Json l = Json::array();
                             for (const auto& p : procs) {
                                 if (l.size() >= limit) break;
                                 if (!filter.empty() && tex::ciFind(p.name, filter) == std::string_view::npos) continue;
                                 l.push(Json::obj({{"pid", p.pid}, {"ppid", p.ppid}, {"user", p.user}, {"name", p.name},
-                                                  {"rss_kb", (unsigned long long)p.rssKb},
+                                                  {"rss_kb", static_cast<unsigned long long>(p.rssKb)},
                                                   {"debuggable", std::find(jdwp.begin(), jdwp.end(), p.pid) != jdwp.end()}}));
                             }
                             if (procs.empty() && !err.empty()) return McpToolResult::error(err);
@@ -1720,21 +1725,21 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             DeviceService::LogFilter f;
                             const std::string lvl = argStr(args, "min_level", "V");
                             f.minLevel = lvl.empty() ? 'V' : lvl[0];
-                            f.pid = (int)argInt(args, "pid", 0);
+                            f.pid = static_cast<int>(argInt(args, "pid", 0));
                             if (!f.pid && !argStr(args, "package").empty()) {
                                 f.pid = resolvePid(dev, serial, args, err);
                                 if (!f.pid) return McpToolResult::error(err);
                             }
                             f.tag = argStr(args, "tag");
                             f.text = argStr(args, "text");
-                            const auto entries = dev.logEntries((uint64_t)argInt(args, "since", 0), f,
-                                                                (size_t)argInt(args, "max_lines", 300));
+                            const auto entries = dev.logEntries(static_cast<uint64_t>(argInt(args, "since", 0)), f,
+                                                                static_cast<size_t>(argInt(args, "max_lines", 300)));
                             Json l = Json::array();
                             for (const auto& e : entries)
-                                l.push(Json::obj({{"seq", (unsigned long long)e.seq}, {"time", e.time}, {"pid", e.pid},
+                                l.push(Json::obj({{"seq", static_cast<unsigned long long>(e.seq)}, {"time", e.time}, {"pid", e.pid},
                                                   {"tid", e.tid}, {"level", std::string(1, e.level)},
                                                   {"tag", json::sanitizeUtf8(e.tag)}, {"message", json::sanitizeUtf8(e.message)}}));
-                            return McpToolResult::ok(Json::obj({{"head", (unsigned long long)dev.logHead()}, {"lines", std::move(l)}}));
+                            return McpToolResult::ok(Json::obj({{"head", static_cast<unsigned long long>(dev.logHead())}, {"lines", std::move(l)}}));
                         });
                     }});
 
@@ -1755,19 +1760,19 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             const adb::ProcStat b = dev.adb().procStat(serial, pid, err);
                             if (!a.ok || !b.ok) return McpToolResult::error("cannot read /proc for pid " + std::to_string(pid) + ": " + err);
                             const double cpu = b.cpuTotalJiffies > a.cpuTotalJiffies
-                                                   ? 100.0 * (double)(b.procJiffies - a.procJiffies) /
-                                                         (double)(b.cpuTotalJiffies - a.cpuTotalJiffies)
+                                                   ? 100.0 * static_cast<double>(b.procJiffies - a.procJiffies) /
+                                                         static_cast<double>(b.cpuTotalJiffies - a.cpuTotalJiffies)
                                                    : 0.0;
-                            Json j = Json::obj({{"pid", pid}, {"cpu_percent_of_device", cpu}, {"rss_kb", (unsigned long long)b.rssKb},
-                                                {"vm_size_kb", (unsigned long long)b.vmSizeKb}, {"threads", b.threads}});
+                            Json j = Json::obj({{"pid", pid}, {"cpu_percent_of_device", cpu}, {"rss_kb", static_cast<unsigned long long>(b.rssKb)},
+                                                {"vm_size_kb", static_cast<unsigned long long>(b.vmSizeKb)}, {"threads", b.threads}});
                             if (argBool(args, "meminfo", true)) {
                                 const adb::MemInfo m = dev.adb().memInfo(serial, pid, err);
                                 if (m.ok)
-                                    j.set("meminfo", Json::obj({{"total_pss_kb", (unsigned long long)m.totalPssKb},
-                                                                {"java_heap_kb", (unsigned long long)m.javaHeapKb},
-                                                                {"native_heap_kb", (unsigned long long)m.nativeHeapKb},
-                                                                {"code_kb", (unsigned long long)m.codeKb},
-                                                                {"graphics_kb", (unsigned long long)m.graphicsKb}}));
+                                    j.set("meminfo", Json::obj({{"total_pss_kb", static_cast<unsigned long long>(m.totalPssKb)},
+                                                                {"java_heap_kb", static_cast<unsigned long long>(m.javaHeapKb)},
+                                                                {"native_heap_kb", static_cast<unsigned long long>(m.nativeHeapKb)},
+                                                                {"code_kb", static_cast<unsigned long long>(m.codeKb)},
+                                                                {"graphics_kb", static_cast<unsigned long long>(m.graphicsKb)}}));
                             }
                             return McpToolResult::ok(std::move(j));
                         });
@@ -1872,8 +1877,10 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                     true, true, [&dev](const Json& args, McpToolContext&) -> McpToolOutcome {
                         return McpToolOutcome::later([&dev, args](McpToolContext&) {
                             DebugSession& d = dev.debugger();
-                            if (args.has("thread_id")) d.selectThread((DebugSession::Id)argInt(args, "thread_id", 0));
-                            if (args.has("frame")) d.selectFrame((int)argInt(args, "frame", 0));
+                            if (d.state() == DebugSession::State::Detached)
+                                return McpToolResult::error("debugger is not attached (use debugger_attach)");
+                            if (args.has("thread_id")) d.selectThread(static_cast<DebugSession::Id>(argInt(args, "thread_id", 0)));
+                            if (args.has("frame")) d.selectFrame(static_cast<int>(argInt(args, "frame", 0)));
                             d.waitIdle(15000);
                             return McpToolResult::ok(debugSnapshotJson(d.snapshot()));
                         });
@@ -1888,7 +1895,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             DebugSession& d = dev.debugger();
                             if (d.state() != DebugSession::State::Suspended)
                                 return McpToolResult::error("the app must be suspended (breakpoint, exception or suspend)");
-                            const uint64_t id = (uint64_t)argInt(args, "object_id", 0);
+                            const uint64_t id = static_cast<uint64_t>(argInt(args, "object_id", 0));
                             d.expand(id);
                             d.waitIdle(15000);
                             const auto snap = d.snapshot();
@@ -1897,10 +1904,10 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             Json fields = Json::array();
                             for (const auto& l : it->second) {
                                 Json lj = Json::obj({{"name", l.name}, {"type", l.type}, {"value", json::sanitizeUtf8(l.value)}});
-                                if (l.objectId) lj.set("object_id", (unsigned long long)l.objectId);
+                                if (l.objectId) lj.set("object_id", static_cast<unsigned long long>(l.objectId));
                                 fields.push(std::move(lj));
                             }
-                            return McpToolResult::ok(Json::obj({{"object_id", (unsigned long long)id}, {"fields", std::move(fields)}}));
+                            return McpToolResult::ok(Json::obj({{"object_id", static_cast<unsigned long long>(id)}, {"fields", std::move(fields)}}));
                         });
                     }});
 
@@ -1926,10 +1933,10 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             } else if (argStr(args, "action") == "add") {
                                 const std::string cls = argStr(args, "class"), method = argStr(args, "method");
                                 if (cls.empty() || method.empty()) return McpToolResult::error("add needs class and method");
-                                d.addBreakpoint(cls, method, args.has("line") ? (int)argInt(args, "line", -1) : -1);
+                                d.addBreakpoint(cls, method, args.has("line") ? static_cast<int>(argInt(args, "line", -1)) : -1);
                             } else {
                                 if (!args.has("id")) return McpToolResult::error("remove needs id");
-                                d.removeBreakpoint((int)argInt(args, "id", 0));
+                                d.removeBreakpoint(static_cast<int>(argInt(args, "id", 0)));
                             }
                             d.waitIdle(15000);
                             return McpToolResult::ok(debugSnapshotJson(d.snapshot()));
@@ -1938,7 +1945,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
 
     // ----------------------------------------------------------------- traffic
     const auto flowSummary = [](const TrafficProxy::Flow& f) {
-        Json j = Json::obj({{"id", (unsigned long long)f.id},
+        Json j = Json::obj({{"id", static_cast<unsigned long long>(f.id)},
                             {"time", f.startedAt},
                             {"method", f.method},
                             {"url", json::sanitizeUtf8(f.url())},
@@ -1946,8 +1953,8 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             {"status", f.status},
                             {"tunnel", f.tunnel},
                             {"complete", f.complete},
-                            {"bytes_up", (unsigned long long)f.bytesUp},
-                            {"bytes_down", (unsigned long long)f.bytesDown},
+                            {"bytes_up", static_cast<unsigned long long>(f.bytesUp)},
+                            {"bytes_down", static_cast<unsigned long long>(f.bytesDown)},
                             {"duration_ms", f.durationMs}});
         if (!f.sni.empty()) j.set("sni", f.sni);
         if (!f.tunnel) j.set("content_type", f.contentType());
@@ -1962,7 +1969,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                         return McpToolResult::ok(Json::obj({{"running", t.running()},
                                                             {"port", t.port()},
                                                             {"routed_device", t.routedSerial()},
-                                                            {"captured", (unsigned long long)t.lastId()},
+                                                            {"captured", static_cast<unsigned long long>(t.lastId())},
                                                             {"note", "plain HTTP is captured fully; HTTPS appears as "
                                                                      "encrypted CONNECT tunnels (host, SNI, sizes)"}}));
                     }});
@@ -1980,7 +1987,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             const std::string action = argStr(args, "action");
                             std::string err;
                             if (action == "start") {
-                                if (!t.running() && !t.start((int)argInt(args, "port", 8899), err)) return McpToolResult::error(err);
+                                if (!t.running() && !t.start(static_cast<int>(argInt(args, "port", 8899)), err)) return McpToolResult::error(err);
                             } else if (action == "stop") {
                                 dev.stopTraffic();
                             } else {
@@ -2005,11 +2012,11 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                     {"since_id", integer("Only requests with a higher id", 0, 1ll << 50)},
                                     {"limit", integer("Max (default 200)", 1, 5000)}}),
                     true, false, [&dev, flowSummary](const Json& args, McpToolContext&) -> McpToolOutcome {
-                        const auto flows = dev.traffic().flows((uint64_t)argInt(args, "since_id", 0));
+                        const auto flows = dev.traffic().flows(static_cast<uint64_t>(argInt(args, "since_id", 0)));
                         const std::string filter = argStr(args, "filter"), host = argStr(args, "host");
                         const int64_t status = argInt(args, "status", -1);
                         const bool tunnels = argBool(args, "include_tunnels", true);
-                        const size_t limit = (size_t)argInt(args, "limit", 200);
+                        const size_t limit = static_cast<size_t>(argInt(args, "limit", 200));
                         Json list = Json::array();
                         for (auto it = flows.rbegin(); it != flows.rend() && list.size() < limit; ++it) {
                             const auto& f = *it;
@@ -2024,7 +2031,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                         Json ordered = Json::array();
                         for (size_t i = list.size(); i-- > 0;) ordered.push(list[i]);
                         return McpToolResult::ok(Json::obj({{"requests", std::move(ordered)},
-                                                            {"last_id", (unsigned long long)dev.traffic().lastId()}}));
+                                                            {"last_id", static_cast<unsigned long long>(dev.traffic().lastId())}}));
                     }});
 
     server.addTool({"traffic_get", "Request details",
@@ -2035,8 +2042,8 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                    {"id"}),
                     true, false, [&dev, flowSummary](const Json& args, McpToolContext&) -> McpToolOutcome {
                         TrafficProxy::Flow f;
-                        if (!dev.traffic().flow((uint64_t)argInt(args, "id", 0), f)) return McpToolResult::error("no such request");
-                        const size_t maxBody = (size_t)argInt(args, "max_body_bytes", 65536);
+                        if (!dev.traffic().flow(static_cast<uint64_t>(argInt(args, "id", 0)), f)) return McpToolResult::error("no such request");
+                        const size_t maxBody = static_cast<size_t>(argInt(args, "max_body_bytes", 65536));
                         const auto message = [maxBody](const TrafficProxy::Message& m) {
                             Json headers = Json::array();
                             for (const auto& h : m.headers)
@@ -2048,7 +2055,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             Json j = Json::obj({{"start_line", json::sanitizeUtf8(m.startLine)},
                                                 {"headers", std::move(headers)},
                                                 {"body", json::sanitizeUtf8(body)},
-                                                {"body_size", (unsigned long long)m.bodySize},
+                                                {"body_size", static_cast<unsigned long long>(m.bodySize)},
                                                 {"body_truncated", cut || m.truncated}});
                             if (!note.empty()) j.set("body_note", note);
                             return j;
@@ -2074,8 +2081,8 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             for (int s : e.statuses) st.push(s);
                             list.push(Json::obj({{"method", e.method}, {"host", e.host}, {"path", e.pathTemplate},
                                                  {"tunnel", e.tunnel}, {"hits", e.count}, {"statuses", std::move(st)},
-                                                 {"bytes", (unsigned long long)e.bytes},
-                                                 {"last_request_id", (unsigned long long)e.lastFlow}}));
+                                                 {"bytes", static_cast<unsigned long long>(e.bytes)},
+                                                 {"last_request_id", static_cast<unsigned long long>(e.lastFlow)}}));
                         }
                         return McpToolResult::ok(Json::obj({{"endpoints", std::move(list)}}));
                     }});

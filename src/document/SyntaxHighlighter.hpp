@@ -1,15 +1,20 @@
 #pragma once
 #include <string>
 #include <string_view>
+#include <cstddef>
+#include <cstdint>
 #include <vector>
-#include "imgui.h"
 
 enum class Language { Plain, Java, Kotlin, Groovy, JavaScript, Css, Xml, Json, Smali, Yaml, Python };
+
+// What a span of source is. The UI maps it to a colour of the active theme
+// (theme::syntax), so the document model does not depend on the UI.
+enum class SyntaxToken : uint8_t { Default, Keyword, String, Comment, Number, Type, Punctuation, Attribute, Directive };
 
 struct Span {
     size_t begin;
     size_t end;
-    ImU32 color;
+    SyntaxToken token;
 };
 
 class SyntaxHighlighter {

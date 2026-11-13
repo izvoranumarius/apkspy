@@ -32,7 +32,7 @@ void err(const std::string& line) {
     const std::string out = line + "\n";
     DWORD wrote = 0;
     HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
-    if (h && h != INVALID_HANDLE_VALUE) WriteFile(h, out.data(), (DWORD)out.size(), &wrote, nullptr);
+    if (h && h != INVALID_HANDLE_VALUE) WriteFile(h, out.data(), static_cast<DWORD>(out.size()), &wrote, nullptr);
 #else
     std::fprintf(stderr, "%s\n", line.c_str());
 #endif

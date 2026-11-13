@@ -67,7 +67,7 @@ bool JadxRunner::cancel() {
     cancelRequested_ = true;
     std::lock_guard<std::mutex> lock(handleMutex_);
 #ifdef _WIN32
-    if (childProcess_) TerminateJobObject((HANDLE)childProcess_, 1);
+    if (childProcess_) TerminateJobObject(childProcess_, 1);
 #else
     if (childPid_ > 0) ::kill(-childPid_, SIGTERM);  // the whole process group
 #endif
@@ -76,8 +76,8 @@ bool JadxRunner::cancel() {
 
 int JadxRunner::elapsedSeconds() const {
     if (state_.load() != State::Running) return 0;
-    return (int)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - started_)
-        .count();
+    return static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - started_)
+        .count());
 }
 
 std::vector<std::string> JadxRunner::drainLog() {
@@ -135,7 +135,7 @@ void JadxRunner::runDecompile(std::vector<std::string> argv) {
         // Progress lines arrive many times per second: keep one per 10%.
         int done = 0, total = 0;
         if (parseProgress(line, done, total)) {
-            const int percent = total > 0 ? (int)(100LL * done / total) : 0;
+            const int percent = total > 0 ? static_cast<int>(100LL * done / total) : 0;
             if (percent < lastLoggedPercent + 10) return;
             lastLoggedPercent = percent;
         }

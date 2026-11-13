@@ -23,14 +23,14 @@ constexpr size_t kMaxSections = 4096;
 uint16_t ElfFile::u16(uint64_t off) const {
     if (!inBounds(off, 2)) return 0;
     const uint8_t* p = data_->data() + off;
-    return little_ ? (uint16_t)(p[0] | p[1] << 8) : (uint16_t)(p[1] | p[0] << 8);
+    return little_ ? static_cast<uint16_t>(p[0] | p[1] << 8) : static_cast<uint16_t>(p[1] | p[0] << 8);
 }
 
 uint32_t ElfFile::u32(uint64_t off) const {
     if (!inBounds(off, 4)) return 0;
     const uint8_t* p = data_->data() + off;
     uint32_t v = 0;
-    for (int i = 0; i < 4; ++i) v |= (uint32_t)p[little_ ? i : 3 - i] << (8 * i);
+    for (int i = 0; i < 4; ++i) v |= static_cast<uint32_t>(p[little_ ? i : 3 - i]) << (8 * i);
     return v;
 }
 
@@ -38,14 +38,14 @@ uint64_t ElfFile::u64(uint64_t off) const {
     if (!inBounds(off, 8)) return 0;
     const uint8_t* p = data_->data() + off;
     uint64_t v = 0;
-    for (int i = 0; i < 8; ++i) v |= (uint64_t)p[little_ ? i : 7 - i] << (8 * i);
+    for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(p[little_ ? i : 7 - i]) << (8 * i);
     return v;
 }
 
 std::string ElfFile::cstr(uint64_t off, uint64_t limitEnd) const {
     std::string out;
     limitEnd = std::min<uint64_t>(limitEnd, data_->size());
-    for (uint64_t i = off; i < limitEnd && (*data_)[i] != 0 && out.size() < 4096; ++i) out.push_back((char)(*data_)[i]);
+    for (uint64_t i = off; i < limitEnd && (*data_)[i] != 0 && out.size() < 4096; ++i) out.push_back(static_cast<char>((*data_)[i]));
     return out;
 }
 
@@ -81,9 +81,9 @@ std::shared_ptr<ElfFile> ElfFile::parse(std::shared_ptr<const std::vector<uint8_
     const uint16_t shstrndx = e->u16(e->is64_ ? 62 : 50);
 
     // Program headers.
-    if (phnum && phentsize >= (e->is64_ ? 56 : 32) && e->inBounds(phoff, (uint64_t)phnum * phentsize)) {
+    if (phnum && phentsize >= (e->is64_ ? 56 : 32) && e->inBounds(phoff, static_cast<uint64_t>(phnum) * phentsize)) {
         for (uint16_t i = 0; i < phnum; ++i) {
-            const uint64_t p = phoff + (uint64_t)i * phentsize;
+            const uint64_t p = phoff + static_cast<uint64_t>(i) * phentsize;
             Segment s;
             s.type = e->u32(p);
             if (e->is64_) {
@@ -107,10 +107,10 @@ std::shared_ptr<ElfFile> ElfFile::parse(std::shared_ptr<const std::vector<uint8_
 
     // Section headers (optional: stripped/packed libraries may lack them).
     if (shnum && shnum < kMaxSections && shentsize >= (e->is64_ ? 64 : 40) &&
-        e->inBounds(shoff, (uint64_t)shnum * shentsize)) {
+        e->inBounds(shoff, static_cast<uint64_t>(shnum) * shentsize)) {
         std::vector<uint32_t> nameOffs;
         for (uint16_t i = 0; i < shnum; ++i) {
-            const uint64_t p = shoff + (uint64_t)i * shentsize;
+            const uint64_t p = shoff + static_cast<uint64_t>(i) * shentsize;
             Section s;
             nameOffs.push_back(e->u32(p));
             s.type = e->u32(p + 4);
@@ -206,8 +206,8 @@ void ElfFile::readRelocations(const Section& rel) {
         if (nameOff >= strtab.size) continue;
         Relocation r;
         r.offset = word(p);
-        r.type = (uint32_t)(is64_ ? info & 0xffffffffu : info & 0xffu);
-        if (rela) r.addend = is64_ ? (int64_t)u64(p + 16) : (int64_t)(int32_t)u32(p + 8);
+        r.type = static_cast<uint32_t>(is64_ ? info & 0xffffffffu : info & 0xffu);
+        if (rela) r.addend = is64_ ? static_cast<int64_t>(u64(p + 16)) : static_cast<int64_t>(static_cast<int32_t>(u32(p + 8)));
         r.symbol = cstr(strtab.offset + nameOff, strtab.offset + strtab.size);
         if (!r.symbol.empty()) relocations_.push_back(std::move(r));
     }
@@ -252,8 +252,8 @@ bool ElfFile::vaddrToOffset(uint64_t vaddr, uint64_t& offset) const {
 
 std::vector<uint8_t> ElfFile::bytesAt(uint64_t offset, size_t len) const {
     if (offset >= data_->size()) return {};
-    const size_t n = (size_t)std::min<uint64_t>(len, data_->size() - offset);
-    return std::vector<uint8_t>(data_->begin() + (ptrdiff_t)offset, data_->begin() + (ptrdiff_t)(offset + n));
+    const size_t n = static_cast<size_t>(std::min<uint64_t>(len, data_->size() - offset));
+    return std::vector<uint8_t>(data_->begin() + static_cast<ptrdiff_t>(offset), data_->begin() + static_cast<ptrdiff_t>(offset + n));
 }
 
 std::vector<const ElfFile::Symbol*> ElfFile::exports() const {
@@ -296,7 +296,7 @@ std::vector<ElfFile::StringHit> ElfFile::strings(size_t minLen, size_t limit) co
             const unsigned char c = (*data_)[i];
             if (c >= 0x20 && c < 0x7F) {
                 if (cur.empty()) start = i;
-                if (cur.size() < 2048) cur.push_back((char)c);
+                if (cur.size() < 2048) cur.push_back(static_cast<char>(c));
             } else {
                 if (cur.size() >= minLen) out.push_back({start, cur});
                 cur.clear();
@@ -333,10 +333,10 @@ namespace {
 
 // Minimal Itanium demangler: nested names, simple builtin parameter types.
 bool readSourceName(const std::string& s, size_t& p, std::string& out) {
-    if (p >= s.size() || !std::isdigit((unsigned char)s[p])) return false;
+    if (p >= s.size() || !std::isdigit(static_cast<unsigned char>(s[p]))) return false;
     size_t len = 0;
-    while (p < s.size() && std::isdigit((unsigned char)s[p])) {
-        len = len * 10 + (size_t)(s[p++] - '0');
+    while (p < s.size() && std::isdigit(static_cast<unsigned char>(s[p]))) {
+        len = len * 10 + static_cast<size_t>(s[p++] - '0');
         if (len > 4096) return false;
     }
     if (p + len > s.size()) return false;
@@ -418,7 +418,7 @@ std::string ElfFile::demangle(const std::string& name) {
         if (const char* b = builtin(name[p])) {
             type = b;
             ++p;
-        } else if (std::isdigit((unsigned char)name[p])) {
+        } else if (std::isdigit(static_cast<unsigned char>(name[p]))) {
             if (!readSourceName(name, p, type)) break;
         } else {
             out += firstParam ? "..." : ", ...";  // unsupported encoding: stop here

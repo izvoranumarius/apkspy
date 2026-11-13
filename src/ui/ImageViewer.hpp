@@ -1,5 +1,6 @@
 #pragma once
 #include "document/Document.hpp"
+#include "imgui.h"
 
 class ImageViewer {
 public:

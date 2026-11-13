@@ -31,9 +31,9 @@ namespace {
 
 std::wstring toWide(const std::string& utf8) {
     if (utf8.empty()) return std::wstring();
-    int n = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), nullptr, 0);
-    std::wstring w((size_t)n, 0);
-    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), w.data(), n);
+    int n = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
+    std::wstring w(static_cast<size_t>(n), 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), w.data(), n);
     return w;
 }
 
@@ -203,13 +203,13 @@ void ChildProcess::readAll(const std::function<void(std::string)>& onLine, size_
     for (;;) {
 #ifdef _WIN32
         DWORD got = 0;
-        if (!ReadFile((HANDLE)readPipe_, buffer, sizeof buffer, &got, nullptr) || got == 0) break;
+        if (!ReadFile(readPipe_, buffer, sizeof buffer, &got, nullptr) || got == 0) break;
 #else
         ssize_t got = read(readPipe_, buffer, sizeof buffer);
         if (got < 0 && errno == EINTR) continue;
         if (got <= 0) break;
 #endif
-        pending.append(buffer, (size_t)got);
+        pending.append(buffer, static_cast<size_t>(got));
         size_t start = 0;
         // '\r' ends a line as well: progress output (jadx, adb) redraws one
         // line with carriage returns and would otherwise become one runaway
@@ -252,16 +252,16 @@ bool ChildProcess::readRaw(std::string& out, size_t maxBytes) {
     for (;;) {
 #ifdef _WIN32
         DWORD got = 0;
-        if (!ReadFile((HANDLE)readPipe_, buffer, sizeof buffer, &got, nullptr) || got == 0) break;
+        if (!ReadFile(readPipe_, buffer, sizeof buffer, &got, nullptr) || got == 0) break;
 #else
         ssize_t got = read(readPipe_, buffer, sizeof buffer);
         if (got < 0 && errno == EINTR) continue;
         if (got <= 0) break;
 #endif
         const size_t room = out.size() < maxBytes ? maxBytes - out.size() : 0;
-        const size_t take = std::min<size_t>(room, (size_t)got);
+        const size_t take = std::min<size_t>(room, static_cast<size_t>(got));
         out.append(buffer, take);
-        if (take < (size_t)got) complete = false;  // keep draining so the child never blocks
+        if (take < static_cast<size_t>(got)) complete = false;  // keep draining so the child never blocks
     }
     return complete;
 }
@@ -269,10 +269,10 @@ bool ChildProcess::readRaw(std::string& out, size_t maxBytes) {
 int ChildProcess::waitForExit() {
     if (!valid_) return -1;
 #ifdef _WIN32
-    WaitForSingleObject((HANDLE)process_, INFINITE);
+    WaitForSingleObject(process_, INFINITE);
     DWORD code = 0;
-    GetExitCodeProcess((HANDLE)process_, &code);
-    return (int)code;
+    GetExitCodeProcess(process_, &code);
+    return static_cast<int>(code);
 #else
     int status = 0;
     while (waitpid(pid_, &status, 0) < 0 && errno == EINTR) {}
@@ -285,8 +285,8 @@ int ChildProcess::waitForExit() {
 void ChildProcess::killProcess() {
     if (!valid_) return;
 #ifdef _WIN32
-    if (job_) TerminateJobObject((HANDLE)job_, 1);
-    if (process_) TerminateProcess((HANDLE)process_, 1);
+    if (job_) TerminateJobObject(job_, 1);
+    if (process_) TerminateProcess(process_, 1);
 #else
     if (pgid_ > 0) ::kill(-pgid_, SIGTERM);
 #endif
@@ -296,7 +296,7 @@ void ChildProcess::killByHandle(Handle h) {
 #ifdef _WIN32
     if (!h) return;
     // Either a job object or a process handle: try both kinds.
-    if (!TerminateJobObject((HANDLE)h, 1)) TerminateProcess((HANDLE)h, 1);
+    if (!TerminateJobObject(h, 1)) TerminateProcess(h, 1);
 #else
     if (h > 0) ::kill(-h, SIGTERM);
 #endif
@@ -318,9 +318,9 @@ void ChildProcess::steal(ChildProcess&& other) {
 void ChildProcess::destroy() {
     if (!valid_) return;
 #ifdef _WIN32
-    if (readPipe_) CloseHandle((HANDLE)readPipe_);
-    if (process_) CloseHandle((HANDLE)process_);
-    if (job_) CloseHandle((HANDLE)job_);  // KILL_ON_JOB_CLOSE ends any leftovers
+    if (readPipe_) CloseHandle(readPipe_);
+    if (process_) CloseHandle(process_);
+    if (job_) CloseHandle(job_);  // KILL_ON_JOB_CLOSE ends any leftovers
     readPipe_ = nullptr;
     process_ = nullptr;
     job_ = nullptr;

@@ -46,15 +46,15 @@ uint64_t toU64(const std::string& s) { return std::strtoull(s.c_str(), nullptr, 
 bool validSerial(const std::string& s) {
     if (s.empty() || s.size() > 128) return false;
     for (char c : s)
-        if (!(std::isalnum((unsigned char)c) || c == '.' || c == '_' || c == ':' || c == '-')) return false;
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == ':' || c == '-')) return false;
     return true;
 }
 
 bool validPackage(const std::string& s) {
     if (s.empty() || s.size() > 255) return false;
     for (char c : s)
-        if (!(std::isalnum((unsigned char)c) || c == '.' || c == '_' || c == ':')) return false;  // ':' = process suffix
-    return std::isalpha((unsigned char)s[0]) != 0;
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == ':')) return false;  // ':' = process suffix
+    return std::isalpha(static_cast<unsigned char>(s[0])) != 0;
 }
 
 std::vector<std::string> Adb::base(const std::string& serial) const {
@@ -249,10 +249,10 @@ MemInfo Adb::parseMemInfo(const std::string& out) {
         if (w.size() < 2) continue;
         const auto num = [&](size_t from) -> uint64_t {
             for (size_t i = from; i < w.size(); ++i)
-                if (!w[i].empty() && std::isdigit((unsigned char)w[i][0])) return toU64(w[i]);
+                if (!w[i].empty() && std::isdigit(static_cast<unsigned char>(w[i][0]))) return toU64(w[i]);
             return 0;
         };
-        if (w[0] == "TOTAL" && w.size() > 1 && std::isdigit((unsigned char)w[1][0])) {
+        if (w[0] == "TOTAL" && w.size() > 1 && std::isdigit(static_cast<unsigned char>(w[1][0]))) {
             m.totalPssKb = toU64(w[1]);
             m.ok = true;
         } else if (w[0] == "TOTAL" && w.size() > 2 && w[1] == "PSS:") {
@@ -302,7 +302,7 @@ std::vector<int> Adb::jdwpPids(const std::string& serial, int sampleMs, std::str
             s.setRecvTimeout(3000);  // a stalled server must not hang the caller
             const auto request = [&](const std::string& msg) {
                 char len[5];
-                std::snprintf(len, sizeof len, "%04x", (unsigned)msg.size());
+                std::snprintf(len, sizeof len, "%04x", static_cast<unsigned>(msg.size()));
                 char status[4];
                 return s.sendAll(std::string(len) + msg) && s.waitReadable(3000) && s.recvAll(status, 4) &&
                        std::memcmp(status, "OKAY", 4) == 0;
@@ -390,7 +390,7 @@ void Adb::removeReverse(const std::string& serial, int port, std::string& error)
 bool Adb::setGlobalHttpProxy(const std::string& serial, const std::string& value, std::string& error) const {
     // The value reaches the device shell: digits, dots and one colon only.
     bool ok = validSerial(serial) && !value.empty() && value.size() < 64;
-    for (char c : value) ok = ok && (std::isdigit((unsigned char)c) || c == '.' || c == ':');
+    for (char c : value) ok = ok && (std::isdigit(static_cast<unsigned char>(c)) || c == '.' || c == ':');
     if (!ok) {
         error = "invalid serial or proxy value";
         return false;

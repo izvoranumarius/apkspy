@@ -17,11 +17,11 @@ constexpr size_t kMaxCopy = 4u << 20;  // bytes copied at most in one go
 // Byte colours, as in most hex editors: zero dim, text bright, control and
 // high bytes in between, 0xFF marked.
 ImU32 byteColor(uint8_t b) {
-    if (b == 0x00) return IM_COL32(95, 95, 100, 255);
-    if (b == 0xFF) return IM_COL32(220, 150, 110, 255);
-    if (b >= 0x20 && b < 0x7F) return IM_COL32(215, 215, 215, 255);
-    if (b == '\t' || b == '\n' || b == '\r') return IM_COL32(110, 190, 200, 255);
-    return IM_COL32(150, 160, 190, 255);
+    if (b == 0x00) return theme::u32(Col::TextMuted, 0.55f);
+    if (b == 0xFF) return theme::u32(Col::Orange);
+    if (b >= 0x20 && b < 0x7F) return theme::u32(Col::Text);
+    if (b == '\t' || b == '\n' || b == '\r') return theme::u32(Col::Cyan);
+    return theme::u32(Col::Blue);
 }
 
 // "DE AD be ef" / "deadbeef" -> bytes; false on bad input.
@@ -39,7 +39,7 @@ bool parseHex(const char* text, std::vector<uint8_t>& out) {
         if (nibble < 0) {
             nibble = v;
         } else {
-            out.push_back((uint8_t)(nibble << 4 | v));
+            out.push_back(static_cast<uint8_t>(nibble << 4 | v));
             nibble = -1;
         }
     }
@@ -62,7 +62,7 @@ bool parseOffset(const char* text, int64_t current, int64_t& out) {
     char* end = nullptr;
     const unsigned long long v = std::strtoull(text, &end, base);
     if (end == text || *end) return false;
-    out = sign == 0 ? (int64_t)v : std::max<int64_t>(0, current) + sign * (int64_t)v;
+    out = sign == 0 ? static_cast<int64_t>(v) : std::max<int64_t>(0, current) + sign * static_cast<int64_t>(v);
     return true;
 }
 
@@ -74,12 +74,12 @@ std::string HexView::describeFormat(const uint8_t* d, size_t n) {
     };
     char buf[96];
     if (starts("dex\n", 4) && n >= 7) {
-        std::snprintf(buf, sizeof buf, "DEX %.3s", (const char*)d + 4);
+        std::snprintf(buf, sizeof buf, "DEX %.3s", reinterpret_cast<const char*>(d) + 4);
         return buf;
     }
     if (starts("\x7F" "ELF", 4) && n >= 20) {
         const char* bits = d[4] == 2 ? "64-bit" : "32-bit";
-        const unsigned machine = d[5] == 2 ? (unsigned)(d[18] << 8 | d[19]) : (unsigned)(d[18] | d[19] << 8);
+        const unsigned machine = d[5] == 2 ? static_cast<unsigned>(d[18] << 8 | d[19]) : static_cast<unsigned>(d[18] | d[19] << 8);
         const char* arch = machine == 183 ? "AArch64" : machine == 40 ? "ARM" : machine == 62 ? "x86-64" : machine == 3 ? "x86" : "";
         std::snprintf(buf, sizeof buf, "ELF %s %s", bits, arch);
         return buf;
@@ -122,7 +122,7 @@ void HexView::draw(const std::vector<uint8_t>& bytes) {
         formatKnown_ = true;
         format_ = describeFormat(bytes.data(), bytes.size());
     }
-    if (cursor_ >= (int64_t)bytes.size()) select(-1, -1, false);
+    if (cursor_ >= static_cast<int64_t>(bytes.size())) select(-1, -1, false);
     drawToolbar(bytes);
     const float inspectorW = ui::em(16.f);
     const bool inspector = ImGui::GetContentRegionAvail().x > inspectorW + ui::em(30.f);
@@ -140,7 +140,7 @@ void HexView::drawToolbar(const std::vector<uint8_t>& bytes) {
     if (ImGui::InputTextWithHint("##goto", "Go to...", gotoBuf_, sizeof gotoBuf_, ImGuiInputTextFlags_EnterReturnsTrue)) {
         int64_t off = 0;
         if (!parseOffset(gotoBuf_, cursor_, off)) status_ = "Offsets are hex (1f00 or 0x1f00), #1234 is decimal, +20 is relative";
-        else if (off >= (int64_t)bytes.size()) status_ = "Past the end of the file";
+        else if (off >= static_cast<int64_t>(bytes.size())) status_ = "Past the end of the file";
         else {
             select(off, off, true);
             status_.clear();
@@ -159,10 +159,10 @@ void HexView::drawToolbar(const std::vector<uint8_t>& bytes) {
                                                 findBuf_, sizeof findBuf_, ImGuiInputTextFlags_EnterReturnsTrue);
     if (enter) find(bytes, ImGui::GetIO().KeyShift);
     ImGui::SameLine(0.f, 2.f);
-    if (ImGui::SmallButton("<##prev")) find(bytes, true);
+    if (ui::smallButton("<##prev")) find(bytes, true);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Previous match (Shift+Enter)");
     ImGui::SameLine(0.f, 2.f);
-    if (ImGui::SmallButton(">##next")) find(bytes, false);
+    if (ui::smallButton(">##next")) find(bytes, false);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Next match (Enter)");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(ui::em(4.5f));
@@ -191,7 +191,7 @@ void HexView::drawToolbar(const std::vector<uint8_t>& bytes) {
         info = format_.empty() ? std::string(b) : format_ + "   " + b;
     }
     ui::sameLineIfFits(ImGui::CalcTextSize(info.c_str()).x);
-    if (!status_.empty()) ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.35f, 1.f), "%s", info.c_str());
+    if (!status_.empty()) ImGui::TextColored(theme::vec(Col::Warning), "%s", info.c_str());
     else ImGui::TextDisabled("%s", info.c_str());
 }
 
@@ -203,7 +203,7 @@ void HexView::find(const std::vector<uint8_t>& bytes, bool backward) {
         status_ = "Type hex bytes, like 64 65 78";
         return;
     }
-    const int64_t size = (int64_t)bytes.size();
+    const int64_t size = static_cast<int64_t>(bytes.size());
     const int64_t here = cursor_ < 0 ? (backward ? size : -1) : selBegin();
     auto hit = bytes.end();
     bool wrapped = false;
@@ -214,7 +214,7 @@ void HexView::find(const std::vector<uint8_t>& bytes, bool backward) {
             wrapped = true;
         }
     } else {
-        const auto limit = bytes.begin() + std::clamp<int64_t>(here + (int64_t)pattern.size() - 1, 0, size);
+        const auto limit = bytes.begin() + std::clamp<int64_t>(here + static_cast<int64_t>(pattern.size()) - 1, 0, size);
         hit = std::find_end(bytes.begin(), limit, pattern.begin(), pattern.end());
         if (hit == limit) {
             hit = std::find_end(bytes.begin(), bytes.end(), pattern.begin(), pattern.end());
@@ -226,7 +226,7 @@ void HexView::find(const std::vector<uint8_t>& bytes, bool backward) {
         return;
     }
     const int64_t at = hit - bytes.begin();
-    select(at, at + (int64_t)pattern.size() - 1, true);
+    select(at, at + static_cast<int64_t>(pattern.size()) - 1, true);
     status_ = wrapped ? "Wrapped around" : "";
 }
 
@@ -235,9 +235,9 @@ void HexView::drawBody(const std::vector<uint8_t>& bytes) {
     const float charW = ImGui::CalcTextSize("0").x;
     const float lineH = ImGui::GetTextLineHeightWithSpacing();
     const int bpr = bytesPerRow_;
-    const auto hexCol = [&](int k) { return 10.f + 3.f * (float)k + (float)(k / 8); };
+    const auto hexCol = [&](int k) { return 10.f + 3.f * static_cast<float>(k) + static_cast<float>(k / 8); };
     const float asciiCol = hexCol(bpr) + 1.f;
-    const float rowChars = asciiCol + (float)bpr;
+    const float rowChars = asciiCol + static_cast<float>(bpr);
 
     // Column header, outside the scrolling area.
     {
@@ -246,22 +246,22 @@ void HexView::drawBody(const std::vector<uint8_t>& bytes) {
         char h[4];
         for (int k = 0; k < bpr; ++k) {
             std::snprintf(h, sizeof h, "%02X", k);
-            dl->AddText(ImVec2(p.x + hexCol(k) * charW, p.y), IM_COL32(110, 140, 180, 255), h);
+            dl->AddText(ImVec2(p.x + hexCol(k) * charW, p.y), theme::u32(Col::LineNumber), h);
         }
-        dl->AddText(p, IM_COL32(110, 140, 180, 255), "Offset");
+        dl->AddText(p, theme::u32(Col::LineNumber), "Offset");
         ImGui::Dummy(ImVec2(rowChars * charW, ImGui::GetTextLineHeight()));
         ImGui::Separator();
     }
 
     ImGui::BeginChild("##hexbody", ImVec2(0, 0), ImGuiChildFlags_None,
                       ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoNavInputs);  // arrows move the cursor, not nav
-    const int64_t size = (int64_t)bytes.size();
+    const int64_t size = static_cast<int64_t>(bytes.size());
     const int64_t rows = (size + bpr - 1) / bpr;
-    const int visibleRows = std::max(1, (int)(ImGui::GetWindowHeight() / lineH) - 1);
+    const int visibleRows = std::max(1, static_cast<int>(ImGui::GetWindowHeight() / lineH) - 1);
     if (ImGui::IsWindowFocused()) handleKeys(bytes, visibleRows);
     if (scrollToCursor_ && cursor_ >= 0) {
         scrollToCursor_ = false;
-        const float y = (float)(cursor_ / bpr) * lineH;
+        const float y = static_cast<float>(cursor_ / bpr) * lineH;
         if (y < ImGui::GetScrollY() || y + lineH > ImGui::GetScrollY() + ImGui::GetWindowHeight())
             ImGui::SetScrollY(std::max(0.f, y - ImGui::GetWindowHeight() * 0.33f));
     }
@@ -273,12 +273,12 @@ void HexView::drawBody(const std::vector<uint8_t>& bytes) {
     int64_t hover = -1;
     if (ImGui::IsWindowHovered()) {
         const ImVec2 m = ImGui::GetIO().MousePos;
-        const int64_t row = (int64_t)std::floor((m.y - origin.y) / lineH);
+        const int64_t row = static_cast<int64_t>(std::floor((m.y - origin.y) / lineH));
         const float col = (m.x - origin.x) / charW;
         int k = -1;
         for (int i = 0; i < bpr && k < 0; ++i)
             if (col >= hexCol(i) - 0.5f && col < hexCol(i) + 2.5f) k = i;
-        if (k < 0 && col >= asciiCol && col < asciiCol + (float)bpr) k = (int)(col - asciiCol);
+        if (k < 0 && col >= asciiCol && col < asciiCol + static_cast<float>(bpr)) k = static_cast<int>(col - asciiCol);
         if (row >= 0 && k >= 0 && row * bpr + k < size) hover = row * bpr + k;
     }
     if (hover >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -290,31 +290,31 @@ void HexView::drawBody(const std::vector<uint8_t>& bytes) {
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragging_ = false;
 
     ImGuiListClipper clipper;
-    clipper.Begin((int)std::min<int64_t>(rows, INT32_MAX), lineH);
+    clipper.Begin(static_cast<int>(std::min<int64_t>(rows, INT32_MAX)), lineH);
     char text[24];
     while (clipper.Step()) {
         for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; ++r) {
-            const int64_t base = (int64_t)r * bpr;
-            const float y = origin.y + (float)r * lineH;
-            std::snprintf(text, sizeof text, "%08" PRIX64, (uint64_t)base);
-            dl->AddText(ImVec2(origin.x, y), IM_COL32(110, 140, 180, 255), text);
+            const int64_t base = static_cast<int64_t>(r) * bpr;
+            const float y = origin.y + static_cast<float>(r) * lineH;
+            std::snprintf(text, sizeof text, "%08" PRIX64, static_cast<uint64_t>(base));
+            dl->AddText(ImVec2(origin.x, y), theme::u32(Col::LineNumber), text);
             for (int k = 0; k < bpr && base + k < size; ++k) {
                 const int64_t at = base + k;
-                const uint8_t b = bytes[(size_t)at];
-                const float hx = origin.x + hexCol(k) * charW, ax = origin.x + (asciiCol + (float)k) * charW;
+                const uint8_t b = bytes[static_cast<size_t>(at)];
+                const float hx = origin.x + hexCol(k) * charW, ax = origin.x + (asciiCol + static_cast<float>(k)) * charW;
                 const bool selected = at >= s0 && at <= s1;
                 if (selected || at == hover) {
-                    const ImU32 bg = selected ? IM_COL32(0, 122, 204, 150) : IM_COL32(255, 255, 255, 28);
+                    const ImU32 bg = selected ? theme::u32(Col::TextSelection) : theme::u32(Col::Text, 0.11f);
                     const bool joinNext = selected && at + 1 <= s1 && k + 1 < bpr;  // one band across a selection
-                    dl->AddRectFilled(ImVec2(hx - charW * 0.5f, y), ImVec2(hx + charW * (joinNext ? 2.5f + (float)((k + 1) % 8 == 0) : 2.5f), y + lineH), bg);
+                    dl->AddRectFilled(ImVec2(hx - charW * 0.5f, y), ImVec2(hx + charW * (joinNext ? 2.5f + static_cast<float>((k + 1) % 8 == 0) : 2.5f), y + lineH), bg);
                     dl->AddRectFilled(ImVec2(ax, y), ImVec2(ax + charW, y + lineH), bg);
                 }
-                if (at == cursor_) dl->AddRect(ImVec2(hx - charW * 0.5f, y), ImVec2(hx + charW * 2.5f, y + lineH), IM_COL32(255, 255, 255, 140));
+                if (at == cursor_) dl->AddRect(ImVec2(hx - charW * 0.5f, y), ImVec2(hx + charW * 2.5f, y + lineH), theme::u32(Col::Caret, 0.55f));
                 static const char kDigits[] = "0123456789ABCDEF";
                 const char pair[2] = {kDigits[b >> 4], kDigits[b & 15]};
                 dl->AddText(ImVec2(hx, y), byteColor(b), pair, pair + 2);
-                const char c = b >= 0x20 && b < 0x7F ? (char)b : '.';
-                dl->AddText(ImVec2(ax, y), b >= 0x20 && b < 0x7F ? IM_COL32(200, 200, 200, 255) : IM_COL32(90, 90, 95, 255), &c, &c + 1);
+                const char c = b >= 0x20 && b < 0x7F ? static_cast<char>(b) : '.';
+                dl->AddText(ImVec2(ax, y), b >= 0x20 && b < 0x7F ? theme::u32(Col::Text) : theme::u32(Col::TextMuted, 0.55f), &c, &c + 1);
             }
             ImGui::Dummy(ImVec2(rowChars * charW, lineH));
         }
@@ -326,7 +326,7 @@ void HexView::drawBody(const std::vector<uint8_t>& bytes) {
 }
 
 void HexView::handleKeys(const std::vector<uint8_t>& bytes, int visibleRows) {
-    const int64_t size = (int64_t)bytes.size();
+    const int64_t size = static_cast<int64_t>(bytes.size());
     if (size == 0) return;
     const ImGuiIO& io = ImGui::GetIO();
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) {
@@ -336,10 +336,10 @@ void HexView::handleKeys(const std::vector<uint8_t>& bytes, int visibleRows) {
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false) && anchor_ >= 0) {
         std::string out;
         static const char kDigits[] = "0123456789ABCDEF";
-        for (int64_t i = selBegin(); i <= selEnd() && (size_t)(i - selBegin()) < kMaxCopy; ++i) {
+        for (int64_t i = selBegin(); i <= selEnd() && static_cast<size_t>(i - selBegin()) < kMaxCopy; ++i) {
             if (i > selBegin()) out.push_back(' ');
-            out.push_back(kDigits[bytes[(size_t)i] >> 4]);
-            out.push_back(kDigits[bytes[(size_t)i] & 15]);
+            out.push_back(kDigits[bytes[static_cast<size_t>(i)] >> 4]);
+            out.push_back(kDigits[bytes[static_cast<size_t>(i)] & 15]);
         }
         ImGui::SetClipboardText(out.c_str());
         return;
@@ -349,8 +349,8 @@ void HexView::handleKeys(const std::vector<uint8_t>& bytes, int visibleRows) {
     if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) step = 1;
     if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) step = -bytesPerRow_;
     if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) step = bytesPerRow_;
-    if (ImGui::IsKeyPressed(ImGuiKey_PageUp)) step = -(int64_t)bytesPerRow_ * visibleRows;
-    if (ImGui::IsKeyPressed(ImGuiKey_PageDown)) step = (int64_t)bytesPerRow_ * visibleRows;
+    if (ImGui::IsKeyPressed(ImGuiKey_PageUp)) step = -static_cast<int64_t>(bytesPerRow_) * visibleRows;
+    if (ImGui::IsKeyPressed(ImGuiKey_PageDown)) step = static_cast<int64_t>(bytesPerRow_) * visibleRows;
     int64_t target = -1;
     const int64_t at = std::max<int64_t>(0, cursor_);
     if (step != 0) target = std::clamp<int64_t>(at + step, 0, size - 1);
@@ -364,7 +364,7 @@ void HexView::contextMenu(const std::vector<uint8_t>& bytes) {
     if (!ImGui::BeginPopupContextWindow("##hexctx")) return;
     const bool any = anchor_ >= 0;
     const int64_t b = selBegin(), e = selEnd();
-    const size_t n = any ? (size_t)std::min<int64_t>(e - b + 1, (int64_t)kMaxCopy) : 0;
+    const size_t n = any ? static_cast<size_t>(std::min<int64_t>(e - b + 1, static_cast<int64_t>(kMaxCopy))) : 0;
     const uint8_t* p = any ? bytes.data() + b : nullptr;
     static const char kDigits[] = "0123456789ABCDEF";
     if (ImGui::MenuItem("Copy as hex", "Ctrl+C", false, any)) {
@@ -378,7 +378,7 @@ void HexView::contextMenu(const std::vector<uint8_t>& bytes) {
     }
     if (ImGui::MenuItem("Copy as text", nullptr, false, any)) {
         std::string out;
-        for (size_t i = 0; i < n; ++i) out.push_back(p[i] >= 0x20 && p[i] < 0x7F ? (char)p[i] : '.');
+        for (size_t i = 0; i < n; ++i) out.push_back(p[i] >= 0x20 && p[i] < 0x7F ? static_cast<char>(p[i]) : '.');
         ImGui::SetClipboardText(out.c_str());
     }
     if (ImGui::MenuItem("Copy as C array", nullptr, false, any)) {
@@ -395,11 +395,11 @@ void HexView::contextMenu(const std::vector<uint8_t>& bytes) {
     }
     if (ImGui::MenuItem("Copy offset", nullptr, false, any)) {
         char o[32];
-        std::snprintf(o, sizeof o, "0x%" PRIX64, (uint64_t)b);
+        std::snprintf(o, sizeof o, "0x%" PRIX64, static_cast<uint64_t>(b));
         ImGui::SetClipboardText(o);
     }
     ImGui::Separator();
-    if (ImGui::MenuItem("Select all", "Ctrl+A", false, !bytes.empty())) select(0, (int64_t)bytes.size() - 1, false);
+    if (ImGui::MenuItem("Select all", "Ctrl+A", false, !bytes.empty())) select(0, static_cast<int64_t>(bytes.size()) - 1, false);
     ImGui::EndPopup();
 }
 
@@ -410,12 +410,12 @@ void HexView::drawInspector(const std::vector<uint8_t>& bytes) {
     ImGui::PushID("endian");
     if (ui::segmented(kEndian, 2, endian)) bigEndian_ = endian == 1;
     ImGui::PopID();
-    if (cursor_ < 0 || cursor_ >= (int64_t)bytes.size()) {
+    if (cursor_ < 0 || cursor_ >= static_cast<int64_t>(bytes.size())) {
         ImGui::TextDisabled("Click a byte.");
         ImGui::EndChild();
         return;
     }
-    const size_t off = (size_t)selBegin();
+    const size_t off = static_cast<size_t>(selBegin());
     const size_t avail = bytes.size() - off;
     const auto read = [&](size_t n) {
         uint64_t v = 0;
@@ -444,21 +444,21 @@ void HexView::drawInspector(const std::vector<uint8_t>& bytes) {
     for (int i = 0; i < 8; ++i) bits[i] = (b0 >> (7 - i)) & 1 ? '1' : '0';
     bits[8] = 0;
     row("binary", bits);
-    std::snprintf(v, sizeof v, "%d", (int)(int8_t)b0);
+    std::snprintf(v, sizeof v, "%d", static_cast<int>(static_cast<int8_t>(b0)));
     row("int8", v);
-    std::snprintf(v, sizeof v, "%u", (unsigned)b0);
+    std::snprintf(v, sizeof v, "%u", static_cast<unsigned>(b0));
     row("uint8", v);
     if (avail >= 2) {
-        std::snprintf(v, sizeof v, "%d", (int)(int16_t)read(2));
+        std::snprintf(v, sizeof v, "%d", static_cast<int>(static_cast<int16_t>(read(2))));
         row("int16", v);
-        std::snprintf(v, sizeof v, "%u", (unsigned)(uint16_t)read(2));
+        std::snprintf(v, sizeof v, "%u", static_cast<unsigned>(static_cast<uint16_t>(read(2))));
         row("uint16", v);
     }
     if (avail >= 4) {
-        const uint32_t u = (uint32_t)read(4);
+        const uint32_t u = static_cast<uint32_t>(read(4));
         float f;
         std::memcpy(&f, &u, 4);
-        std::snprintf(v, sizeof v, "%d", (int32_t)u);
+        std::snprintf(v, sizeof v, "%d", static_cast<int32_t>(u));
         row("int32", v);
         std::snprintf(v, sizeof v, "%u", u);
         row("uint32", v);
@@ -466,7 +466,7 @@ void HexView::drawInspector(const std::vector<uint8_t>& bytes) {
         row("float", v);
         // Plausible Unix times only (2000 to 2040), so random data stays quiet.
         if (u >= 946684800u && u <= 2208988800u) {
-            const std::time_t t = (std::time_t)u;
+            const std::time_t t = static_cast<std::time_t>(u);
             std::tm tm{};
 #ifdef _WIN32
             gmtime_s(&tm, &t);
@@ -481,7 +481,7 @@ void HexView::drawInspector(const std::vector<uint8_t>& bytes) {
         const uint64_t u = read(8);
         double d;
         std::memcpy(&d, &u, 8);
-        std::snprintf(v, sizeof v, "%" PRId64, (int64_t)u);
+        std::snprintf(v, sizeof v, "%" PRId64, static_cast<int64_t>(u));
         row("int64", v);
         std::snprintf(v, sizeof v, "%" PRIu64, u);
         row("uint64", v);
@@ -493,7 +493,7 @@ void HexView::drawInspector(const std::vector<uint8_t>& bytes) {
         int shift = 0;
         size_t i = 0;
         for (; i < 10 && i < avail; ++i) {
-            u |= (uint64_t)(bytes[off + i] & 0x7F) << shift;
+            u |= static_cast<uint64_t>(bytes[off + i] & 0x7F) << shift;
             shift += 7;
             if (!(bytes[off + i] & 0x80)) break;
         }
@@ -502,14 +502,14 @@ void HexView::drawInspector(const std::vector<uint8_t>& bytes) {
     }
     ImGui::Separator();
     std::string utf8;
-    for (size_t i = 0; i < 64 && i < avail && bytes[off + i] >= 0x20 && bytes[off + i] < 0x7F; ++i) utf8.push_back((char)bytes[off + i]);
+    for (size_t i = 0; i < 64 && i < avail && bytes[off + i] >= 0x20 && bytes[off + i] < 0x7F; ++i) utf8.push_back(static_cast<char>(bytes[off + i]));
     ImGui::TextDisabled("ascii");
     ImGui::TextWrapped("\"%s\"", utf8.c_str());
     std::string utf16;
     for (size_t i = 0; i + 1 < avail && utf16.size() < 64; i += 2) {
-        const unsigned c = bigEndian_ ? (unsigned)(bytes[off + i] << 8 | bytes[off + i + 1]) : (unsigned)(bytes[off + i] | bytes[off + i + 1] << 8);
+        const unsigned c = bigEndian_ ? static_cast<unsigned>(bytes[off + i] << 8 | bytes[off + i + 1]) : static_cast<unsigned>(bytes[off + i] | bytes[off + i + 1] << 8);
         if (c < 0x20 || c >= 0x7F) break;
-        utf16.push_back((char)c);
+        utf16.push_back(static_cast<char>(c));
     }
     if (!utf16.empty()) {
         ImGui::TextDisabled("utf-16");

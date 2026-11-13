@@ -34,13 +34,13 @@ inline bool read(const uint8_t* data, size_t size, size_t& pos, Node& out) {
     size_t len = 0;
     if (first & 0x80) {
         const int n = first & 0x7F;
-        if (n == 0 || n > 4 || pos + (size_t)n > size) return false;
+        if (n == 0 || n > 4 || pos + static_cast<size_t>(n) > size) return false;
         for (int i = 0; i < n; ++i) len = (len << 8) | data[pos++];
     } else {
         len = first;
     }
     if (pos + len > size) return false;
-    const size_t header = len < 128 ? 2 : 2 + (size_t)(first & 0x7F);
+    const size_t header = len < 128 ? 2 : 2 + static_cast<size_t>(first & 0x7F);
     out.content = data + pos;
     out.len = len;
     out.total = header + len;

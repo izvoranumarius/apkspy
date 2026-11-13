@@ -36,7 +36,7 @@ inline LogSeverity classify(std::string_view line) {
             return LogSeverity::Error;
     }
     auto isWord = [](char c) {
-        unsigned char u = (unsigned char)c;
+        unsigned char u = static_cast<unsigned char>(c);
         return std::isalnum(u) || c == '_';
     };
     for (std::string_view word : {"ERROR", "Error", "error"}) {

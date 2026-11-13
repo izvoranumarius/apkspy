@@ -23,7 +23,7 @@ std::string exeDir() {
     std::error_code ec;
 #ifdef _WIN32
     std::wstring exe(32768, L'\0');
-    const DWORD n = GetModuleFileNameW(nullptr, exe.data(), (DWORD)exe.size());
+    const DWORD n = GetModuleFileNameW(nullptr, exe.data(), static_cast<DWORD>(exe.size()));
     if (n == 0 || n >= exe.size()) return {};
     exe.resize(n);
     return toUtf8(fs::path(exe).parent_path());
@@ -36,7 +36,7 @@ std::string exeDir() {
 #else
     char buf[4096];
     const ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (n <= 0 || (size_t)n >= sizeof(buf)) return {};
+    if (n <= 0 || static_cast<size_t>(n) >= sizeof(buf)) return {};
     buf[n] = '\0';
     return toUtf8(fs::path(buf).parent_path());
 #endif

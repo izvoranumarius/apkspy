@@ -14,8 +14,10 @@ public:
     // Replaces the placeholder glyph in the caption's icon slot with the
     // favicon texture (Application::loadWindowIcon). Keeps the fallback when
     // never called or when the texture is empty.
-    void setIcon(ImTextureID texture, float width, float height) {
+    // `forDark` (optional) is the variant drawn on dark themes.
+    void setIcon(ImTextureID texture, float width, float height, ImTextureID forDark = 0) {
         icon_ = texture;
+        iconDark_ = forDark;
         iconWidth_ = width;
         iconHeight_ = height;
     }
@@ -43,6 +45,7 @@ private:
     std::string title_;
     std::function<void()> closeHandler_;
     ImTextureID icon_ = 0;
+    ImTextureID iconDark_ = 0;
     float iconWidth_ = 0.f;
     float iconHeight_ = 0.f;
     int openMenu_ = -1;

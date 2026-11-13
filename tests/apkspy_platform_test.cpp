@@ -219,7 +219,7 @@ static bool writeApk(const fs::path& path, const std::vector<std::pair<std::stri
     mz_zip_zero_struct(&zip);
     if (!mz_zip_writer_init_file(&zip, path.string().c_str(), 0)) return false;
     for (const auto& e : entries)
-        mz_zip_writer_add_mem(&zip, e.first.c_str(), e.second.data(), e.second.size(), MZ_DEFAULT_COMPRESSION);
+        mz_zip_writer_add_mem(&zip, e.first.c_str(), e.second.data(), e.second.size(), MZ_DEFAULT_LEVEL);
     const bool ok = mz_zip_writer_finalize_archive(&zip);
     mz_zip_writer_end(&zip);
     return ok;
@@ -245,6 +245,19 @@ static void testJson() {
     CHECK(Json(bad).dump() == "\"ok\xEF\xBF\xBD(\xEF\xBF\xBD\"", "invalid UTF-8 replaced by U+FFFD");
     CHECK(Json(std::string("\x01\n")).dump() == "\"\\u0001\\n\"", "control characters escaped");
     CHECK(Json((long long)9007199254740991LL).dump() == "9007199254740991", "large integers exact");
+
+    // Regression: search_code read hits.size() after moving `hits` into its
+    // result; the moved-from array had no storage and size() crashed.
+    Json arr = Json::array();
+    arr.push(1);
+    Json obj = Json::obj({{"k", 1}});
+    Json movedArr = std::move(arr);
+    Json movedObj;
+    movedObj = std::move(obj);
+    // Using the moved-from values is the point of this test.
+    CHECK(arr.isNull() && arr.size() == 0 && arr.dump() == "null", "moved-from array is a usable null");  // NOLINT(bugprone-use-after-move)
+    CHECK(obj.isNull() && obj.size() == 0 && obj.items().empty(), "moved-from object is a usable null");  // NOLINT(bugprone-use-after-move)
+    CHECK(movedArr.size() == 1 && movedObj.get("k").asInt() == 1, "move transfers the value");
 }
 
 static void testSchema() {
@@ -405,11 +418,11 @@ static void testDexAndAnalysis() {
             SyntaxHighlighter::tokenize(line, Language::Python, inBlock, spans);
             for (const Span& s : spans)
                 if (at >= s.begin && at < s.end) return s;
-            return Span{0, 0, 0};
+            return Span{0, 0, SyntaxToken::Default};
         };
         bool inBlock = false;
-        const ImU32 plain = spanAt("x", inBlock, 0).color;
-        CHECK(spanAt("def x(): # note", inBlock, 0).color != plain, "python keyword is coloured");
+        const SyntaxToken plain = spanAt("x", inBlock, 0).token;
+        CHECK(spanAt("def x(): # note", inBlock, 0).token != plain, "python keyword is coloured");
         CHECK(spanAt("x = 1 # \"not a string", inBlock, 8).end == 21 && !inBlock, "python comment runs to the end");
         const Span prefixed = spanAt("x = rb'#a' + 1", inBlock, 4);
         CHECK(prefixed.begin == 4 && prefixed.end == 10, "python string prefix belongs to the string");
@@ -463,8 +476,8 @@ static void testDexAndAnalysis() {
     CHECK(ApkAnalysis::classify("AKIAABCDEFGHIJKLMNOP") == ApkAnalysis::StringCategory::Secret, "secret classification");
     CHECK(ApkAnalysis::classify("hello world") == ApkAnalysis::StringCategory::Any, "plain string");
     {
-        const auto urls = ApkAnalysis::extractUrls("See https://goo.gle/admob-setup. Or (http://x.io/a?b=1), not ftp:/bad");
-        CHECK(urls.size() == 2 && urls[0] == "https://goo.gle/admob-setup" && urls[1] == "http://x.io/a?b=1",
+        const auto extracted = ApkAnalysis::extractUrls("See https://goo.gle/admob-setup. Or (http://x.io/a?b=1), not ftp:/bad");
+        CHECK(extracted.size() == 2 && extracted[0] == "https://goo.gle/admob-setup" && extracted[1] == "http://x.io/a?b=1",
               "URL tokens extracted from surrounding text");
     }
     CHECK(a->cfgToDot(defs[0], blocks).find("digraph") == 0, "DOT export");

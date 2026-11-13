@@ -19,7 +19,7 @@ constexpr size_t kPageWindow = 24;
 
 std::string hex(uint64_t v) {
     char b[32];
-    std::snprintf(b, sizeof b, "0x%llx", (unsigned long long)v);
+    std::snprintf(b, sizeof b, "0x%llx", static_cast<unsigned long long>(v));
     return b;
 }
 
@@ -74,7 +74,7 @@ bool NativeCode::readWord(uint64_t vaddr, uint32_t& out) const {
     for (const Range& r : code_)
         if (vaddr >= r.vaddr && vaddr + 4 <= r.vaddr + r.size) {
             const uint8_t* p = elf_->data().data() + r.offset + (vaddr - r.vaddr);
-            out = (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+            out = static_cast<uint32_t>(p[0]) | static_cast<uint32_t>(p[1]) << 8 | static_cast<uint32_t>(p[2]) << 16 | static_cast<uint32_t>(p[3]) << 24;
             return true;
         }
     return false;
@@ -95,21 +95,21 @@ void NativeCode::sweep(const std::atomic<bool>* cancel) {
         for (uint64_t off = 0; off + 4 <= r.size; off += 4, ++index) {
             if ((index & 0xffff) == 0 && cancel && cancel->load()) return;
             const uint8_t* b = data.data() + r.offset + off;
-            const uint32_t w = (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
+            const uint32_t w = static_cast<uint32_t>(b[0]) | static_cast<uint32_t>(b[1]) << 8 | static_cast<uint32_t>(b[2]) << 16 | static_cast<uint32_t>(b[3]) << 24;
             const uint64_t pc = r.vaddr + off;
             if (refs_.size() >= kMaxRefs) continue;
             if ((w & 0x7c000000) == 0x14000000) {  // b / bl
-                int64_t imm = (int64_t)(w & 0x3ffffff);
+                int64_t imm = static_cast<int64_t>(w & 0x3ffffff);
                 if (imm & 0x2000000) imm -= 0x4000000;
-                refs_.push_back({pc + (uint64_t)(imm * 4), pc, (w & 0x80000000) ? RefKind::Call : RefKind::Jump});
+                refs_.push_back({pc + static_cast<uint64_t>(imm * 4), pc, (w & 0x80000000) ? RefKind::Call : RefKind::Jump});
                 if (w & 0x80000000)  // calls clobber the caller-saved registers
                     for (unsigned k = 0; k < 18; ++k) pages[k].valid = false;
                 continue;
             }
             if ((w & 0x9f000000) == 0x90000000) {  // adrp
-                int64_t imm = (int64_t)((((w >> 5) & 0x7ffff) << 2) | ((w >> 29) & 3));
+                int64_t imm = static_cast<int64_t>((((w >> 5) & 0x7ffff) << 2) | ((w >> 29) & 3));
                 if (imm & 0x100000) imm -= 0x200000;
-                pages[w & 31] = {(pc & ~0xfffull) + (uint64_t)(imm * 4096), index, true};
+                pages[w & 31] = {(pc & ~0xfffull) + static_cast<uint64_t>(imm * 4096), index, true};
                 continue;
             }
             if ((w & 0xff800000) == 0x91000000) {  // add xd, xn, #imm (64-bit, no shift)
@@ -126,7 +126,7 @@ void NativeCode::sweep(const std::atomic<bool>* cancel) {
                 const bool simd = (w >> 26) & 1;
                 const unsigned scale = simd && ((w >> 23) & 1) ? 4 : size;
                 if (pages[rn].valid && index - pages[rn].at <= kPageWindow) {
-                    const uint64_t addr = pages[rn].value + ((uint64_t)((w >> 10) & 0xfff) << scale);
+                    const uint64_t addr = pages[rn].value + (static_cast<uint64_t>((w >> 10) & 0xfff) << scale);
                     refs_.push_back({addr, pc, RefKind::Read});
                 }
                 if (!simd) pages[rt].valid = false;
@@ -275,8 +275,8 @@ std::string NativeCode::cStringAt(uint64_t vaddr) const {
         if (c == '\n') s += "\\n";
         else if (c == '\t') s += "\\t";
         else if (c == '\r') s += "\\r";
-        else if (c >= 0x20 && c < 0x7f) s.push_back((char)c);
-        else if (c >= 0x80) s.push_back((char)c);  // UTF-8 bytes
+        else if (c >= 0x20 && c < 0x7f) s.push_back(static_cast<char>(c));
+        else if (c >= 0x80) s.push_back(static_cast<char>(c));  // UTF-8 bytes
         else return {};
     }
     if (s.size() < 2) return {};
@@ -302,7 +302,7 @@ std::vector<NativeCode::Line> NativeCode::disassemble(uint64_t start, uint64_t e
             pages[in.pageReg] = {in.target, idx, true};
         } else if ((in.isAddImm || in.isLoad) && in.baseReg >= 0 && pages[in.baseReg].valid &&
                    idx - pages[in.baseReg].at <= kPageWindow) {
-            data = pages[in.baseReg].value + (uint64_t)in.offset;
+            data = pages[in.baseReg].value + static_cast<uint64_t>(in.offset);
         } else if (in.hasTarget && (in.mnemonic == "adr" || in.isLoad)) {
             data = in.target;
         }
@@ -346,7 +346,7 @@ NativeCode::ControlFlow NativeCode::controlFlow(const Function& f, size_t maxIns
     const auto lineOf = [&](uint64_t addr) -> int {
         if (addr < first || (addr - first) % 4) return -1;
         const uint64_t i = (addr - first) / 4;
-        return i < n ? (int)i : -1;
+        return i < n ? static_cast<int>(i) : -1;
     };
     const auto ends = [](Flow flow) { return flow != Flow::Normal && flow != Flow::Call && flow != Flow::IndirectCall; };
     std::vector<char> leader(n, 0);
@@ -356,7 +356,7 @@ NativeCode::ControlFlow NativeCode::controlFlow(const Function& f, size_t maxIns
         if (!ends(in.flow)) continue;
         if (i + 1 < n) leader[i + 1] = 1;
         if (in.hasTarget)
-            if (const int t = lineOf(in.target); t >= 0) leader[(size_t)t] = 1;
+            if (const int t = lineOf(in.target); t >= 0) leader[static_cast<size_t>(t)] = 1;
     }
     std::vector<int> blockOf(n, 0);
     for (size_t i = 0; i < n; ++i) {
@@ -365,7 +365,7 @@ NativeCode::ControlFlow NativeCode::controlFlow(const Function& f, size_t maxIns
             b.firstLine = i;
             cfg.blocks.push_back(b);
         }
-        blockOf[i] = (int)cfg.blocks.size() - 1;
+        blockOf[i] = static_cast<int>(cfg.blocks.size()) - 1;
         ++cfg.blocks.back().lineCount;
     }
     for (size_t b = 0; b < cfg.blocks.size(); ++b) {
@@ -376,11 +376,11 @@ NativeCode::ControlFlow NativeCode::controlFlow(const Function& f, size_t maxIns
         const int target = in.hasTarget ? lineOf(in.target) : -1;
         switch (in.flow) {
         case Flow::Jump:
-            if (target >= 0) block.successors.push_back(blockOf[(size_t)target]);
+            if (target >= 0) block.successors.push_back(blockOf[static_cast<size_t>(target)]);
             else block.exit = true;  // tail call
             break;
         case Flow::CondJump:
-            if (target >= 0) block.successors.push_back(blockOf[(size_t)target]);
+            if (target >= 0) block.successors.push_back(blockOf[static_cast<size_t>(target)]);
             if (next >= 0) block.successors.push_back(next);
             block.conditional = block.successors.size() == 2;
             break;

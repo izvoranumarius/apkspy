@@ -467,6 +467,9 @@
     <ClCompile Include="src\app\Theme.cpp">
       <Filter>Source Files\app</Filter>
     </ClCompile>
+    <ClCompile Include="src\app\ThemePresets.cpp">
+      <Filter>Source Files\app</Filter>
+    </ClCompile>
     <ClCompile Include="src\app\WindowFrame.cpp">
       <Filter>Source Files\app</Filter>
     </ClCompile>

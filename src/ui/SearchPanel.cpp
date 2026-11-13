@@ -10,8 +10,8 @@ void SearchPanel::drawContents() {
                                     : "Search becomes available once an APK has been decompiled");
         return;
     }
-    if (rootIdx_ >= (int)roots.size()) rootIdx_ = 0;
-    Root* root = roots[(size_t)rootIdx_];
+    if (rootIdx_ >= static_cast<int>(roots.size())) rootIdx_ = 0;
+    Root* root = roots[static_cast<size_t>(rootIdx_)];
 
     // The tree of a root that is currently being decompiled is mutated on
     // the UI thread while results stream in; searching it concurrently is a
@@ -25,8 +25,8 @@ void SearchPanel::drawContents() {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(200.f);
         if (ImGui::BeginCombo("##apk", root->title.c_str())) {
-            for (int i = 0; i < (int)roots.size(); ++i)
-                if (ImGui::Selectable(roots[(size_t)i]->title.c_str(), i == rootIdx_)) rootIdx_ = i;
+            for (int i = 0; i < static_cast<int>(roots.size()); ++i)
+                if (ImGui::Selectable(roots[static_cast<size_t>(i)]->title.c_str(), i == rootIdx_)) rootIdx_ = i;
             ImGui::EndCombo();
         }
     }
@@ -44,7 +44,7 @@ void SearchPanel::drawContents() {
     if (ImGui::Button("Search")) submit = true;
     if (submit && query_[0] && !decompiling)
         workspace_.search().start(root->tree.get(), root->source.get(), query_,
-                                  (SearchService::Mode)mode_, root->title);
+                                  static_cast<SearchService::Mode>(mode_), root->title);
     if (decompiling) {
         ImGui::EndDisabled();
         ImGui::SameLine();
@@ -67,10 +67,10 @@ void SearchPanel::drawContents() {
     ImGui::PushFont(Theme::monoFont());
     workspace_.search().withHits([&](const std::vector<SearchHit>& hits) {
         ImGuiListClipper clipper;
-        clipper.Begin((int)hits.size());
+        clipper.Begin(static_cast<int>(hits.size()));
         while (clipper.Step()) {
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                const SearchHit& h = hits[(size_t)i];
+                const SearchHit& h = hits[static_cast<size_t>(i)];
                 // The text is drawn after the row, not used as its label:
                 // "##" inside a line of code would hide the rest of it.
                 char label[640];

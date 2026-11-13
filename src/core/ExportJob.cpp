@@ -89,7 +89,7 @@ void ExportJob::writeOne(const Item& item) {
         std::string error;
         if (AxmlDecoder::decode(bytes, text, error)) {
             std::ofstream out(normalizedDest, std::ios::binary);
-            out.write(text.data(), (std::streamsize)text.size());
+            out.write(text.data(), static_cast<std::streamsize>(text.size()));
             if (!out) {
                 ++failed_;
                 lastError_ = "write failed: " + rel;
@@ -104,7 +104,7 @@ void ExportJob::writeOne(const Item& item) {
         lastError_ = "cannot open " + rel;
         return;
     }
-    out.write(reinterpret_cast<const char*>(bytes.data()), (std::streamsize)bytes.size());
+    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     if (!out) {
         ++failed_;
         lastError_ = "write failed: " + rel;

@@ -9,29 +9,29 @@ inline uint32_t bit(uint32_t w, int b) { return (w >> b) & 1u; }
 inline int64_t sext(uint64_t v, int width) {
     const uint64_t m = 1ull << (width - 1);
     v &= (width == 64) ? ~0ull : ((1ull << width) - 1);
-    return (int64_t)((v ^ m) - m);
+    return static_cast<int64_t>((v ^ m) - m);
 }
 
 std::string hex(uint64_t v) {
     char b[32];
-    std::snprintf(b, sizeof b, "0x%llx", (unsigned long long)v);
+    std::snprintf(b, sizeof b, "0x%llx", static_cast<unsigned long long>(v));
     return b;
 }
 
 // "#5", "#0x40", "#-0x10"
 std::string imm(int64_t v) {
     char b[40];
-    if (v >= 0 && v < 10) std::snprintf(b, sizeof b, "#%lld", (long long)v);
-    else if (v < 0 && v > -10) std::snprintf(b, sizeof b, "#%lld", (long long)v);
-    else if (v < 0) std::snprintf(b, sizeof b, "#-0x%llx", (unsigned long long)(-(v + 1)) + 1ull);
-    else std::snprintf(b, sizeof b, "#0x%llx", (unsigned long long)v);
+    if (v >= 0 && v < 10) std::snprintf(b, sizeof b, "#%lld", static_cast<long long>(v));
+    else if (v < 0 && v > -10) std::snprintf(b, sizeof b, "#%lld", static_cast<long long>(v));
+    else if (v < 0) std::snprintf(b, sizeof b, "#-0x%llx", static_cast<unsigned long long>(-(v + 1)) + 1ull);
+    else std::snprintf(b, sizeof b, "#0x%llx", static_cast<unsigned long long>(v));
     return b;
 }
 
 std::string uimm(uint64_t v) {
     char b[40];
-    if (v < 10) std::snprintf(b, sizeof b, "#%llu", (unsigned long long)v);
-    else std::snprintf(b, sizeof b, "#0x%llx", (unsigned long long)v);
+    if (v < 10) std::snprintf(b, sizeof b, "#%llu", static_cast<unsigned long long>(v));
+    else std::snprintf(b, sizeof b, "#0x%llx", static_cast<unsigned long long>(v));
     return b;
 }
 
@@ -87,8 +87,8 @@ bool decodeBitMask(bool sf, unsigned n, unsigned imms, unsigned immr, uint64_t& 
 }
 
 std::string fpImm(unsigned imm8) {
-    const double frac = 1.0 + (double)(imm8 & 0xf) / 16.0;
-    const int exp = (int)(((imm8 >> 4) & 7) ^ 4) - 3;
+    const double frac = 1.0 + static_cast<double>(imm8 & 0xf) / 16.0;
+    const int exp = static_cast<int>(((imm8 >> 4) & 7) ^ 4) - 3;
     double v = frac;
     for (int i = 0; i < exp; ++i) v *= 2.0;
     for (int i = 0; i > exp; --i) v /= 2.0;
@@ -127,24 +127,24 @@ Insn dataImm(Insn& i) {
     switch (bits(w, 25, 23)) {
     case 0:
     case 1: {  // ADR / ADRP
-        const int64_t off = sext(((uint64_t)bits(w, 23, 5) << 2) | bits(w, 30, 29), 21);
+        const int64_t off = sext((static_cast<uint64_t>(bits(w, 23, 5)) << 2) | bits(w, 30, 29), 21);
         i.hasTarget = true;
         if (bit(w, 31)) {
-            i.target = (i.addr & ~0xfffull) + (uint64_t)(off * 4096);
-            i.pageReg = (int8_t)rd;
+            i.target = (i.addr & ~0xfffull) + static_cast<uint64_t>(off * 4096);
+            i.pageReg = static_cast<int8_t>(rd);
             return make(i, "adrp", reg(rd, true) + ", " + hex(i.target));
         }
-        i.target = i.addr + (uint64_t)off;
+        i.target = i.addr + static_cast<uint64_t>(off);
         return make(i, "adr", reg(rd, true) + ", " + hex(i.target));
     }
     case 2: {  // ADD/SUB immediate
         const bool sub = bit(w, 30), s = bit(w, 29);
-        const uint64_t v = (uint64_t)bits(w, 21, 10) << (bit(w, 22) ? 12 : 0);
+        const uint64_t v = static_cast<uint64_t>(bits(w, 21, 10)) << (bit(w, 22) ? 12 : 0);
         if (!sub && !s) {
             i.isAddImm = true;
-            i.baseReg = (int8_t)rn;
-            i.destReg = (int8_t)rd;
-            i.offset = (int64_t)v;
+            i.baseReg = static_cast<int8_t>(rn);
+            i.destReg = static_cast<int8_t>(rd);
+            i.offset = static_cast<int64_t>(v);
             if (v == 0 && (rd == 31 || rn == 31)) return make(i, "mov", reg(rd, sf, true) + ", " + reg(rn, sf, true));
         }
         if (s && rd == 31) return make(i, sub ? "cmp" : "cmn", reg(rn, sf, true) + ", " + uimm(v));
@@ -170,7 +170,7 @@ Insn dataImm(Insn& i) {
             if (imm16 == 0 && hw != 0) return make(i, "movn", reg(rd, sf) + ", " + uimm(imm16) + ", lsl #" + std::to_string(hw * 16));
             v = ~v;
             if (!sf) v &= 0xffffffffull;
-            return make(i, "mov", reg(rd, sf) + ", " + (sf ? imm((int64_t)v) : imm((int32_t)(uint32_t)v)));
+            return make(i, "mov", reg(rd, sf) + ", " + (sf ? imm(static_cast<int64_t>(v)) : imm(static_cast<int32_t>(static_cast<uint32_t>(v)))));
         }
         if (imm16 == 0 && hw != 0) return make(i, "movz", reg(rd, sf) + ", #0, lsl #" + std::to_string(hw * 16));
         return make(i, "mov", reg(rd, sf) + ", " + uimm(v));
@@ -178,7 +178,7 @@ Insn dataImm(Insn& i) {
     case 6: {  // bitfield
         const unsigned opc = bits(w, 30, 29), immr = bits(w, 21, 16), imms = bits(w, 15, 10);
         const unsigned size = sf ? 64 : 32;
-        if (opc == 3 || bit(w, 22) != (unsigned)sf || immr >= size || imms >= size) return unknown(i);
+        if (opc == 3 || bit(w, 22) != static_cast<unsigned>(sf) || immr >= size || imms >= size) return unknown(i);
         const std::string d = reg(rd, sf), n = reg(rn, sf);
         if (opc == 0) {  // SBFM
             if (imms == size - 1) return make(i, "asr", d + ", " + n + ", " + uimm(immr));
@@ -217,13 +217,13 @@ Insn branchSys(Insn& i) {
     const uint32_t w = i.raw;
     if (bits(w, 30, 26) == 5) {  // B / BL
         i.hasTarget = true;
-        i.target = i.addr + (uint64_t)(sext(bits(w, 25, 0), 26) * 4);
+        i.target = i.addr + static_cast<uint64_t>(sext(bits(w, 25, 0), 26) * 4);
         i.flow = bit(w, 31) ? Flow::Call : Flow::Jump;
         return make(i, bit(w, 31) ? "bl" : "b", hex(i.target));
     }
     if (bits(w, 31, 24) == 0x54) {  // B.cond / BC.cond
         i.hasTarget = true;
-        i.target = i.addr + (uint64_t)(sext(bits(w, 23, 5), 19) * 4);
+        i.target = i.addr + static_cast<uint64_t>(sext(bits(w, 23, 5), 19) * 4);
         i.flow = Flow::CondJump;
         const std::string m = std::string(bit(w, 4) ? "bc." : "b.") + kCond[bits(w, 3, 0)];
         i.mnemonic = m;
@@ -232,13 +232,13 @@ Insn branchSys(Insn& i) {
     }
     if (bits(w, 30, 25) == 0x1a) {  // CBZ / CBNZ
         i.hasTarget = true;
-        i.target = i.addr + (uint64_t)(sext(bits(w, 23, 5), 19) * 4);
+        i.target = i.addr + static_cast<uint64_t>(sext(bits(w, 23, 5), 19) * 4);
         i.flow = Flow::CondJump;
         return make(i, bit(w, 24) ? "cbnz" : "cbz", reg(bits(w, 4, 0), bit(w, 31)) + ", " + hex(i.target));
     }
     if (bits(w, 30, 25) == 0x1b) {  // TBZ / TBNZ
         i.hasTarget = true;
-        i.target = i.addr + (uint64_t)(sext(bits(w, 18, 5), 14) * 4);
+        i.target = i.addr + static_cast<uint64_t>(sext(bits(w, 18, 5), 14) * 4);
         i.flow = Flow::CondJump;
         const unsigned b = (bit(w, 31) << 5) | bits(w, 23, 19);
         return make(i, bit(w, 24) ? "tbnz" : "tbz", reg(bits(w, 4, 0), bit(w, 31)) + ", " + uimm(b) + ", " + hex(i.target));
@@ -371,9 +371,9 @@ Insn loadStore(Insn& i) {
     if (bits(w, 29, 27) == 3 && bits(w, 25, 24) == 0) {
         const unsigned opc = bits(w, 31, 30);
         i.hasTarget = true;
-        i.target = i.addr + (uint64_t)(sext(bits(w, 23, 5), 19) * 4);
+        i.target = i.addr + static_cast<uint64_t>(sext(bits(w, 23, 5), 19) * 4);
         i.isLoad = true;
-        i.destReg = (int8_t)rt;
+        i.destReg = static_cast<int8_t>(rt);
         if (v) {
             if (opc == 3) return unknown(i);
             return make(i, "ldr", vreg(rt, "sdq"[opc]) + ", " + hex(i.target));
@@ -443,7 +443,7 @@ Insn loadStore(Insn& i) {
     if (bits(w, 29, 27) == 7) {
         const unsigned size = bits(w, 31, 30), opc = bits(w, 23, 22);
         std::string t, m;
-        int scale = (int)size;
+        int scale = static_cast<int>(size);
         bool load;
         if (v) {
             static const char kSize[4] = {'b', 'h', 's', 'd'};
@@ -484,11 +484,11 @@ Insn loadStore(Insn& i) {
             }
         }
         if (bit(w, 24)) {  // unsigned immediate
-            const int64_t off = (int64_t)bits(w, 21, 10) << scale;
+            const int64_t off = static_cast<int64_t>(bits(w, 21, 10)) << scale;
             if (load) {
                 i.isLoad = true;
-                i.baseReg = (int8_t)rn;
-                i.destReg = (int8_t)rt;
+                i.baseReg = static_cast<int8_t>(rn);
+                i.destReg = static_cast<int8_t>(rt);
                 i.offset = off;
             }
             i.mnemonic = m;
@@ -527,8 +527,8 @@ Insn loadStore(Insn& i) {
             const unsigned rm = bits(w, 20, 16), option = bits(w, 15, 13);
             const bool s = bit(w, 12);
             std::string ext;
-            if (option == 3) ext = s ? ", lsl " + uimm((uint64_t)scale) : "";
-            else ext = std::string(", ") + kExtend[option] + (s ? " " + uimm((uint64_t)scale) : "");
+            if (option == 3) ext = s ? ", lsl " + uimm(static_cast<uint64_t>(scale)) : "";
+            else ext = std::string(", ") + kExtend[option] + (s ? " " + uimm(static_cast<uint64_t>(scale)) : "");
             i.mnemonic = m;
             i.operands = t + ", [" + reg(rn, true, true) + ", " + reg(rm, (option & 1) != 0) + ext + "]";
             return i;
@@ -569,7 +569,7 @@ Insn loadStore(Insn& i) {
             list += (k ? ", v" : "v") + std::to_string((rt + k) % 32) + "." + kArr[size][q];
         list += "}";
         std::string addr = "[" + reg(rn, true, true) + "]";
-        if (post) addr += rm == 31 ? ", " + uimm((uint64_t)(count * (q ? 16 : 8))) : ", " + reg(rm, true);
+        if (post) addr += rm == 31 ? ", " + uimm(static_cast<uint64_t>(count * (q ? 16 : 8))) : ", " + reg(rm, true);
         i.mnemonic = std::string(l ? "ld" : "st") + std::to_string(structs);
         i.operands = list + ", " + addr;
         return i;

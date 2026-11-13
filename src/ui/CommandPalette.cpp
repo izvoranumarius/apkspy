@@ -16,7 +16,7 @@ constexpr size_t kMaxShown = 60;
 
 bool isBoundary(char prev, char c) {
     return prev == '/' || prev == '\\' || prev == '.' || prev == '_' || prev == '-' || prev == ' ' || prev == '$' ||
-           (std::islower((unsigned char)prev) && std::isupper((unsigned char)c));
+           (std::islower(static_cast<unsigned char>(prev)) && std::isupper(static_cast<unsigned char>(c)));
 }
 
 // Path shown under a file: decompiled files relative to jadx's sources folder.
@@ -51,11 +51,11 @@ int CommandPalette::fuzzyScore(const std::string& pattern, const std::string& te
     int score = 0, run = 0;
     size_t t = 0, last = std::string::npos;
     for (size_t p = 0; p < pattern.size(); ++p) {
-        const char want = (char)std::tolower((unsigned char)pattern[p]);
+        const char want = static_cast<char>(std::tolower(static_cast<unsigned char>(pattern[p])));
         if (want == ' ') continue;
         bool found = false;
         for (; t < text.size(); ++t) {
-            if ((char)std::tolower((unsigned char)text[t]) != want) {
+            if (static_cast<char>(std::tolower(static_cast<unsigned char>(text[t]))) != want) {
                 run = 0;
                 continue;
             }
@@ -63,7 +63,7 @@ int CommandPalette::fuzzyScore(const std::string& pattern, const std::string& te
             if (t == 0 || isBoundary(text[t - 1], text[t])) s += 8;
             if (run > 0) s += 5 + run;  // consecutive letters
             if (t >= nameStart) s += 3;
-            if (last != std::string::npos) s -= (int)std::min<size_t>(t - last - 1, 6);  // letters far apart
+            if (last != std::string::npos) s -= static_cast<int>(std::min<size_t>(t - last - 1, 6));  // letters far apart
             last = t;
             score += s;
             ++run;
@@ -74,7 +74,7 @@ int CommandPalette::fuzzyScore(const std::string& pattern, const std::string& te
         if (!found) return -1;
     }
     // Shorter texts win ties: "Main.java" over "MainActivityHelper.java".
-    return score * 4 - (int)std::min<size_t>(text.size(), 200) / 8;
+    return score * 4 - static_cast<int>(std::min<size_t>(text.size(), 200)) / 8;
 }
 
 void CommandPalette::open(const std::string& prefix) {
@@ -142,7 +142,7 @@ void CommandPalette::filter() {
             it.label = commandList_[i].name;
             it.detail = commandList_[i].shortcut;
             it.icon = commandList_[i].icon;
-            it.score = pattern.empty() ? -(int)i : s;  // empty: keep the given order
+            it.score = pattern.empty() ? -static_cast<int>(i) : s;  // empty: keep the given order
             shown_.push_back(std::move(it));
         }
     } else {
@@ -169,7 +169,7 @@ void CommandPalette::filter() {
         }
     }
     const size_t keep = std::min(shown_.size(), kMaxShown);
-    std::partial_sort(shown_.begin(), shown_.begin() + (ptrdiff_t)keep, shown_.end(),
+    std::partial_sort(shown_.begin(), shown_.begin() + static_cast<ptrdiff_t>(keep), shown_.end(),
                       [](const Item& a, const Item& b) { return a.score > b.score; });
     shown_.resize(keep);
 }
@@ -222,7 +222,7 @@ void CommandPalette::draw() {
     const auto onKey = [](ImGuiInputTextCallbackData* data) -> int {
         auto* self = static_cast<CommandPalette*>(data->UserData);
         if (data->EventFlag == ImGuiInputTextFlags_CallbackHistory && !self->shown_.empty()) {
-            const int n = (int)self->shown_.size();
+            const int n = static_cast<int>(self->shown_.size());
             self->selected_ = (self->selected_ + (data->EventKey == ImGuiKey_UpArrow ? n - 1 : 1)) % n;
             self->scrollToSelected_ = true;
         }
@@ -237,8 +237,8 @@ void CommandPalette::draw() {
         ImGui::EndPopup();
         return;
     }
-    if (enter && selected_ < (int)shown_.size()) {
-        const Item chosen = shown_[(size_t)selected_];
+    if (enter && selected_ < static_cast<int>(shown_.size())) {
+        const Item chosen = shown_[static_cast<size_t>(selected_)];
         ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
         accept(chosen);
@@ -246,12 +246,12 @@ void CommandPalette::draw() {
     }
     // Results.
     const float rowH = ImGui::GetTextLineHeightWithSpacing() + 4.f;
-    const float listH = std::min((float)std::max<size_t>(shown_.size(), 1) * rowH, rowH * 12.f);
+    const float listH = std::min(static_cast<float>(std::max<size_t>(shown_.size(), 1)) * rowH, rowH * 12.f);
     ImGui::BeginChild("##results", ImVec2(0, listH));
     if (shown_.empty()) ImGui::TextDisabled("%s", query_[0] == '@' && classes_.empty() ? "No analysed classes yet: open the Analysis workspace first."
                                                                                          : "No matches");
-    for (int i = 0; i < (int)shown_.size(); ++i) {
-        const Item& it = shown_[(size_t)i];
+    for (int i = 0; i < static_cast<int>(shown_.size()); ++i) {
+        const Item& it = shown_[static_cast<size_t>(i)];
         ImGui::PushID(i);
         const ImVec2 pos = ImGui::GetCursorScreenPos();
         if (ImGui::Selectable("##r", i == selected_, ImGuiSelectableFlags_None, ImVec2(0, rowH - ImGui::GetStyle().ItemSpacing.y))) {
@@ -271,7 +271,7 @@ void CommandPalette::draw() {
         float x = pos.x + 4.f;
         const float y = pos.y + 2.f;
         if (it.icon && Theme::hasIcons()) {
-            dl->AddText(ImVec2(x, y), IM_COL32(150, 180, 220, 255), it.icon);
+            dl->AddText(ImVec2(x, y), theme::u32(Col::Info), it.icon);
             x += ImGui::GetFontSize() * 1.6f;
         }
         // Files: the name first, the folder dimmed after it (as in VS Code).

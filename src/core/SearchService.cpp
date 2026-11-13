@@ -56,7 +56,7 @@ void SearchService::run(const TreeNode* root, const ContentSource* source, std::
 }
 
 bool SearchService::addHit(const TreeNode& node, int line, const char* begin, const char* end) {
-    size_t len = (size_t)(end - begin);
+    size_t len = static_cast<size_t>(end - begin);
     std::string text(begin, len > kMaxHitText ? kMaxHitText : len);
     if (len > kMaxHitText) text += "...";
     std::lock_guard<std::mutex> lock(mutex_);
@@ -143,7 +143,7 @@ void SearchService::scan(const TreeNode& node, const ContentSource& source, cons
 
     // Case-insensitive matching happens in place on each line - no lowered
     // copies of every line are allocated.
-    const char* data = (const char*)bytes.data();
+    const char* data = reinterpret_cast<const char*>(bytes.data());
     const size_t total = bytes.size();
     size_t pos = 0;
     int lineNo = 0;

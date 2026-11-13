@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include "app/Theme.hpp"
 #include <cstring>
 #include <string>
 #include <utility>
@@ -10,8 +11,10 @@
 
 namespace ui {
 
-const ImVec4 kNoteColor(0.45f, 0.75f, 0.55f, 1.f);
-const ImVec4 kBookmarkColor(0.95f, 0.65f, 0.25f, 1.f);
+inline constexpr Col kNoteToken = Col::Green;
+inline constexpr Col kBookmarkToken = Col::Orange;
+inline ImVec4 kNoteColor() { return theme::vec(kNoteToken); }
+inline ImVec4 kBookmarkColor() { return theme::vec(kBookmarkToken); }
 
 // First line of a note, marked when more follows.
 inline std::string noteFirstLine(const std::string& text) {

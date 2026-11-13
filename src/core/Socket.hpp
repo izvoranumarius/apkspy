@@ -47,7 +47,7 @@ public:
 private:
 #ifdef _WIN32
     using Fd = uintptr_t;
-    static constexpr Fd kInvalid = ~(uintptr_t)0;
+    static constexpr Fd kInvalid = ~static_cast<uintptr_t>(0);
 #else
     using Fd = int;
     static constexpr Fd kInvalid = -1;

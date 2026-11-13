@@ -97,8 +97,8 @@ LRESULT WindowFrame::Impl::hitTest(LPARAM lp) const {
     ScreenToClient(hwnd, &pt);
     RECT rc = {};
     GetClientRect(hwnd, &rc);
-    const float x = (float)pt.x;
-    const float y = (float)pt.y;
+    const float x = static_cast<float>(pt.x);
+    const float y = static_cast<float>(pt.y);
 
     bool interactive = layout.maximizeButton.contains(x, y);
     for (const Rect& r : layout.clientRects) {
@@ -109,7 +109,7 @@ LRESULT WindowFrame::Impl::hitTest(LPARAM lp) const {
     }
 
     if (!IsZoomed(hwnd)) {
-        const int border = MulDiv(kResizeBorder, (int)GetDpiForWindow(hwnd), 96);
+        const int border = MulDiv(kResizeBorder, static_cast<int>(GetDpiForWindow(hwnd)), 96);
         const bool left = pt.x < border;
         const bool right = pt.x >= rc.right - border;
         bool top = pt.y < border;

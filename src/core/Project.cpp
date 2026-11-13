@@ -77,27 +77,27 @@ std::string Project::uniqueGroupName(const std::string& stem) const {
 bool Project::save(const std::string& path) {
     Settings out;
     out.set("format", kProjectFormat);
-    out.set("apk.count", (int)apks_.size());
+    out.set("apk.count", static_cast<int>(apks_.size()));
     for (size_t i = 0; i < apks_.size(); ++i) {
         const std::string idx = std::to_string(i);
         out.set("apk." + idx + ".path", apks_[i].path);
         out.set("apk." + idx + ".group", apks_[i].group);
     }
-    out.set("tab.count", (int)tabs_.size());
+    out.set("tab.count", static_cast<int>(tabs_.size()));
     for (size_t i = 0; i < tabs_.size(); ++i) {
         const std::string idx = std::to_string(i);
-        out.set("tab." + idx + ".kind", (int)tabs_[i].rootKind);
+        out.set("tab." + idx + ".kind", static_cast<int>(tabs_[i].rootKind));
         out.set("tab." + idx + ".group", tabs_[i].group);
         out.set("tab." + idx + ".path", tabs_[i].path);
     }
-    out.set("note.count", (int)annotations_.size());
+    out.set("note.count", static_cast<int>(annotations_.size()));
     for (size_t i = 0; i < annotations_.size(); ++i) {
         const Annotation& a = annotations_[i];
         const std::string k = "note." + std::to_string(i) + ".";
-        out.set(k + "kind", (int)a.kind);
-        out.set(k + "target", (int)a.target);
+        out.set(k + "kind", static_cast<int>(a.kind));
+        out.set(k + "target", static_cast<int>(a.target));
         out.set(k + "group", a.group);
-        out.set(k + "root", (int)a.root);
+        out.set(k + "root", static_cast<int>(a.root));
         out.set(k + "path", a.path);
         out.set(k + "line", a.line);
         out.set(k + "addr", std::to_string(a.addr));
@@ -134,8 +134,8 @@ bool Project::load(const std::string& path) {
         const std::string idx = std::to_string(i);
         Tab tab;
         int kind = in.getInt("tab." + idx + ".kind", 0);
-        if (kind != (int)RootKind::Apk && kind != (int)RootKind::Decompiled) continue;
-        tab.rootKind = (RootKind)kind;
+        if (kind != static_cast<int>(RootKind::Apk) && kind != static_cast<int>(RootKind::Decompiled)) continue;
+        tab.rootKind = static_cast<RootKind>(kind);
         tab.group = in.getString("tab." + idx + ".group");
         tab.path = in.getString("tab." + idx + ".path");
         if (!tab.path.empty()) tabs.push_back(std::move(tab));
@@ -143,16 +143,16 @@ bool Project::load(const std::string& path) {
 
     std::vector<Annotation> notes;
     const int noteCount = in.getInt("note.count", 0);
-    if (noteCount < 0 || noteCount > (int)Annotations::kMaxItems) return false;
+    if (noteCount < 0 || noteCount > static_cast<int>(Annotations::kMaxItems)) return false;
     for (int i = 0; i < noteCount; ++i) {
         const std::string k = "note." + std::to_string(i) + ".";
         Annotation a;
         const int kind = in.getInt(k + "kind", 0), target = in.getInt(k + "target", 0), root = in.getInt(k + "root", 0);
         if (kind < 0 || kind > 1 || target < 0 || target > 1) continue;
-        if (root != (int)RootKind::Apk && root != (int)RootKind::Decompiled) continue;
-        a.kind = (Annotation::Kind)kind;
-        a.target = (Annotation::Target)target;
-        a.root = (RootKind)root;
+        if (root != static_cast<int>(RootKind::Apk) && root != static_cast<int>(RootKind::Decompiled)) continue;
+        a.kind = static_cast<Annotation::Kind>(kind);
+        a.target = static_cast<Annotation::Target>(target);
+        a.root = static_cast<RootKind>(root);
         a.group = in.getString(k + "group");
         a.path = in.getString(k + "path");
         a.line = in.getInt(k + "line", 0);

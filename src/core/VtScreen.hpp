@@ -20,6 +20,11 @@ public:
         uint8_t flags = 0;       // kBold | kInverse | kUnderline
     };
     static constexpr uint32_t kDefault = 0xFF000000u;
+    // ANSI colours 0-15 are kept as palette indices (kIndexed | index) so the
+    // UI can draw them in the theme's terminal colours.
+    static constexpr uint32_t kIndexed = 0xFE000000u;
+    static constexpr bool isIndexed(uint32_t c) { return (c & 0xFF000000u) == kIndexed; }
+    static constexpr int indexOf(uint32_t c) { return static_cast<int>(c & 0xFu); }
     static constexpr uint8_t kBold = 1, kInverse = 2, kUnderline = 4;
     using Line = std::vector<Cell>;
 
@@ -37,7 +42,7 @@ public:
     const std::string& title() const { return title_; }
 
     // Scrollback (oldest first) followed by the screen rows.
-    size_t lineCount() const { return (alt_ ? 0 : scrollback_.size()) + (size_t)rows_; }
+    size_t lineCount() const { return (alt_ ? 0 : scrollback_.size()) + static_cast<size_t>(rows_); }
     const Line& line(size_t i) const;
     std::string lineText(size_t i) const;  // UTF-8, trailing spaces trimmed
 
