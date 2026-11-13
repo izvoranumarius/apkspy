@@ -1,4 +1,6 @@
 #pragma once
+#include "ui/CommandPalette.hpp"
+#include "ui/TerminalPanel.hpp"
 #include <memory>
 #include <vector>
 #include <string>
@@ -52,6 +54,10 @@ private:
     void drawFileMenu();
     void drawViewMenu();
     void drawNavigateMenu();
+    void drawWelcome();
+    std::vector<CommandPalette::Command> paletteCommands();
+    std::string projectFolder() const;
+    void toggleTerminal();
     void drawWindowBorder();
     void updateTitle();
     void drawDockHost();
@@ -115,6 +121,8 @@ private:
     int pendingTabsDelay_ = 0;               // frames until their dock tab bars exist
     EditorPanel* editor_ = nullptr;  // non-owning; document commands (Find, Go to Line) go here
     AnalysisPanel* analysisPanel_ = nullptr;  // non-owning
+    TerminalPanel* terminal_ = nullptr;        // non-owning
+    std::unique_ptr<CommandPalette> palette_;
     DebuggerPanel* debuggerPanel_ = nullptr;  // non-owning; global debugger shortcuts
     std::unique_ptr<McpSettings> mcpSettings_;  // the AI page of the Settings dialog
     ScriptPanel* scriptPanel_ = nullptr;      // non-owning

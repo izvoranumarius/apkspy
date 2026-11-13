@@ -33,6 +33,7 @@ public:
     static constexpr const char* kLastProject = "project.last";
     static constexpr const char* kAdbPath = "adb.path";
     static constexpr const char* kPythonPath = "scripting.python";
+    static constexpr const char* kTerminalShell = "terminal.shell";  // "" = PowerShell / $SHELL
     static constexpr const char* kTrafficPort = "traffic.port";
     static constexpr const char* kFullCjkFonts = "ui.fullCjkFonts";
     static constexpr const char* kUiZoomPercent = "ui.zoomPercent";  // text / UI zoom, 100 = default

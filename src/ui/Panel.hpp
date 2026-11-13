@@ -2,6 +2,7 @@
 #include <string>
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "app/Theme.hpp"
 #include "core/Workspace.hpp"
 
 class Panel {
@@ -15,7 +16,11 @@ public:
         ImGuiWindowClass plain;
         plain.DockNodeFlagsOverrideSet = ImGuiDockNodeFlags_NoWindowMenuButton | ImGuiDockNodeFlags_NoCloseButton;
         ImGui::SetNextWindowClass(&plain);
-        if (ImGui::Begin(windowName.c_str())) drawContents();
+        const bool code = codeArea();
+        if (code) ImGui::PushStyleColor(ImGuiCol_WindowBg, Theme::editorBackground());
+        const bool open = ImGui::Begin(windowName.c_str());
+        if (code) ImGui::PopStyleColor();
+        if (open) drawContents();
         ImGui::End();
     }
 
@@ -23,6 +28,8 @@ public:
 
 protected:
     virtual void drawContents() = 0;
+    // Code-like panels draw on the editor background (a shade lighter).
+    virtual bool codeArea() const { return title_ == "Editor" || title_ == "Function" || title_ == "Terminal"; }
 
     Workspace& workspace_;
 

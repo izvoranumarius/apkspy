@@ -68,6 +68,7 @@
     <ClCompile Include="apkspy_platform_test.cpp" />
     <ClCompile Include="..\src\core\ApkArchive.cpp" />
     <ClCompile Include="..\src\core\ApkInfo.cpp" />
+    <ClCompile Include="..\src\core\VtScreen.cpp" />
     <ClCompile Include="..\src\core\AxmlDecoder.cpp" />
     <ClCompile Include="..\src\core\ExportJob.cpp" />
     <ClCompile Include="..\src\core\IcoLoader.cpp" />

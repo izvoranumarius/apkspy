@@ -1,5 +1,8 @@
 #pragma once
 #include "ui/ImageViewer.hpp"
+#include "ui/HexView.hpp"
+#include "ui/MediaViews.hpp"
+#include <memory>
 #include "ui/Panel.hpp"
 #include "core/TextSearch.hpp"
 #include "ui/FileBrowser.hpp"
@@ -50,6 +53,8 @@ public:
     // bar / the go-to-line popup for the active document on the next frame.
     void requestFind() { findRequest_ = true; }
     void requestGoToLine() { goToRequest_ = true; }
+    // Drawn instead of the tabs while nothing is open (the welcome page).
+    void setWelcome(std::function<void()> welcome) { welcome_ = std::move(welcome); }
 
 protected:
     void drawContents() override;
@@ -68,16 +73,7 @@ private:
     int line_ = -1;
     // Hex viewer (binary files): offset jump, byte selection, hex / text
     // pattern search and a data inspector for the selected offset.
-    struct HexState {
-        int64_t selected = -1;
-        int64_t scrollTo = -1;
-        char gotoBuf[32] = {};
-        char findBuf[128] = {};
-        bool findText = false;
-        std::string status;
-    };
     void drawHexView(const Document& doc);
-    void drawHexInspector(const Document& doc, HexState& h);
     void requestClose(Document* doc);
     void processCloses();
     void drawConfirmModal();
@@ -93,6 +89,13 @@ private:
     void drawFindBar(Document& doc, FindState& f);
     void drawGoToModal();
     void sweepFindStates();
+
+public:
+    // Drops the view state of closed documents (stops their audio / video).
+    // Called every frame by the app, whether or not this panel is drawn.
+    void sweep() { sweepFindStates(); }
+
+private:
     // Export of the active document (M5): raw bytes, or decoded text for
     // code documents. Destination is picked in a SaveFile browser.
     void drawExportBrowser();
@@ -103,6 +106,7 @@ private:
     float columnToX(std::string_view line, int col) const;
 
     ImageViewer viewer_;
+    std::function<void()> welcome_;
     Settings& settings_;
 
     Document* closingDoc_ = nullptr;      // single tab awaiting confirmation
@@ -112,7 +116,10 @@ private:
     // Find state per open document; entries are swept when their document is
     // gone (closed tab, replaced preview).
     std::unordered_map<const Document*, FindState> find_;
-    std::unordered_map<const Document*, HexState> hex_;  // swept together with find_
+    std::unordered_map<const Document*, HexView> hex_;  // swept together with find_
+    std::unordered_map<const Document*, std::unique_ptr<AudioView>> audio_;
+    std::unordered_map<const Document*, std::unique_ptr<FontView>> fonts_;
+    std::unordered_map<const Document*, std::unique_ptr<VideoView>> videos_;
     bool findRequest_ = false;   // View > Find... / Ctrl+F from the menu
     bool goToRequest_ = false;   // View > Go to Line... / Ctrl+G from the menu
     bool gotoOpenRequest_ = false;

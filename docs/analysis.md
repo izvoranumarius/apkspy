@@ -1,33 +1,45 @@
 # Analysis
 
 Opening the **Analysis** workspace parses every `classesN.dex` on a background
-thread with progress and Cancel. The
-analysis needs no jadx and works on obfuscated or partially broken APKs
-(every offset is bounds-checked; malformed structures are skipped).
+thread with progress and Cancel. The analysis needs no jadx and works on
+obfuscated or partially broken APKs (every offset is bounds-checked; malformed
+structures are skipped).
 
-- **Classes** - every class (filterable, virtualized) and its methods with
-  size. Double-click a class or method to open its smali disassembly as a
-  read-only tab (find, go to line and Back/Forward work as for any file).
-  Right-click a method for its callers, callees and control-flow graph, or use
-  `Space` and `X` on a hovered method. Right-click a class for the decompiled
-  source, type references and the class hierarchy.
-- **Xrefs** - results of the last query (callers, callees, string or type
-  uses); click a row to jump to the exact instruction.
+The workspace is laid out like JADX, Ghidra and Binary Ninja:
+
+| Panel | Where | Shows |
+| --- | --- | --- |
+| **Analysis** | left | the navigator: Classes, Strings, Native, Resources, Compare |
+| **Editor** / **Function** | center, as tabs | the decompiled Java; the selected method or native function |
+| **References** | bottom | what calls the selection and what it calls, or the last query's results |
+
+- **Classes** - a package tree (single-child packages are joined, as in
+  `com.google.android`), with classes and their methods in readable form
+  (`onCreate(Bundle) : void`). Type to filter by name or package. Clicking a
+  class opens its Java in a preview tab, and clicking a method opens the Java
+  at that method; without jadx output the smali is shown instead. Double-click
+  keeps the tab. A method also fills **Function** (its smali, control-flow graph
+  or call graph; `Space` switches between listing and graph) and
+  **References**. Click a caller or callee there to go to it; callees outside
+  the APK are dimmed. Right-click a class for its smali, type references and
+  hierarchy, and a method for its graphs or smali in the editor.
 - **Strings** - the DEX string tables with heuristics for URLs, IP
-  addresses, API paths, secrets / tokens and e-mail addresses; click a
-  string to list the code using it.
-- **Graph** - see [Graphs](#graphs). **Copy DOT** exports Graphviz.
+  addresses, API paths, secrets / tokens and e-mail addresses. Control bytes
+  show escaped (`\0`, `\n`). Click a string to list the code using it in
+  References; **<** goes back to the selection.
+- **Graph** (in Function) - see [Graphs](#graphs). **Copy DOT** exports Graphviz.
 - **Native** - `lib/<abi>/*.so`: ELF class / machine / SONAME / NEEDED,
   JNI entry points, exports and imports (demangled), sections and segments,
   and the hex view. For arm64-v8a libraries two more views:
   - **Functions** - every function (symbols, PLT import stubs named
-    `name@plt`, and call targets without a symbol as `sub_<addr>`) with its
-    AArch64 disassembly. Calls and jumps are named, `adrp` + `add` / `ldr`
-    pairs are resolved to the string literal, GOT slot or symbol they
-    address, local branch targets are highlighted, and the callers of the
-    function are listed. Double-click a call or jump to follow it,
-    Backspace / **<** goes back, and right-click offers **Open listing in
-    editor**. Double-click a JNI / export symbol to disassemble it.
+    `name@plt`, and call targets without a symbol as `sub_<addr>`). Selecting
+    one shows its AArch64 disassembly in **Function** and its callers and
+    callees in **References**. Calls and jumps are named, `adrp` + `add` /
+    `ldr` pairs are resolved to the string literal, GOT slot or symbol they
+    address, and local branch targets are highlighted. Double-click a call or
+    jump to follow it, Backspace / **<** goes back, and right-click offers
+    **Open listing in editor**. Double-click a JNI / export symbol to
+    disassemble it.
   - **Strings** - the string literals the code actually references, each
     with the function that uses it (more precise than scanning `.rodata`).
 

@@ -76,7 +76,16 @@
   <ItemGroup>
     <ClInclude Include="src\app\Application.hpp" />
     <ClInclude Include="src\ui\ScriptPanel.hpp" />
+    <ClInclude Include="src\ui\TerminalPanel.hpp" />
+    <ClInclude Include="src\ui\CommandPalette.hpp" />
+    <ClInclude Include="src\ui\VideoPlayer.hpp" />
+    <ClInclude Include="src\ui\HexView.hpp" />
+    <ClInclude Include="src\ui\AudioPlayer.hpp" />
+    <ClInclude Include="src\ui\MediaViews.hpp" />
     <ClInclude Include="src\core\ScriptRunner.hpp" />
+    <ClInclude Include="src\core\VtScreen.hpp" />
+    <ClInclude Include="src\core\Pty.hpp" />
+    <ClInclude Include="src\app\Icons.hpp" />
     <ClInclude Include="src\ui\GraphView.hpp" />
     <ClInclude Include="src\analysis\GraphLayout.hpp" />
     <ClInclude Include="src\app\Perspective.hpp" />
@@ -153,7 +162,15 @@
   <ItemGroup>
     <ClCompile Include="src\app\Application.cpp" />
     <ClCompile Include="src\ui\ScriptPanel.cpp" />
+    <ClCompile Include="src\ui\TerminalPanel.cpp" />
+    <ClCompile Include="src\ui\CommandPalette.cpp" />
+    <ClCompile Include="src\ui\VideoPlayer.cpp" />
+    <ClCompile Include="src\ui\HexView.cpp" />
+    <ClCompile Include="src\ui\AudioPlayer.cpp" />
+    <ClCompile Include="src\ui\MediaViews.cpp" />
     <ClCompile Include="src\core\ScriptRunner.cpp" />
+    <ClCompile Include="src\core\VtScreen.cpp" />
+    <ClCompile Include="src\core\Pty.cpp" />
     <ClCompile Include="src\ui\GraphView.cpp" />
     <ClCompile Include="src\analysis\GraphLayout.cpp" />
     <ClCompile Include="src\ui\BookmarksPanel.cpp" />

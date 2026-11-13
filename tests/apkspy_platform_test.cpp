@@ -23,6 +23,7 @@
 #include <vector>
 #include "core/LogSeverity.hpp"
 #include "document/SyntaxHighlighter.hpp"
+#include "core/VtScreen.hpp"
 #include "analysis/ApkAnalysis.hpp"
 #include "analysis/ApkDiff.hpp"
 #include "analysis/Dalvik.hpp"
@@ -420,6 +421,35 @@ static void testDexAndAnalysis() {
         CHECK(!inBlock, "triple quotes close");
         spanAt("a = '''one''' + 2", inBlock, 0);
         CHECK(!inBlock, "triple quotes open and close on one line");
+    }
+    {
+        // Terminal screen: text, wrapping, cursor moves, erase, colours, scrollback, replies.
+        VtScreen vt(10, 3, 100);
+        vt.feed("hello\r\nworld");
+        CHECK(vt.lineText(0) == "hello" && vt.lineText(1) == "world" && vt.cursorX() == 5 && vt.cursorY() == 1, "vt text and newline");
+        vt.feed("\x1b[1;1Hj\x1b[K");
+        CHECK(vt.lineText(0) == "j", "vt cursor position and erase to end of line");
+        vt.feed("\x1b[2J\x1b[H0123456789ab");
+        CHECK(vt.lineText(0) == "0123456789" && vt.lineText(1) == "ab", "vt wraps at the right edge");
+        vt.feed("\r\nx\r\ny\r\nz");  // one more row than the screen: the top goes to scrollback
+        CHECK(vt.lineCount() == 5 && vt.lineText(0) == "0123456789" && vt.lineText(1) == "ab" && vt.lineText(4) == "z", "vt scrolls into scrollback");
+        vt.feed("\x1b[31;1mR\x1b[0m");
+        const VtScreen::Cell& red = vt.line(vt.lineCount() - 1)[1];
+        CHECK(red.ch == U'R' && red.fg == VtScreen::paletteColor(1) && (red.flags & VtScreen::kBold), "vt colour and bold");
+        vt.feed("\x1b[38;2;1;2;3mT");
+        CHECK(vt.line(vt.lineCount() - 1)[2].fg == 0x010203, "vt 24-bit colour");
+        std::string reply;
+        vt.setReply([&](const std::string& r) { reply = r; });
+        vt.feed("\x1b[6n");
+        CHECK(reply == "\x1b[3;4R", "vt answers the cursor position request");
+        vt.feed("\x1b]0;my title\x07\xC3\xA9");
+        CHECK(vt.title() == "my title" && vt.line(vt.lineCount() - 1)[3].ch == U'é', "vt window title and UTF-8");
+        vt.feed("\x1b[?1049h");
+        CHECK(vt.altScreen() && vt.lineCount() == 3 && vt.lineText(0).empty(), "vt alternate screen");
+        vt.feed("\x1b[?1049l");
+        CHECK(!vt.altScreen() && vt.lineText(vt.lineCount() - 1).rfind("zR", 0) == 0, "vt main screen comes back");
+        vt.resize(20, 5);
+        CHECK(vt.cols() == 20 && vt.rows() == 5 && vt.line(vt.lineCount() - 1).size() == 20, "vt resize (screen rows take the new width)");
     }
     CHECK(logsev::sourceOf("[jadx] INFO - loading") == "jadx", "log line source");
     CHECK(logsev::messageOf("[jadx] INFO - loading") == "INFO - loading", "log line message");
@@ -842,6 +872,25 @@ static void testDocument() {
     bool truncated = false;
     auto matches = textsearch::findAll(doc.lines(), "x", textsearch::Options{}, 100, truncated);
     CHECK(matches.size() == 1 && matches[0].line == 1, "findAll over Document lines");
+
+    // Media files get their own viewers: by extension, or by content when the name says nothing.
+    {
+        const auto modeOf = [](const char* name, std::string content) {
+            TreeNode n(name, "", TreeNode::classify(name));
+            Document d(name, &n, std::vector<uint8_t>(content.begin(), content.end()), RootKind::Apk);
+            return d.mode();
+        };
+        CHECK(modeOf("click.ogg", "OggS rest") == Document::Mode::Audio, "ogg is audio");
+        CHECK(modeOf("tone.wav", std::string("RIFF\x10\0\0\0WAVEfmt ", 16)) == Document::Mode::Audio, "wav is audio");
+        CHECK(modeOf("data.bin", "OggS rest") == Document::Mode::Audio, "audio found by content");
+        CHECK(modeOf("Roboto.ttf", std::string("\0\x01\0\0\0\x0c", 6)) == Document::Mode::Font, "ttf is a font");
+        CHECK(modeOf("glyphs", "OTTO....") == Document::Mode::Font, "font found by content");
+        CHECK(modeOf("blob.bin", std::string("\x01\x02\x03\0", 4)) == Document::Mode::Hex, "other binaries stay hex");
+        CHECK(modeOf("intro.mp4", "....ftypisom") == Document::Mode::Video, "mp4 is video");
+        CHECK(modeOf("clip", std::string("\0\0\0\x18" "ftypmp42", 12)) == Document::Mode::Video, "mp4 found by content");
+        CHECK(modeOf("page.webm", "\x1A\x45\xDF\xA3....") == Document::Mode::Video, "webm is video");
+        CHECK(modeOf("voice.m4a", "....ftypM4A ") == Document::Mode::Video, "m4a goes to the media player (AAC)");
+    }
 
     // Editing a decompiled file: Don't Save restores the original (this
     // used to blank the document).

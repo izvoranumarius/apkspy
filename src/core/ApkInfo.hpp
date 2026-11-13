@@ -50,6 +50,9 @@ struct ApkInfo {
     // Exposed for the headless tests.
     static ApkSigningInfo describeCertificate(const uint8_t* der, size_t len, const char* scheme);
 
+    // First certificate of a v1 signature block (META-INF/*.RSA, PKCS#7).
+    static bool describeSignatureBlock(const std::vector<uint8_t>& blob, ApkSigningInfo& out);
+
     // Parses an APK Signing Block (v2 0x7109871a / v3 0xf05368c0) out of raw
     // APK file bytes. `bufferOffset` is the absolute file offset of
     // buffer[0] (0 = whole file), so a tail read works as well as a full

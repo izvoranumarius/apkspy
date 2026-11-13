@@ -200,6 +200,7 @@ public:
     bool startLogcat(const std::string& serial, std::string& error);
     void stopLogcat();
     bool logcatRunning() const { return logcatRunning_.load(); }
+    const std::string& logcatSerial() const { return logcatSerial_; }  // device of the last start
     void clearLog();
     // UI hand-off: the Devices panel asks the Logcat panel to filter a pid.
     void requestLogFilter(int pid) { logFilterRequest_ = pid; }
@@ -243,6 +244,7 @@ private:
     uint64_t logSeq_ = 0;
     std::thread logThread_;
     std::atomic<bool> logcatRunning_{false};
+    std::string logcatSerial_;
     std::atomic<bool> logStop_{false};
     std::atomic<int> logFilterRequest_{0};
     std::mutex logHandleMutex_;

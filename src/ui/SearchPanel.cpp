@@ -71,10 +71,16 @@ void SearchPanel::drawContents() {
         while (clipper.Step()) {
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
                 const SearchHit& h = hits[(size_t)i];
+                // The text is drawn after the row, not used as its label:
+                // "##" inside a line of code would hide the rest of it.
                 char label[640];
-                std::snprintf(label, sizeof label, "%s:%d   %s##%d", h.node->name().c_str(), h.line + 1,
-                              h.text.c_str(), i);
-                if (ImGui::Selectable(label, false, ImGuiSelectableFlags_AllowDoubleClick)) {
+                std::snprintf(label, sizeof label, "%s:%d   %s", h.node->name().c_str(), h.line + 1, h.text.c_str());
+                ImGui::PushID(i);
+                const bool clicked = ImGui::Selectable("##hit", false, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap);
+                ImGui::PopID();
+                ImGui::SameLine(0.f, 0.f);
+                ImGui::TextUnformatted(label);
+                if (clicked) {
                     // Opening a hit is an explicit jump: it lands in the
                     // Back/Forward history (the current position is the
                     // origin, so Alt+Left returns to it).
@@ -84,7 +90,9 @@ void SearchPanel::drawContents() {
                         origin = workspace_.locationOf(*active);
                         originPtr = &origin;
                     }
-                    workspace_.navigateTo(*hitRoot, *h.node, h.line, originPtr);
+                    const bool keep = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+                    workspace_.navigateTo(*hitRoot, *h.node, h.line, originPtr,
+                                          keep ? Workspace::OpenMode::Permanent : Workspace::OpenMode::Preview);
                 }
             }
         }

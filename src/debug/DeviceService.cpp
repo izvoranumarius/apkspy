@@ -895,6 +895,7 @@ bool DeviceService::startLogcat(const std::string& serial, std::string& error) {
         return false;
     }
     stopLogcat();
+    logcatSerial_ = serial;
     std::vector<std::string> argv{adbPath(), "-s", serial, "logcat", "-v", "threadtime", "-T", "2000"};
     ChildProcess child = ChildProcess::spawn(argv);
     if (!child.valid()) {

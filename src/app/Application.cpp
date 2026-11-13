@@ -1,4 +1,6 @@
 #include "app/Application.hpp"
+#include "ui/AudioPlayer.hpp"
+#include "ui/VideoPlayer.hpp"
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -67,7 +69,7 @@ std::vector<ProjectApk> collectApks(const Workspace& workspace, const Project& p
 
 namespace {
 // Version of the default dock layout (see Settings::kLayoutVersion).
-constexpr int kLayoutVersion = 10;
+constexpr int kLayoutVersion = 12;
 }  // namespace
 
 Application::Application()
@@ -85,10 +87,12 @@ Application::Application()
     panels_.push_back(std::make_unique<OutputPanel>(workspace_));
     panels_.push_back(std::make_unique<SearchPanel>(workspace_));
     panels_.push_back(std::make_unique<OverviewPanel>(workspace_));
-    auto analysis = std::make_unique<AnalysisPanel>(workspace_);
+    const auto show = [this](const std::string& title) { showPanel(title); };
+    auto analysis = std::make_unique<AnalysisPanel>(workspace_, show);
     analysisPanel_ = analysis.get();
     panels_.push_back(std::move(analysis));
-    const auto show = [this](const std::string& title) { showPanel(title); };
+    panels_.push_back(std::make_unique<FunctionPanel>(workspace_, *analysisPanel_));
+    panels_.push_back(std::make_unique<ReferencesPanel>(workspace_, *analysisPanel_));
     panels_.push_back(std::make_unique<DevicesPanel>(workspace_, devices_, show));
     auto debugger = std::make_unique<DebuggerPanel>(workspace_, devices_);
     debuggerPanel_ = debugger.get();
@@ -101,6 +105,13 @@ Application::Application()
     auto scriptPanel = std::make_unique<ScriptPanel>(workspace_, settings_, *mcp_);
     scriptPanel_ = scriptPanel.get();
     panels_.push_back(std::move(scriptPanel));
+    auto terminal = std::make_unique<TerminalPanel>(workspace_, settings_, [this] { return projectFolder(); });
+    terminal_ = terminal.get();
+    panels_.push_back(std::move(terminal));
+    palette_ = std::make_unique<CommandPalette>(workspace_);
+    palette_->setCommands([this] { return paletteCommands(); });
+    palette_->setShowEditor([this] { showPanel("Editor"); });
+    editor_->setWelcome([this] { drawWelcome(); });
     initPerspectives();
     loadSettings();
     initTitleBar();
@@ -322,7 +333,7 @@ int Application::run() {
         // results, a running search); otherwise wait for input, waking up
         // ~10 times per second so the caret keeps blinking. Expose events
         // (onRefresh) trigger frames on their own.
-        const bool busy = settleFrames_ > 0 || pendingZoom_ > 0.f || ImGui::IsAnyMouseDown() ||
+        const bool busy = settleFrames_ > 0 || pendingZoom_ > 0.f || ImGui::IsAnyMouseDown() || AudioPlayer::anyPlaying() || VideoPlayer::anyPlaying() ||
                           workspace_.jadx().state() == JadxRunner::State::Running ||
                           workspace_.search().running() || ImGui::GetIO().WantTextInput ||
                           mcp_->dispatcher().hasPending() || devices_.logcatRunning() ||
@@ -393,6 +404,8 @@ void Application::frame() {
 
     mcp_->pump();  // MCP tool calls run here, on the thread that owns the workspace
     scriptPanel_->pollOutput();
+    editor_->sweep();  // a closed tab's audio / video stops even when the editor is hidden
+    if (workspace_.takeRevealShow()) showPanel("Explorer");
     workspace_.update();
     ImGui_ImplOpenGL3_NewFrame();  // creates the font texture on the first frame
     if (fontBuildDataPending_) {
@@ -405,6 +418,9 @@ void Application::frame() {
 
     ImGuiIO& io = ImGui::GetIO();
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) requestAction(PendingAction::OpenProject);
+    // VS Code keys: Ctrl+P quick open, Ctrl+Shift+P commands, Ctrl+` terminal.
+    if (io.KeyCtrl && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_P, false)) palette_->open(io.KeyShift ? ">" : "");
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false)) toggleTerminal();
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveRequested_ = true;
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Comma, false)) settingsRequested_ = true;
     // Back/Forward (M2): Alt+Left / Alt+Right and mouse buttons 4/5. Alt+Arrow
@@ -490,6 +506,7 @@ void Application::frame() {
 
     drawWindowBorder();
 
+    palette_->draw();
     ImGui::Render();
     int w = 0, h = 0;
     glfwGetFramebufferSize(window_, &w, &h);
@@ -890,11 +907,11 @@ void Application::drawDockHost() {
 
 void Application::initPerspectives() {
     perspectives_ = {
-        {"Code", "Browse the APK, read and search the sources", "Editor", {"Explorer", "Overview", "Editor", "Search", "Bookmarks", "Output"}, {}},
-        {"Analysis", "Classes, native code, graphs, strings and resources", "Analysis", {"Analysis", "Editor", "Bookmarks"}, {}},
-        {"Debug", "Attach to a process: threads, stack, locals and logs", "Debugger", {"Devices", "Debugger", "Editor", "Logcat"}, {}},
-        {"Network", "Capture the app's traffic and map its API", "Traffic", {"Traffic", "Logcat"}, {}},
-        {"Scripts", "Automate ApkSpy with Python", "Script", {"Script", "Output"}, {}},
+        {"Code", "Browse the APK, read and search the sources", "Editor", {"Explorer", "Overview", "Editor", "Search", "Bookmarks", "Output", "Terminal"}, {}},
+        {"Analysis", "Classes, native code, graphs, strings and resources", "Analysis", {"Analysis", "Function", "Editor", "References", "Bookmarks"}, {}},
+        {"Debug", "Attach to a process: threads, stack, locals and logs", "Debugger", {"Devices", "Debugger", "Editor", "Logcat", "Terminal"}, {}},
+        {"Network", "Capture the app's traffic and map its API", "Traffic", {"Traffic", "Logcat", "Terminal"}, {}},
+        {"Scripts", "Automate ApkSpy with Python", "Script", {"Script", "Output", "Terminal"}, {}},
     };
     std::vector<std::string> titles;
     for (const auto& panel : panels_) titles.push_back(panel->title());
@@ -963,8 +980,40 @@ void Application::drawStatusBar() {
     if (!activity.empty())
         dl->AddText(ImVec2(origin.x + width - activityW - pad, textY), IM_COL32(120, 180, 240, 255), activity.c_str());
 
+    // Workspace switcher, bottom left: the current workspace, click for the others.
     ImGui::SetCursorScreenPos(origin);
-    const float logWidth = std::max(1.f, width - activityW - pad * 3.f);
+    const std::string current = ui::icon(Perspective::workspaceIcon(perspectives_[(size_t)activePerspective_].name),
+                                         perspectives_[(size_t)activePerspective_].name.c_str());
+    const float arrow = ImGui::GetFontSize() * 0.32f;  // drawn: the UI font has no triangle glyphs
+    const float switchW = ImGui::CalcTextSize(current.c_str()).x + arrow * 2.f + pad * 3.f;
+    const bool switchClicked = ImGui::InvisibleButton("##workspace", ImVec2(switchW, height));
+    const bool switchHovered = ImGui::IsItemHovered();
+    const bool switchOpen = ImGui::IsPopupOpen("##workspaces");
+    dl->AddRectFilled(origin, ImVec2(origin.x + switchW, origin.y + height),
+                      switchHovered || switchOpen ? IM_COL32(28, 151, 234, 255) : IM_COL32(0, 122, 204, 255));
+    dl->AddText(ImVec2(origin.x + pad, textY), IM_COL32(255, 255, 255, 255), current.c_str());
+    {
+        const float cx = origin.x + switchW - pad - arrow, cy = origin.y + height * 0.5f;
+        dl->AddTriangleFilled(ImVec2(cx - arrow, cy + arrow * 0.5f), ImVec2(cx + arrow, cy + arrow * 0.5f),
+                              ImVec2(cx, cy - arrow * 0.6f), IM_COL32(255, 255, 255, 255));
+    }
+    if (switchHovered && !switchOpen) ImGui::SetTooltip("Switch workspace (Ctrl+1 to Ctrl+%d)", (int)perspectives_.size());
+    if (switchClicked) ImGui::OpenPopup("##workspaces");
+    ImGui::SetNextWindowPos(origin, ImGuiCond_Appearing, ImVec2(0.f, 1.f));  // opens upward
+    if (ImGui::BeginPopup("##workspaces")) {
+        for (int i = 0; i < (int)perspectives_.size(); ++i) {
+            const Perspective& p = perspectives_[(size_t)i];
+            const std::string shortcut = "Ctrl+" + std::to_string(i + 1);
+            if (ImGui::MenuItem(ui::icon(Perspective::workspaceIcon(p.name), p.name.c_str()).c_str(), shortcut.c_str(), i == activePerspective_))
+                pendingPerspective_ = i;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", p.description.c_str());
+        }
+        ImGui::EndPopup();
+    }
+
+    const ImVec2 logOrigin(origin.x + switchW, origin.y);
+    ImGui::SetCursorScreenPos(logOrigin);
+    const float logWidth = std::max(1.f, width - switchW - activityW - pad * 3.f);
     const bool clicked = ImGui::InvisibleButton("##status", ImVec2(logWidth, height));
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show or hide the log");
     const auto& lines = workspace_.logLines();
@@ -973,8 +1022,8 @@ void Application::drawStatusBar() {
         const ImU32 color = severity == LogSeverity::Error  ? IM_COL32(240, 120, 120, 255)
                             : severity == LogSeverity::Warn ? IM_COL32(235, 190, 110, 255)
                                                                     : ImGui::GetColorU32(ImGuiCol_TextDisabled);
-        dl->PushClipRect(origin, ImVec2(origin.x + logWidth, origin.y + height), true);
-        dl->AddText(ImVec2(origin.x + pad, textY), color, lines.back().c_str());
+        dl->PushClipRect(logOrigin, ImVec2(logOrigin.x + logWidth, origin.y + height), true);
+        dl->AddText(ImVec2(logOrigin.x + pad, textY), color, lines.back().c_str());
         dl->PopClipRect();
     }
     if (clicked) {
@@ -1001,12 +1050,15 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
     ImGuiID main = 0, side = 0, bottom = 0, rest = 0;
     // The main tool of each workspace takes the central area.
     if (p.name == "Analysis") {
-        side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Right, 0.42f, nullptr, &main);
-        bottom = ImGui::DockBuilderSplitNode(side, ImGuiDir_Down, 0.26f, nullptr, &side);
-        dock("Analysis", main);
-        dock("Editor", side);
+        // Navigator | code (Editor and Function as tabs) over References.
+        side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.26f, nullptr, &rest);
+        bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 0.30f, nullptr, &main);
+        dock("Analysis", side);
+        dock("Editor", main);
+        dock("Function", main);
+        dock("References", bottom);
         dock("Bookmarks", bottom);
-        select("Analysis");
+        select("Editor"), select("References");
     } else if (p.name == "Debug") {
         side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.17f, nullptr, &rest);
         ImGuiID editor = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.30f, nullptr, &rest);
@@ -1015,23 +1067,26 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
         dock("Debugger", main);
         dock("Editor", editor);
         dock("Logcat", bottom);
-        select("Debugger");
+        dock("Terminal", bottom);
+        select("Logcat"), select("Debugger");
     } else if (p.name == "Network") {
         bottom = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Down, 0.26f, nullptr, &main);
         dock("Traffic", main);
         dock("Logcat", bottom);
-        select("Traffic");
+        dock("Terminal", bottom);
+        select("Logcat"), select("Traffic");
     } else if (p.name == "Scripts") {
         bottom = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Down, 0.34f, nullptr, &main);
         dock("Script", main);
         dock("Output", bottom);
-        select("Script");
+        dock("Terminal", bottom);
+        select("Output"), select("Script");
     } else {
         side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.20f, nullptr, &rest);
         bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 0.25f, nullptr, &main);
         dock("Explorer", side), dock("Overview", side);
         dock("Editor", main);
-        dock("Search", bottom), dock("Bookmarks", bottom), dock("Output", bottom);
+        dock("Search", bottom), dock("Bookmarks", bottom), dock("Output", bottom), dock("Terminal", bottom);
         select("Output"), select("Explorer"), select("Editor");
     }
     // Panels added later from the View menu start beside the streams.
@@ -1040,3 +1095,117 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
             dock(panel->title().c_str(), bottom ? bottom : main);
     ImGui::DockBuilderFinish(dockId);
 }
+
+// ---------------------------------------------------------------------------
+// Command palette, terminal and welcome page
+// ---------------------------------------------------------------------------
+
+std::string Application::projectFolder() const {
+    namespace fs = std::filesystem;
+    if (project_.isOpen() && !project_.path().empty())
+        return pathutil::toUtf8(pathutil::fromUtf8(project_.path()).parent_path());
+    for (Root* r : workspace_.apkRoots())
+        if (!r->apkPath.empty()) return pathutil::toUtf8(pathutil::fromUtf8(r->apkPath).parent_path());
+    return {};
+}
+
+void Application::toggleTerminal() {
+    Perspective& p = perspectives_[(size_t)activePerspective_];
+    ImGuiWindow* window = ImGui::FindWindowByName(p.windowName("Terminal").c_str());
+    // Focused terminal: hide it (as Ctrl+` does in VS Code); otherwise show and focus it.
+    const bool focused = window && GImGui->NavWindow && GImGui->NavWindow->RootWindow == window;
+    if (p.shows("Terminal") && focused) {
+        p.visible["Terminal"] = false;
+    } else {
+        p.visible["Terminal"] = true;
+        pendingFocusPanel_ = "Terminal";
+    }
+}
+
+std::vector<CommandPalette::Command> Application::paletteCommands() {
+    std::vector<CommandPalette::Command> c;
+    const auto add = [&](std::string name, std::string keys, const char* icon, std::function<void()> run) {
+        c.push_back({std::move(name), std::move(keys), icon, std::move(run)});
+    };
+    for (int i = 0; i < (int)perspectives_.size(); ++i)
+        add("Workspace: " + perspectives_[(size_t)i].name, "Ctrl+" + std::to_string(i + 1), Perspective::workspaceIcon(perspectives_[(size_t)i].name),
+            [this, i] { pendingPerspective_ = i; });
+    add("Go to File...", "Ctrl+P", icons::FILE, [this] { palette_->open(""); });
+    add("Go to Class...", "", icons::CODE, [this] { palette_->open("@"); });
+    add("Go to Line...", "Ctrl+G", icons::LIST, [this] { palette_->open(":"); });
+    add("Find in Files", "", icons::SEARCH, [this] { showPanel("Search"); });
+    add("Find in File", "Ctrl+F", icons::SEARCH, [this] { editor_->requestFind(); });
+    add("Navigate Back", "Alt+Left", icons::BACK, [this] { workspace_.navBack(); });
+    add("Navigate Forward", "Alt+Right", icons::FORWARD, [this] { workspace_.navForward(); });
+    add("Terminal: Toggle", "Ctrl+`", icons::TERMINAL, [this] { toggleTerminal(); });
+    add("Terminal: Restart Shell", "", icons::REFRESH, [this] { terminal_->restart(); showPanel("Terminal"); });
+    add("File: Open Project...", "Ctrl+O", icons::FOLDER_OPEN, [this] { requestAction(PendingAction::OpenProject); });
+    add("File: New Project", "", icons::ADD, [this] { requestAction(PendingAction::NewProject); });
+    add("File: Add APK to Project...", "", icons::PACKAGE, [this] { addApkRequested_ = true; });
+    add("File: Save Project", "Ctrl+S", icons::SAVE, [this] { saveRequested_ = true; });
+    add("File: Close Project", "", icons::CLOSE, [this] { requestAction(PendingAction::CloseProject); });
+    add("Preferences: Settings", "Ctrl+,", icons::SETTINGS, [this] { settingsRequested_ = true; });
+    add("View: Reset Workspace Layout", "", icons::REFRESH, [this] { resetLayout_ = true; });
+    add("View: Zoom In", "Ctrl+=", nullptr, [this] { setZoom(zoomTarget() + 0.1f); });
+    add("View: Zoom Out", "Ctrl+-", nullptr, [this] { setZoom(zoomTarget() - 0.1f); });
+    add("View: Reset Zoom", "Ctrl+0", nullptr, [this] { setZoom(1.f); });
+    for (const auto& panel : panels_) {
+        const std::string title = panel->title();
+        add("View: Show " + title, "", Perspective::panelIcon(title), [this, title] { showPanel(title); });
+    }
+    return c;
+}
+
+void Application::drawWelcome() {
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float width = std::min(avail.x - ui::em(2.f), ui::em(34.f));
+    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + std::max(0.f, (avail.x - width) * 0.5f),
+                               ImGui::GetCursorPosY() + std::max(ui::em(1.f), avail.y * 0.12f)));
+    ImGui::BeginGroup();
+    ImGui::PushFont(nullptr);
+    ImGui::SetWindowFontScale(1.8f);
+    ImGui::TextUnformatted("ApkSpy");
+    ImGui::SetWindowFontScale(1.f);
+    ImGui::PopFont();
+    ImGui::TextDisabled("Android reverse engineering");
+    ImGui::Dummy(ImVec2(0, ui::em(1.f)));
+
+    const auto link = [](const char* icon, const char* text, const char* keys) {
+        const bool clicked = ImGui::Selectable(ui::icon(icon, text).c_str(), false, ImGuiSelectableFlags_None,
+                                               ImVec2(ui::em(16.f), 0));
+        if (keys && *keys) {
+            ImGui::SameLine(ui::em(17.f));
+            ImGui::TextDisabled("%s", keys);
+        }
+        return clicked;
+    };
+    ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.95f, 1.f), "Start");
+    if (link(icons::PACKAGE, "Open an APK...", nullptr)) addApkRequested_ = true;
+    if (link(icons::FOLDER_OPEN, "Open Project...", "Ctrl+O")) requestAction(PendingAction::OpenProject);
+    if (link(icons::ADD, "New Project", nullptr)) requestAction(PendingAction::NewProject);
+    ImGui::Dummy(ImVec2(0, ui::em(0.8f)));
+
+    if (!recents_.empty()) {
+        ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.95f, 1.f), "Recent");
+        for (size_t i = 0; i < recents_.size() && i < 6; ++i) {
+            const std::string& path = recents_[i];
+            const std::string name = pathutil::toUtf8(pathutil::fromUtf8(path).stem());
+            ImGui::PushID((int)i);
+            if (ImGui::Selectable(ui::icon(icons::HISTORY, name.c_str()).c_str(), false, ImGuiSelectableFlags_None, ImVec2(ui::em(16.f), 0)))
+                requestAction(PendingAction::OpenProject, path);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", path.c_str());
+            ImGui::PopID();
+        }
+        ImGui::Dummy(ImVec2(0, ui::em(0.8f)));
+    }
+
+    ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.95f, 1.f), "Get around");
+    if (link(icons::FILE, "Go to file", "Ctrl+P")) palette_->open("");
+    if (link(icons::SEARCH, "Run a command", "Ctrl+Shift+P")) palette_->open(">");
+    if (link(icons::TERMINAL, "Terminal", "Ctrl+`")) toggleTerminal();
+    if (link(icons::ANALYSIS, "Analyse the code", "Ctrl+2")) pendingPerspective_ = 1;
+    ImGui::Dummy(ImVec2(0, ui::em(0.6f)));
+    ImGui::TextDisabled("Drop APK files anywhere on the window to add them.");
+    ImGui::EndGroup();
+}
+

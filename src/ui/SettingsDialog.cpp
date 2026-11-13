@@ -16,6 +16,7 @@ void SettingsDialog::open() {
     fullCjk_ = settings_.getBool(Settings::kFullCjkFonts, false);
     std::snprintf(adbPath_, sizeof adbPath_, "%s", devices_.adbPath().c_str());
     std::snprintf(pythonPath_, sizeof pythonPath_, "%s", settings_.getString(Settings::kPythonPath, "python").c_str());
+    std::snprintf(terminalShell_, sizeof terminalShell_, "%s", settings_.getString(Settings::kTerminalShell, "").c_str());
     trafficPort_ = settings_.getInt(Settings::kTrafficPort, 8899);
     adbTestResult_.clear();
 }
@@ -81,6 +82,7 @@ bool SettingsDialog::render() {
         devices_.setAdbPath(adbPath_);
         settings_.set(Settings::kAdbPath, adbPath_);
         settings_.set(Settings::kPythonPath, std::string(pythonPath_));
+        settings_.set(Settings::kTerminalShell, std::string(terminalShell_));
         settings_.set(Settings::kTrafficPort, trafficPort_);
         devices_.refreshDevices();
         resultPending = true;
@@ -168,6 +170,12 @@ void SettingsDialog::drawScriptsPage() {
     ImGui::Text("Python executable:");
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputText("##pythonpath", pythonPath_, sizeof pythonPath_);
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextWrapped("The Terminal panel (Ctrl+`) runs this shell. Leave it empty for PowerShell on Windows and "
+                       "your login shell elsewhere; cmd.exe, bash or a full path work too.");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##shell", "default shell", terminalShell_, sizeof terminalShell_);
 }
 
 void SettingsDialog::drawAndroidPage() {

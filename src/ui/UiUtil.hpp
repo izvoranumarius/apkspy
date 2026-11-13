@@ -3,6 +3,7 @@
 #include <functional>
 #include <string>
 #include "imgui.h"
+#include "app/Theme.hpp"
 
 // Small layout helpers so panels adapt to their width and to the UI zoom
 // instead of using fixed pixel sizes (which clipped content at the dock
@@ -11,6 +12,14 @@ namespace ui {
 
 // `n` times the current font size - the unit for every width / height.
 inline float em(float n) { return ImGui::GetFontSize() * n; }
+
+// "<icon>  label" when the icon font is loaded, the label alone otherwise.
+inline std::string icon(const char* glyph, const char* label = nullptr) {
+    if (!Theme::hasIcons()) return label ? label : "";
+    std::string s = glyph;
+    if (label && *label) s += std::string("  ") + label;
+    return s;
+}
 
 // Width a button with this label will take.
 inline float buttonWidth(const char* label) {

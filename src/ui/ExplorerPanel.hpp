@@ -35,6 +35,7 @@ private:
     void walk(Root& root, const TreeNode& node, int depth, bool isRoot);
     void drawRow(Root& root, const TreeNode& node, int depth, bool isRoot);
     void drawTree(Root& root);
+    bool revealTabSet_ = false;  // the reveal's tab was requested
     void drawJadxProgress();
     void drawRemoveConfirm();
     void drawExportProgress();

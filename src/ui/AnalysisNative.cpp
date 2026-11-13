@@ -112,6 +112,8 @@ void AnalysisPanel::gotoNative(uint64_t addr, bool record) {
     }
     if (record && funcAddr_ != UINT64_MAX) nativeBack_.push_back(focusAddr_ ? focusAddr_ : funcAddr_);
     if (nativeBack_.size() > 256) nativeBack_.erase(nativeBack_.begin());
+    sel_ = Selection::Native;
+    if (showPanel_) showPanel_("Function");
     if (f->addr != funcAddr_) {
         funcAddr_ = f->addr;
         listing_ = native_->disassembleFunction(*f, 50000);
@@ -146,14 +148,6 @@ void AnalysisPanel::drawNativeCode(Root& apk) {
         pendingGoto_ = 0;
         gotoNative(a, false);
     }
-    const bool showList = nativeMode_ == 0 || funcAddr_ == UINT64_MAX || graphFunctionList_;
-    if (!showList) {
-        ImGui::BeginChild("##listing", ImVec2(0, 0), ImGuiChildFlags_Borders);
-        drawNativeListing(nc);
-        ImGui::EndChild();
-        nativeComment_.draw(workspace_.annotations());
-        return;
-    }
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##ff", "Filter functions (name or 0xaddress)...", funcFilter_, sizeof funcFilter_);
     if (funcFilterApplied_ != funcFilter_) {
@@ -174,9 +168,7 @@ void AnalysisPanel::drawNativeCode(Root& apk) {
             }
         }
     }
-    const bool wide = ImGui::GetContentRegionAvail().x > ui::em(36.f);
-    ImGui::BeginChild("##fns", wide ? ImVec2(ui::em(14.f), 0) : ImVec2(0, ui::em(9.f)),
-                      ImGuiChildFlags_Borders | (wide ? ImGuiChildFlags_ResizeX : ImGuiChildFlags_ResizeY));
+    ImGui::BeginChild("##fns", ImVec2(0, 0));
     ImGuiListClipper clipper;
     clipper.Begin((int)funcRows_.size());
     while (clipper.Step())
@@ -185,7 +177,7 @@ void AnalysisPanel::drawNativeCode(Root& apk) {
             const std::string name = NativeCode::displayName(f);
             ImGui::PushID(r);
             ImGui::PushStyleColor(ImGuiCol_Text, functionColor(f));
-            if (ImGui::Selectable(name.c_str(), f.addr == funcAddr_)) gotoNative(f.addr);
+            if (ImGui::Selectable(name.c_str(), f.addr == funcAddr_ && sel_ == Selection::Native)) gotoNative(f.addr);
             ImGui::PopStyleColor();
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s\n%s  %llu bytes%s%s", f.name.c_str(), hex(f.addr).c_str(), (unsigned long long)f.size,
@@ -196,11 +188,6 @@ void AnalysisPanel::drawNativeCode(Root& apk) {
             ImGui::PopID();
         }
     ImGui::EndChild();
-    if (wide) ImGui::SameLine();
-    ImGui::BeginChild("##listing", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    drawNativeListing(nc);
-    ImGui::EndChild();
-    nativeComment_.draw(workspace_.annotations());
 }
 
 Annotation AnalysisPanel::nativeLocation(const NativeCode& nc, const NativeCode::Line& line) const {
@@ -259,39 +246,16 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
     const std::string title = NativeCode::displayName(*f);
     ui::wrappedColored(kAccent, title + "   " + hex(f->addr) + "  (" + std::to_string(f->size) + " bytes)");
     static const char* const kModes[] = {"Listing", "Graph", "Calls"};
+    ImGui::PushID("nmode");
     ui::segmented(kModes, 3, nativeMode_);
+    ImGui::PopID();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Callers on the left, callees on the right");
-    if (nativeMode_ != 0) {
-        ImGui::SameLine(0.f, ui::em(1.f));
-        if (ImGui::SmallButton(graphFunctionList_ ? "Hide list" : "Show list")) graphFunctionList_ = !graphFunctionList_;
-    }
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
         ImGui::IsKeyPressed(ImGuiKey_Space, false))
         nativeMode_ = nativeMode_ == 0 ? 1 : 0;
     if (nativeMode_ != 0) {
         drawNativeGraph(nc, *f);
         return;
-    }
-
-    char callersLabel[64];
-    std::snprintf(callersLabel, sizeof callersLabel, "Callers / references (%zu%s)###callers", funcCallers_.size(),
-                  funcCallers_.size() >= 1000 ? "+" : "");
-    if (ImGui::CollapsingHeader(callersLabel)) {
-        if (funcCallers_.empty()) ImGui::TextDisabled("No direct calls or address references found.");
-        ImGui::BeginChild("##callers", ImVec2(0, std::min(ui::em(8.f), ImGui::GetTextLineHeightWithSpacing() * (float)(funcCallers_.size() + 1))));
-        for (size_t i = 0; i < funcCallers_.size(); ++i) {
-            const auto& r = funcCallers_[i];
-            const std::string from = nc.symbolize(r.from);
-            char row[512];
-            std::snprintf(row, sizeof row, "%s  %s  (%s)", r.kind == NativeCode::RefKind::Call ? "call"
-                                                         : r.kind == NativeCode::RefKind::Jump ? "jump"
-                                                         : r.kind == NativeCode::RefKind::Read ? "read" : "addr",
-                          from.empty() ? hex(r.from).c_str() : from.c_str(), hex(r.from).c_str());
-            ImGui::PushID((int)i);
-            if (ImGui::Selectable(row)) gotoNative(r.from);
-            ImGui::PopID();
-        }
-        ImGui::EndChild();
     }
 
     ImGui::PushFont(Theme::monoFont());

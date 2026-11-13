@@ -20,6 +20,12 @@ Texture::~Texture() {
     if (id_) glDeleteTextures(1, &id_);
 }
 
+void Texture::update(const uint8_t* rgba) {
+    glBindTexture(GL_TEXTURE_2D, id_);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+}
+
 void Texture::setNearest(bool nearest) {
     if (nearest == nearest_) return;
     nearest_ = nearest;

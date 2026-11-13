@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include "app/Icons.hpp"
 #include "app/Theme.hpp"
 #include <fstream>
 #include "core/Paths.hpp"
@@ -75,7 +76,8 @@ bool EditorPanel::lineNumbers() const { return settings_.getBool(Settings::kLine
 void EditorPanel::drawContents() {
     auto& docs = workspace_.documents();
     if (docs.empty()) {
-        ImGui::TextDisabled("Click a file in the Explorer to open it");
+        if (welcome_) welcome_();
+        else ImGui::TextDisabled("Open a file from the Explorer, or a class from Analysis.");
         return;
     }
     Document* focus = workspace_.takeFocusRequest();
@@ -105,10 +107,24 @@ void EditorPanel::drawContents() {
             if (ImGui::BeginPopup("##tab_ctx")) {
                 if (doc->node() && !doc->node()->path().empty() && ImGui::MenuItem("Export...")) openExport(*doc);
                 ImGui::Separator();
+                if (doc->isPreview() && ImGui::MenuItem("Keep Open")) promoted = doc.get();
+                if (doc->node() && ImGui::MenuItem("Reveal in Explorer"))
+                    workspace_.requestReveal(doc->rootGroup(), doc->rootKind(), doc->node());
+                if (doc->node() && ImGui::MenuItem("Copy Path")) ImGui::SetClipboardText(doc->node()->path().c_str());
+                if (ImGui::MenuItem("Copy Name")) ImGui::SetClipboardText(doc->title().c_str());
+                ImGui::Separator();
                 if (ImGui::MenuItem("Close")) closingDoc_ = doc.get();
                 if (ImGui::MenuItem("Close All")) {
                     batchClose_.clear();
                     for (auto& d : workspace_.documents()) batchClose_.push_back(d.get());
+                }
+                if (ImGui::MenuItem("Close to the Right")) {
+                    batchClose_.clear();
+                    bool after = false;
+                    for (auto& d : workspace_.documents()) {
+                        if (after) batchClose_.push_back(d.get());
+                        if (d.get() == doc.get()) after = true;
+                    }
                 }
                 if (ImGui::MenuItem("Close Others")) {
                     batchClose_.clear();
@@ -238,6 +254,24 @@ void EditorPanel::drawConfirmModal() {
 void EditorPanel::drawDocument(Document& doc) {
     workspace_.setActiveDocument(&doc);
     processShortcuts(doc);
+    if (doc.mode() == Document::Mode::Audio) {
+        auto& view = audio_[&doc];
+        if (!view) view = std::make_unique<AudioView>();
+        view->draw(doc.bytes());
+        return;
+    }
+    if (doc.mode() == Document::Mode::Video) {
+        auto& view = videos_[&doc];
+        if (!view) view = std::make_unique<VideoView>();
+        view->draw(doc.bytes());
+        return;
+    }
+    if (doc.mode() == Document::Mode::Font) {
+        auto& view = fonts_[&doc];
+        if (!view) view = std::make_unique<FontView>();
+        view->draw(doc.bytes());
+        return;
+    }
     if (doc.mode() == Document::Mode::Image) {
         viewer_.drawToolbar(doc);
         ImGui::Separator();
@@ -277,8 +311,37 @@ void EditorPanel::drawToolbar(Document& doc) {
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Navigate Forward (Alt+Right)");
         ImGui::SameLine(0, 8.f);
     }
-    const char* path = doc.node() ? doc.node()->path().c_str() : "";
-    ImGui::TextDisabled("%s", path);
+    // Breadcrumbs: the folders down to the file; click one to show it in the Explorer.
+    Root* root = doc.node() ? workspace_.rootByGroup(doc.rootGroup(), doc.rootKind()) : nullptr;
+    std::vector<const TreeNode*> chain;
+    if (root && root->tree) chain = Workspace::chainTo(*root->tree, doc.node());
+    if (chain.size() > 1) {
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2.f, ImGui::GetStyle().ItemSpacing.y));
+        // jadx output: start at the package, not at the temp folder.
+        size_t first = 0;
+        for (size_t i = 0; i < chain.size(); ++i)
+            if (chain[i]->name() == "sources" && doc.rootKind() == RootKind::Decompiled) first = i + 1;
+        for (size_t i = first; i < chain.size(); ++i) {
+            const TreeNode* n = chain[i];
+            const std::string name = i == 0 ? root->title : n->name();
+            ImGui::PushID((int)i);
+            const bool last = i + 1 == chain.size();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(last ? ImGuiCol_Text : ImGuiCol_TextDisabled));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+            if (ImGui::SmallButton(name.c_str())) workspace_.requestReveal(doc.rootGroup(), doc.rootKind(), n);
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show in Explorer");
+            ImGui::PopID();
+            if (!last) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", Theme::hasIcons() ? icons::CHEVRON_RIGHT : ">");
+                ImGui::SameLine();
+            }
+        }
+        ImGui::PopStyleVar();
+    } else {
+        ImGui::TextDisabled("%s", doc.node() ? doc.node()->path().c_str() : "");
+    }
     const ImGuiStyle& style = ImGui::GetStyle();
     const bool canEdit = doc.canEdit();
     const char* editLabel = doc.isEditing() ? "View" : "Edit";
@@ -310,191 +373,7 @@ void EditorPanel::drawScrollable(Document& doc) {
     ImGui::EndChild();
 }
 
-namespace {
-// Parses "DE AD be ef" / "deadbeef" into bytes; false on bad input.
-bool parseHexPattern(const char* text, std::vector<uint8_t>& out) {
-    out.clear();
-    int nibble = -1;
-    for (const char* p = text; *p; ++p) {
-        const char c = *p;
-        int v;
-        if (c >= '0' && c <= '9') v = c - '0';
-        else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
-        else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
-        else if (c == ' ' || c == ',') continue;
-        else return false;
-        if (nibble < 0) nibble = v;
-        else {
-            out.push_back((uint8_t)(nibble << 4 | v));
-            nibble = -1;
-        }
-    }
-    return nibble < 0 && !out.empty();
-}
-}  // namespace
-
-void EditorPanel::drawHexView(const Document& doc) {
-    HexState& h = hex_[&doc];
-    const auto& bytes = doc.bytes();
-    // Toolbar: jump + search.
-    ImGui::SetNextItemWidth(110.f);
-    if (ImGui::InputTextWithHint("##hexgoto", "offset (hex)", h.gotoBuf, sizeof h.gotoBuf,
-                                 ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CharsHexadecimal)) {
-        const unsigned long long off = std::strtoull(h.gotoBuf, nullptr, 16);
-        if (off < bytes.size()) {
-            h.selected = (int64_t)off;
-            h.scrollTo = (int64_t)off;
-            h.status.clear();
-        } else {
-            h.status = "offset beyond end of file";
-        }
-    }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(220.f);
-    const bool findNow = ImGui::InputTextWithHint("##hexfind", h.findText ? "text to find" : "hex bytes, e.g. 64 65 78 0a",
-                                                  h.findBuf, sizeof h.findBuf, ImGuiInputTextFlags_EnterReturnsTrue);
-    ImGui::SameLine();
-    ImGui::Checkbox("Text", &h.findText);
-    ImGui::SameLine();
-    if ((ImGui::Button("Find next") || findNow) && h.findBuf[0]) {
-        std::vector<uint8_t> pattern;
-        if (h.findText) pattern.assign(h.findBuf, h.findBuf + std::strlen(h.findBuf));
-        if (!h.findText && !parseHexPattern(h.findBuf, pattern)) {
-            h.status = "invalid hex pattern";
-        } else {
-            const size_t from = h.selected >= 0 ? (size_t)h.selected + 1 : 0;
-            auto it = std::search(bytes.begin() + (ptrdiff_t)std::min(from, bytes.size()), bytes.end(), pattern.begin(), pattern.end());
-            if (it == bytes.end()) it = std::search(bytes.begin(), bytes.end(), pattern.begin(), pattern.end());  // wrap
-            if (it == bytes.end()) {
-                h.status = "not found";
-            } else {
-                h.selected = it - bytes.begin();
-                h.scrollTo = h.selected;
-                h.status.clear();
-            }
-        }
-    }
-    ImGui::SameLine();
-    if (!h.status.empty()) ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.35f, 1.f), "%s", h.status.c_str());
-    else ImGui::TextDisabled("%zu bytes", bytes.size());
-
-    const float inspectorW = ImGui::GetFontSize() * 17.f;  // fits 20-digit 64-bit values at any zoom
-    ImGui::BeginChild("##content", ImVec2(-inspectorW, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
-    ImGui::PushFont(Theme::monoFont());
-    const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
-    const float charW = ImGui::CalcTextSize("0").x;
-    if (h.scrollTo >= 0) {
-        ImGui::SetScrollY(std::max(0.f, (float)(h.scrollTo / 16) * lineHeight - ImGui::GetWindowHeight() * 0.33f));
-        h.scrollTo = -1;
-    }
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const int rows = (int)((bytes.size() + 15) / 16);
-    ImGuiListClipper clipper;
-    clipper.Begin(rows, lineHeight);
-    while (clipper.Step()) {
-        for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; ++r) {
-            const size_t offset = (size_t)r * 16;
-            char buf[160];
-            int n = std::snprintf(buf, sizeof buf, "%08X  ", (unsigned)offset);
-            for (size_t k = 0; k < 16; ++k) {
-                if (offset + k < bytes.size()) n += std::snprintf(buf + n, sizeof buf - n, "%02X ", bytes[offset + k]);
-                else n += std::snprintf(buf + n, sizeof buf - n, "   ");
-            }
-            buf[n++] = ' ';
-            for (size_t k = 0; k < 16 && offset + k < bytes.size(); ++k) {
-                const uint8_t c = bytes[offset + k];
-                buf[n++] = (c >= 32 && c < 127) ? (char)c : '.';
-            }
-            buf[n] = 0;
-            const ImVec2 pos = ImGui::GetCursorScreenPos();
-            // Selection highlight in both columns, under the text.
-            if (h.selected >= (int64_t)offset && h.selected < (int64_t)offset + 16) {
-                const int k = (int)(h.selected - (int64_t)offset);
-                const ImU32 sel = IM_COL32(0, 122, 204, 120);
-                dl->AddRectFilled(ImVec2(pos.x + charW * (10 + 3 * k), pos.y), ImVec2(pos.x + charW * (12 + 3 * k), pos.y + lineHeight), sel);
-                dl->AddRectFilled(ImVec2(pos.x + charW * (59 + k), pos.y), ImVec2(pos.x + charW * (60 + k), pos.y + lineHeight), sel);
-            }
-            ImGui::TextUnformatted(buf);
-            if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                const int col = (int)((ImGui::GetIO().MousePos.x - pos.x) / charW);
-                int k = -1;
-                if (col >= 10 && col < 58) k = (col - 10) / 3;
-                else if (col >= 59 && col < 75) k = col - 59;
-                if (k >= 0 && offset + (size_t)k < bytes.size()) h.selected = (int64_t)(offset + (size_t)k);
-            }
-        }
-    }
-    ImGui::PopFont();
-    ImGui::EndChild();
-    ImGui::SameLine();
-    drawHexInspector(doc, h);
-}
-
-void EditorPanel::drawHexInspector(const Document& doc, HexState& h) {
-    const auto& bytes = doc.bytes();
-    ImGui::BeginChild("##inspector", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    ImGui::TextDisabled("Data inspector (little endian)");
-    if (h.selected < 0 || h.selected >= (int64_t)bytes.size()) {
-        ImGui::TextDisabled("Click a byte.");
-        ImGui::EndChild();
-        return;
-    }
-    const size_t off = (size_t)h.selected;
-    const size_t avail = bytes.size() - off;
-    const auto le = [&](size_t n) {
-        uint64_t v = 0;
-        for (size_t i = 0; i < n && i < avail; ++i) v |= (uint64_t)bytes[off + i] << (8 * i);
-        return v;
-    };
-    ImGui::PushFont(Theme::monoFont());
-    ImGui::Text("offset   0x%zX (%zu)", off, off);
-    ImGui::Separator();
-    ImGui::Text("int8     %d", (int)(int8_t)bytes[off]);
-    ImGui::Text("uint8    %u", (unsigned)bytes[off]);
-    if (avail >= 2) {
-        ImGui::Text("int16    %d", (int)(int16_t)le(2));
-        ImGui::Text("uint16   %u", (unsigned)le(2));
-    }
-    if (avail >= 4) {
-        const uint32_t v = (uint32_t)le(4);
-        float f;
-        std::memcpy(&f, &v, 4);
-        ImGui::Text("int32    %d", (int32_t)v);
-        ImGui::Text("uint32   %u", v);
-        ImGui::Text("hex32    0x%08X", v);
-        ImGui::Text("float    %g", f);
-    }
-    if (avail >= 8) {
-        const uint64_t v = le(8);
-        double d;
-        std::memcpy(&d, &v, 8);
-        ImGui::Text("int64    %lld", (long long)v);
-        ImGui::Text("uint64   %llu", (unsigned long long)v);
-        ImGui::Text("double   %g", d);
-    }
-    // ULEB128 (DEX / DWARF encodings).
-    {
-        uint64_t v = 0;
-        int shift = 0;
-        size_t i = 0;
-        for (; i < 10 && i < avail; ++i) {
-            v |= (uint64_t)(bytes[off + i] & 0x7F) << shift;
-            shift += 7;
-            if (!(bytes[off + i] & 0x80)) break;
-        }
-        ImGui::Text("uleb128  %llu (%zu bytes)", (unsigned long long)v, i + 1);
-    }
-    std::string str;
-    for (size_t i = 0; i < 48 && i < avail && bytes[off + i] >= 32 && bytes[off + i] < 127; ++i) str.push_back((char)bytes[off + i]);
-    ImGui::TextWrapped("ascii    \"%s\"", str.c_str());
-    ImGui::PopFont();
-    if (ImGui::SmallButton("Copy offset")) {
-        char b[32];
-        std::snprintf(b, sizeof b, "0x%zX", off);
-        ImGui::SetClipboardText(b);
-    }
-    ImGui::EndChild();
-}
+void EditorPanel::drawHexView(const Document& doc) { hex_[&doc].draw(doc.bytes()); }
 
 void EditorPanel::drawCode(Document& doc) {
     const auto& lines = doc.lines();
@@ -994,12 +873,13 @@ void EditorPanel::drawGoToModal() {
 // preview) so the map can never grow and addresses are never reused stale.
 void EditorPanel::sweepFindStates() {
     auto& docs = workspace_.documents();
-    for (auto it = hex_.begin(); it != hex_.end();) {
-        const bool alive = std::any_of(docs.begin(), docs.end(),
-                                       [&](const std::unique_ptr<Document>& d) { return d.get() == it->first; });
-        if (alive) ++it;
-        else it = hex_.erase(it);
-    }
+    const auto alive = [&](const Document* doc) {
+        return std::any_of(docs.begin(), docs.end(), [&](const std::unique_ptr<Document>& d) { return d.get() == doc; });
+    };
+    for (auto it = hex_.begin(); it != hex_.end();) it = alive(it->first) ? std::next(it) : hex_.erase(it);
+    for (auto it = audio_.begin(); it != audio_.end();) it = alive(it->first) ? std::next(it) : audio_.erase(it);
+    for (auto it = fonts_.begin(); it != fonts_.end();) it = alive(it->first) ? std::next(it) : fonts_.erase(it);
+    for (auto it = videos_.begin(); it != videos_.end();) it = alive(it->first) ? std::next(it) : videos_.erase(it);
     if (find_.empty()) return;
     for (auto it = find_.begin(); it != find_.end();) {
         const bool alive = std::any_of(docs.begin(), docs.end(),

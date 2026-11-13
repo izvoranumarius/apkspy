@@ -408,7 +408,10 @@ void Workspace::update() {
                 writeMarker(pathutil::fromUtf8(dec->outDir), "done");
             refreshDecompiledTree(group);
             ensureSymbolIndex(group);  // index the finished tree for Ctrl+click
-            decompileSwitch_ = true;
+            // Show the results only when there is code to show and the user is
+            // not reading something already (a jump while browsing Files is jarring).
+            const Root* dec = rootByGroup(group, Root::Kind::Decompiled);
+            if (documents_.empty() && dec && dec->tree && !dec->tree->children().empty()) decompileSwitch_ = true;
             if (jadx_.finishedWithErrors())
                 log("Decompilation of " + group + " finished; jadx reported " + std::to_string(jadx_.failedClasses()) +
                     " error(s) (code it could not decompile). Everything else is available.", "jadx");
@@ -521,14 +524,14 @@ NavLocation Workspace::locationOf(const Document& doc) const {
     return loc;
 }
 
-void Workspace::navigateTo(Root& root, const TreeNode& node, int line, const NavLocation* origin) {
+void Workspace::navigateTo(Root& root, const TreeNode& node, int line, const NavLocation* origin, OpenMode mode) {
     NavLocation dest;
     dest.kind = root.kind;
     dest.group = root.title;
     dest.path = node.path();
     dest.line = line < 0 ? 0 : line;
     if (!suppressNav_) nav_.navigate(origin, dest);
-    openNode(root, node, line, OpenMode::Permanent);
+    openNode(root, node, line, mode);
     // openNode applies goTo(line) itself; nothing else to do here.
 }
 
@@ -593,6 +596,43 @@ bool Workspace::openSymbol(const std::string& group, const std::string& identifi
     if (!node || node->isFolder()) return false;
     navigateTo(*dec, *node, -1, origin);
     return true;
+}
+
+std::vector<const TreeNode*> Workspace::chainTo(const TreeNode& from, const TreeNode* node) {
+    if (&from == node) return {&from};
+    for (const auto& c : from.children()) {
+        if (c.get() != node && !c->isFolder()) continue;
+        std::vector<const TreeNode*> rest = chainTo(*c, node);
+        if (!rest.empty()) {
+            rest.insert(rest.begin(), &from);
+            return rest;
+        }
+    }
+    return {};
+}
+
+Document* Workspace::openClassSource(const std::string& group, const std::string& javaClass, OpenMode mode) {
+    Root* dec = rootByGroup(group, Root::Kind::Decompiled);
+    if (!dec || !dec->tree) return nullptr;
+    // Inner classes ("Outer$Inner") live in the outer class's file.
+    const std::string outer = javaClass.substr(0, javaClass.find('$'));
+    std::string path = symbols_.resolve(group, outer, {});
+    TreeNode* node = path.empty() ? nullptr : dec->tree->findByPath(path);
+    if (!node) {
+        // The index may still be building: jadx writes sources/<package path>.java.
+        std::string rel = outer;
+        std::replace(rel.begin(), rel.end(), '.', (char)fs::path::preferred_separator);
+        node = dec->tree->findByPath(pathutil::toUtf8(pathutil::fromUtf8(sourcesDir(dec->outDir)) / pathutil::fromUtf8(rel + ".java")));
+    }
+    if (!node || node->isFolder()) return nullptr;
+    NavLocation origin;
+    const NavLocation* originPtr = nullptr;
+    if (Document* active = activeDocument()) {
+        origin = locationOf(*active);
+        originPtr = &origin;
+    }
+    navigateTo(*dec, *node, -1, originPtr, mode);
+    return findDocument(*node);
 }
 
 // ---------------------------------------------------------------------------

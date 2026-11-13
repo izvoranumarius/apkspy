@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include "core/ApkInfo.hpp"
 #include "core/AxmlDecoder.hpp"
 #include "core/Paths.hpp"
 #include "core/TextUtils.hpp"
@@ -19,6 +20,48 @@ bool looksLikeText(const std::vector<uint8_t>& bytes) {
 
 // Start offset of each line inside `text` ('\n' separated) - the single
 // line-indexing helper for the whole document (file text and edit buffer).
+std::string extensionOf(const std::string& name) {
+    const size_t dot = name.find_last_of('.');
+    return dot == std::string::npos ? std::string() : tex::asciiLower(name.substr(dot + 1));
+}
+
+bool startsWith(const std::vector<uint8_t>& b, const char* magic, size_t len, size_t at = 0) {
+    return b.size() >= at + len && std::equal(magic, magic + len, b.begin() + (ptrdiff_t)at,
+                                               [](char m, uint8_t v) { return (uint8_t)m == v; });
+}
+
+// Played by the audio view: by extension, or by content for files without one.
+bool looksLikeAudio(const std::string& ext, const std::vector<uint8_t>& b) {
+    if (ext == "ogg" || ext == "oga" || ext == "mp3" || ext == "wav" || ext == "flac" || ext == "opus" ||
+        ext == "amr" || ext == "mid" || ext == "midi")
+        return true;
+    return startsWith(b, "OggS", 4) || startsWith(b, "fLaC", 4) || startsWith(b, "ID3", 3) ||
+           (startsWith(b, "RIFF", 4) && startsWith(b, "WAVE", 4, 8));
+}
+
+// Played by the media player (Media Foundation): video, and AAC / M4A audio.
+bool looksLikeVideo(const std::string& ext, const std::vector<uint8_t>& b) {
+    if (ext == "mp4" || ext == "m4v" || ext == "mov" || ext == "3gp" || ext == "3g2" || ext == "webm" || ext == "mkv" ||
+        ext == "wmv" || ext == "avi" || ext == "m4a" || ext == "aac")
+        return true;
+    return startsWith(b, "ftyp", 4, 4) || startsWith(b, "\x1A\x45\xDF\xA3", 4);
+}
+
+bool looksLikeFont(const std::string& ext, const std::vector<uint8_t>& b) {
+    if (ext == "ttf" || ext == "otf" || ext == "ttc") return true;
+    return startsWith(b, "\x00\x01\x00\x00", 4) || startsWith(b, "OTTO", 4) || startsWith(b, "ttcf", 4);
+}
+
+std::string fingerprint(const std::string& hex) {
+    std::string out;
+    for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+        if (i) out.push_back(':');
+        out.push_back((char)std::toupper((unsigned char)hex[i]));
+        out.push_back((char)std::toupper((unsigned char)hex[i + 1]));
+    }
+    return out;
+}
+
 void lineOffsetsOf(std::string_view text, std::vector<uint32_t>& offsets) {
     offsets.clear();
     offsets.push_back(0);
@@ -39,6 +82,33 @@ Document::Document(std::string title, const TreeNode* node, std::vector<uint8_t>
     if (imageCandidate) {
         loadImage();
         return;
+    }
+    const std::string ext = extensionOf(node_->name());
+    if (kind == NodeKind::Binary && looksLikeVideo(ext, bytes_)) {
+        mode_ = Mode::Video;
+        return;
+    }
+    if (kind == NodeKind::Binary && looksLikeAudio(ext, bytes_)) {
+        mode_ = Mode::Audio;
+        return;
+    }
+    if (kind == NodeKind::Binary && looksLikeFont(ext, bytes_)) {
+        mode_ = Mode::Font;
+        return;
+    }
+    // META-INF/*.RSA / .DSA / .EC: the v1 signature block, shown as its certificate.
+    if (kind == NodeKind::Binary && (ext == "rsa" || ext == "dsa" || ext == "ec")) {
+        ApkSigningInfo cert;
+        if (ApkInfo::describeSignatureBlock(bytes_, cert)) {
+            std::string text = "Signature block (PKCS#7), APK signature scheme v1 (JAR signing)\n\n";
+            text += "Subject     CN=" + (cert.subject.empty() ? std::string("(none)") : cert.subject) + "\n";
+            text += "Issuer      CN=" + (cert.issuer.empty() ? std::string("(none)") : cert.issuer) + "\n";
+            text += "SHA-256     " + fingerprint(cert.certSha256) + "\n";
+            mode_ = Mode::Code;
+            note_ = "Decoded from the signature block";
+            setText(std::move(text));
+            return;
+        }
     }
     bool binaryKind = kind == NodeKind::Dex || kind == NodeKind::Native;
 

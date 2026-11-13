@@ -12,6 +12,7 @@ public:
     int width() const { return width_; }
     int height() const { return height_; }
     void setNearest(bool nearest);
+    void update(const uint8_t* rgba);  // same size: replaces the pixels (video frames)
 
     static int maxSize();
 

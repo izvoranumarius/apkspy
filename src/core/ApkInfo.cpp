@@ -200,6 +200,10 @@ bool firstCertOfSigners(const uint8_t* p, size_t len, ApkSigningInfo& out, const
 
 }  // namespace
 
+bool ApkInfo::describeSignatureBlock(const std::vector<uint8_t>& blob, ApkSigningInfo& out) {
+    return certFromPkcs7(blob, out);
+}
+
 ApkSigningInfo ApkInfo::describeCertificate(const uint8_t* der, size_t len, const char* scheme) {
     return describeCert(der, len, scheme);
 }

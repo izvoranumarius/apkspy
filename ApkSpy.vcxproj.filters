@@ -87,8 +87,35 @@
     <ClInclude Include="src\ui\ScriptPanel.hpp">
       <Filter>Header Files\ui</Filter>
     </ClInclude>
+    <ClInclude Include="src\ui\TerminalPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\CommandPalette.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\VideoPlayer.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\HexView.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\AudioPlayer.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\MediaViews.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
     <ClInclude Include="src\core\ScriptRunner.hpp">
       <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\VtScreen.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\Pty.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\app\Icons.hpp">
+      <Filter>Header Files\app</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\GraphView.hpp">
       <Filter>Header Files\ui</Filter>
@@ -314,7 +341,31 @@
     <ClCompile Include="src\ui\ScriptPanel.cpp">
       <Filter>Source Files\ui</Filter>
     </ClCompile>
+    <ClCompile Include="src\ui\TerminalPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\CommandPalette.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\VideoPlayer.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\HexView.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\AudioPlayer.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\MediaViews.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
     <ClCompile Include="src\core\ScriptRunner.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\VtScreen.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\Pty.cpp">
       <Filter>Source Files\core</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\GraphView.cpp">

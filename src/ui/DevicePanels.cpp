@@ -280,7 +280,9 @@ void DebuggerPanel::followFrame(const DebugSession::FrameRow& frame) {
 void DevicesPanel::attach(const std::string& serial, int pid) {
     devices_.debugger().attach(serial, pid);
     std::string error;
-    if (!devices_.logcatRunning() && !devices_.startLogcat(serial, error)) workspace_.log("Logcat: " + error, "debug");
+    // Logcat follows the attached device (it may be showing another one).
+    const bool sameDevice = devices_.logcatRunning() && devices_.logcatSerial() == serial;
+    if (!sameDevice && !devices_.startLogcat(serial, error)) workspace_.log("Logcat: " + error, "debug");
     devices_.requestLogFilter(pid);
     showPanel_("Debugger");
 }

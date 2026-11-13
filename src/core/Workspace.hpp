@@ -100,7 +100,8 @@ public:
     // the location the user is leaving (active document + top visible line);
     // pass nullptr when there is none. This is THE entry point for explicit
     // jumps (search hits, symbol navigation, explorer jumps).
-    void navigateTo(Root& root, const TreeNode& node, int line, const NavLocation* origin);
+    void navigateTo(Root& root, const TreeNode& node, int line, const NavLocation* origin,
+                    OpenMode mode = OpenMode::Permanent);
     // Records an already-performed same-document jump (Go to Line) without
     // re-opening the node - the document stays exactly as it is.
     void recordJump(const NavLocation& origin, const NavLocation& dest) { nav_.navigate(&origin, dest); }
@@ -128,6 +129,27 @@ public:
     // the fallback (the Overview panel opens the manifest instead).
     bool openSymbol(const std::string& group, const std::string& identifier, const std::string& hintDir,
                     const NavLocation* origin);
+    // Show a node in the Explorer (expand its folders, select it, scroll to it).
+    struct RevealRequest {
+        std::string group;
+        RootKind kind = RootKind::Apk;
+        const TreeNode* node = nullptr;
+    };
+    void requestReveal(const std::string& group, RootKind kind, const TreeNode* node) {
+        reveal_ = {group, kind, node};
+        revealShow_ = true;
+    }
+    const RevealRequest& pendingReveal() const { return reveal_; }
+    void clearReveal() { reveal_ = {}; }
+    bool takeRevealShow() {
+        const bool v = revealShow_;
+        revealShow_ = false;
+        return v;
+    }
+    // Folders from the root down to `node` (the root's tree first, `node` last); empty when absent.
+    static std::vector<const TreeNode*> chainTo(const TreeNode& from, const TreeNode* node);
+    // Decompiled source of a class (dotted name), or null without jadx output for it.
+    Document* openClassSource(const std::string& group, const std::string& javaClass, OpenMode mode);
 
     // Export / extract (M5) -------------------------------------------------
     // Writes one node to `destFile` (a user-picked path): raw bytes, or the
@@ -259,6 +281,8 @@ private:
     std::vector<std::unique_ptr<Root>> roots_;
     std::vector<std::unique_ptr<Document>> documents_;
     std::vector<std::string> log_;
+    RevealRequest reveal_;
+    bool revealShow_ = false;
     size_t logTrims_ = 0;
     std::string jadxPath_ = "jadx";
     std::string jadxArgs_;

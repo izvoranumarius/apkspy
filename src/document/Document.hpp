@@ -24,7 +24,7 @@ class ResourceTable;
 
 class Document {
 public:
-    enum class Mode { Code, Hex, Image };
+    enum class Mode { Code, Hex, Image, Audio, Font, Video };
 
     // `resources` (optional) names app resource references in binary XML.
     Document(std::string title, const TreeNode* node, std::vector<uint8_t> bytes,

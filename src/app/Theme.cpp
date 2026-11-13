@@ -1,4 +1,5 @@
 #include "app/Theme.hpp"
+#include "app/Icons.hpp"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -6,6 +7,7 @@
 #include <vector>
 
 ImFont* Theme::mono_ = nullptr;
+bool Theme::icons_ = false;
 ImGuiStyle Theme::baseStyle_;
 bool Theme::styleCaptured_ = false;
 
@@ -137,6 +139,19 @@ void Theme::loadFonts(ImGuiIO& io, float scale, bool fullCjk) {
         merge.MergeMode = true;
         io.Fonts->AddFontFromFileTTF(cjk, uiSize, &merge, cjkRanges(io, fullCjk));
     }
+    // Icons: the Windows icon font, merged into the UI font so menus, tabs and
+    // buttons can carry them inline. Fixed advance keeps them in a column.
+    icons_ = false;
+    for (const char* path : {"C:/Windows/Fonts/SegoeIcons.ttf", "C:/Windows/Fonts/segmdl2.ttf"}) {
+        if (!ui || !fileExists(path)) continue;
+        ImFontConfig merge;
+        merge.MergeMode = true;
+        merge.PixelSnapH = true;
+        merge.GlyphMinAdvanceX = std::round(uiSize * 1.05f);
+        merge.GlyphOffset = ImVec2(0.f, std::round(uiSize * 0.12f));
+        icons_ = io.Fonts->AddFontFromFileTTF(path, std::round(uiSize * 0.92f), &merge, icons::glyphRanges()) != nullptr;
+        break;
+    }
 
     mono_ = tryLoad(io, {"C:/Windows/Fonts/consola.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
                          "/System/Library/Fonts/Menlo.ttc"},
@@ -159,55 +174,80 @@ void Theme::releaseFontBuildData(ImGuiIO& io) {
 
 ImFont* Theme::monoFont() { return mono_ ? mono_ : ImGui::GetFont(); }
 
+ImVec4 Theme::editorBackground() { return ImVec4(31 / 255.f, 31 / 255.f, 31 / 255.f, 1.f); }
+
 void Theme::apply() {
     ImGuiStyle& s = ImGui::GetStyle();
     s.WindowRounding = 0.f;
     s.ChildRounding = 0.f;
-    s.FrameRounding = 2.f;
-    s.PopupRounding = 0.f;
-    s.ScrollbarRounding = 0.f;
+    s.FrameRounding = 3.f;
+    s.PopupRounding = 4.f;
+    s.ScrollbarRounding = 6.f;
+    s.GrabRounding = 3.f;
     s.TabRounding = 0.f;
+    s.TabBarOverlineSize = 2.f;  // accent line over the selected tab
     s.WindowBorderSize = 1.f;
+    s.PopupBorderSize = 1.f;
     s.FrameBorderSize = 0.f;
+    s.ScrollbarSize = 12.f;
     s.ItemSpacing = ImVec2(6.f, 2.f);
+    s.FramePadding = ImVec2(6.f, 3.f);
     s.WindowPadding = ImVec2(8.f, 6.f);
     s.IndentSpacing = 14.f;
 
     auto c = [](int r, int g, int b, int a = 255) { return ImVec4(r / 255.f, g / 255.f, b / 255.f, a / 255.f); };
     ImVec4* col = s.Colors;
-    col[ImGuiCol_Text] = c(220, 220, 220);
-    col[ImGuiCol_TextDisabled] = c(133, 133, 133);
-    col[ImGuiCol_WindowBg] = c(30, 30, 30);
-    col[ImGuiCol_ChildBg] = c(30, 30, 30);
-    col[ImGuiCol_PopupBg] = c(37, 37, 38);
-    col[ImGuiCol_Border] = c(63, 63, 70);
-    col[ImGuiCol_FrameBg] = c(51, 51, 55);
-    col[ImGuiCol_FrameBgHovered] = c(63, 63, 70);
-    col[ImGuiCol_FrameBgActive] = c(63, 63, 70);
-    col[ImGuiCol_TitleBg] = c(45, 45, 48);
-    col[ImGuiCol_TitleBgActive] = c(0, 122, 204);
-    col[ImGuiCol_TitleBgCollapsed] = c(45, 45, 48);
-    col[ImGuiCol_MenuBarBg] = c(45, 45, 48);
-    col[ImGuiCol_ScrollbarBg] = c(30, 30, 30);
-    col[ImGuiCol_ScrollbarGrab] = c(80, 80, 80);
-    col[ImGuiCol_ScrollbarGrabHovered] = c(110, 110, 110);
-    col[ImGuiCol_ScrollbarGrabActive] = c(140, 140, 140);
-    col[ImGuiCol_Button] = c(63, 63, 70);
-    col[ImGuiCol_ButtonHovered] = c(0, 122, 204);
-    col[ImGuiCol_ButtonActive] = c(0, 98, 163);
-    col[ImGuiCol_Header] = c(51, 51, 55);
-    col[ImGuiCol_HeaderHovered] = c(62, 62, 66);
-    col[ImGuiCol_HeaderActive] = c(0, 122, 204);
-    col[ImGuiCol_Separator] = c(63, 63, 70);
-    col[ImGuiCol_Tab] = c(45, 45, 48);
-    col[ImGuiCol_TabHovered] = c(28, 151, 234);
-    col[ImGuiCol_TabSelected] = c(0, 122, 204);
-    col[ImGuiCol_TabDimmed] = c(45, 45, 48);
-    col[ImGuiCol_TabDimmedSelected] = c(63, 63, 70);
-    col[ImGuiCol_DockingPreview] = c(0, 122, 204, 150);
-    col[ImGuiCol_DockingEmptyBg] = c(30, 30, 30);
+    const ImVec4 accent = c(0, 120, 212);
+    col[ImGuiCol_Text] = c(204, 204, 204);
+    col[ImGuiCol_TextDisabled] = c(157, 157, 157);
+    col[ImGuiCol_WindowBg] = c(24, 24, 24);
+    col[ImGuiCol_ChildBg] = c(0, 0, 0, 0);
+    col[ImGuiCol_PopupBg] = c(31, 31, 31);
+    col[ImGuiCol_Border] = c(43, 43, 43);
+    col[ImGuiCol_BorderShadow] = c(0, 0, 0, 0);
+    col[ImGuiCol_FrameBg] = c(49, 49, 49);
+    col[ImGuiCol_FrameBgHovered] = c(60, 60, 60);
+    col[ImGuiCol_FrameBgActive] = c(60, 60, 60);
+    col[ImGuiCol_TitleBg] = c(24, 24, 24);
+    col[ImGuiCol_TitleBgActive] = c(24, 24, 24);
+    col[ImGuiCol_TitleBgCollapsed] = c(24, 24, 24);
+    col[ImGuiCol_MenuBarBg] = c(24, 24, 24);
+    col[ImGuiCol_ScrollbarBg] = c(0, 0, 0, 0);
+    col[ImGuiCol_ScrollbarGrab] = c(121, 121, 121, 90);
+    col[ImGuiCol_ScrollbarGrabHovered] = c(121, 121, 121, 150);
+    col[ImGuiCol_ScrollbarGrabActive] = c(121, 121, 121, 200);
+    col[ImGuiCol_CheckMark] = c(204, 204, 204);
+    col[ImGuiCol_SliderGrab] = accent;
+    col[ImGuiCol_SliderGrabActive] = c(38, 146, 230);
+    col[ImGuiCol_Button] = c(49, 49, 49);
+    col[ImGuiCol_ButtonHovered] = c(66, 66, 66);
+    col[ImGuiCol_ButtonActive] = accent;
+    col[ImGuiCol_Header] = c(4, 57, 94);           // selected row
+    col[ImGuiCol_HeaderHovered] = c(42, 45, 46);   // hovered row
+    col[ImGuiCol_HeaderActive] = c(4, 57, 94);
+    col[ImGuiCol_Separator] = c(43, 43, 43);
+    col[ImGuiCol_SeparatorHovered] = accent;
+    col[ImGuiCol_SeparatorActive] = accent;
     col[ImGuiCol_ResizeGrip] = c(0, 0, 0, 0);
+    col[ImGuiCol_ResizeGripHovered] = accent;
+    col[ImGuiCol_ResizeGripActive] = accent;
+    col[ImGuiCol_Tab] = c(24, 24, 24);
+    col[ImGuiCol_TabHovered] = c(31, 31, 31);
+    col[ImGuiCol_TabSelected] = c(31, 31, 31);
+    col[ImGuiCol_TabSelectedOverline] = accent;
+    col[ImGuiCol_TabDimmed] = c(24, 24, 24);
+    col[ImGuiCol_TabDimmedSelected] = c(31, 31, 31);
+    col[ImGuiCol_TabDimmedSelectedOverline] = c(80, 80, 80);
+    col[ImGuiCol_DockingPreview] = c(0, 120, 212, 120);
+    col[ImGuiCol_DockingEmptyBg] = c(24, 24, 24);
+    col[ImGuiCol_TableHeaderBg] = c(31, 31, 31);
+    col[ImGuiCol_TableBorderStrong] = c(43, 43, 43);
+    col[ImGuiCol_TableBorderLight] = c(43, 43, 43);
+    col[ImGuiCol_TableRowBg] = c(0, 0, 0, 0);
+    col[ImGuiCol_TableRowBgAlt] = c(255, 255, 255, 8);
     col[ImGuiCol_TextSelectedBg] = c(38, 79, 120);
+    col[ImGuiCol_NavCursor] = accent;
+    col[ImGuiCol_ModalWindowDimBg] = c(0, 0, 0, 110);
 
     baseStyle_ = s;  // unscaled reference for DPI changes
     styleCaptured_ = true;

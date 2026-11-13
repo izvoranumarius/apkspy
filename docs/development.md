@@ -95,6 +95,7 @@ factor that grows with the size of open files.
 
 ## Third-party code
 
-Dear ImGui, GLFW, miniz, libwebp and stb are included in `include/` and `lib/`,
-each under its own license. jadx, adb and Python are separate tools that you
+Dear ImGui, GLFW, miniz, libwebp, stb and miniaudio (0.11.25, with its copy of
+stb_vorbis, in `include/miniaudio`) are included in `include/` and `lib/`, each
+under its own license. jadx, adb and Python are separate tools that you
 install yourself.

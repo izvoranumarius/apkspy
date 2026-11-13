@@ -20,9 +20,15 @@ public:
     // Re-applies the base style scaled by `scale` (call after loadFonts).
     static void scaleStyle(float scale);
     static ImFont* monoFont();
+    // True when the Windows icon font was found and merged (see Icons.hpp).
+    static bool hasIcons() { return icons_; }
+    // Background of the code areas (editor, function view, terminal), a step
+    // lighter than the side panels, as in VS Code.
+    static ImVec4 editorBackground();
 
 private:
     static ImFont* mono_;
+    static bool icons_;
     static ImGuiStyle baseStyle_;
     static bool styleCaptured_;
 };

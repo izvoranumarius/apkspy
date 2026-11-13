@@ -36,6 +36,7 @@ private:
     FileBrowser adbBrowser_;
     char adbPath_[1024] = {};
     char pythonPath_[1024] = {};
+    char terminalShell_[1024] = {};
     int trafficPort_ = 8899;
     std::future<std::string> adbTest_;
     std::string adbTestResult_;

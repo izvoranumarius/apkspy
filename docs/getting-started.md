@@ -55,16 +55,16 @@ cleanly. Rebuilding an APK automatically invalidates its old results.
 
 ## Workspaces
 
-The **View** menu switches between task-focused layouts of the panels (`Ctrl+1`
+The button at the bottom left of the status bar (or the **View** menu) switches between task-focused layouts of the panels (`Ctrl+1`
 to `Ctrl+5`), and the title shows the current one:
 
 | Workspace | Main tool | Alongside |
 | --- | --- | --- |
-| **Code** | Editor | Explorer, Overview, Search, Bookmarks, Output |
-| **Analysis** | Analysis | Editor, Bookmarks |
-| **Debug** | Debugger | Devices, Editor, Logcat |
-| **Network** | Traffic | Logcat |
-| **Scripts** | Script | Output |
+| **Code** | Editor | Explorer, Overview, Search, Bookmarks, Output, Terminal |
+| **Analysis** | Analysis | Function, Editor, References, Bookmarks |
+| **Debug** | Debugger | Devices, Editor, Logcat, Terminal |
+| **Network** | Traffic | Logcat, Terminal |
+| **Scripts** | Script | Output, Terminal |
 
 The status bar shows the latest message and what is going on from any
 workspace: decompiling, analysis, the debugger running or paused, traffic
@@ -78,10 +78,31 @@ opening a file from a workspace without an editor switches to one that has it.
 Actions live on the data, as in IDA and Ghidra. Double-click opens or follows,
 right-click lists what else can be done, and tooltips show the keys.
 
+## Getting around
+
+- **Quick open** (`Ctrl+P`) finds any file of every APK and its decompiled
+  sources from a few letters of its name, in order.
+  The same box runs commands after `>` (`Ctrl+Shift+P`), finds classes of the
+  analysed APKs after `@`, and goes to a line after `:`, like VS Code, Binary
+  Ninja and IDA's Jump Anywhere.
+- **Breadcrumbs** above a file show its folders; click one to show it in the
+  Explorer. Right-click a tab for **Reveal in Explorer**, **Copy Path**, **Keep
+  Open** (for a preview tab) and **Close to the Right**.
+- **Terminal** (`` Ctrl+` ``): a real shell (PowerShell on Windows, your login
+  shell elsewhere) started in the project folder, with the configured adb and
+  jadx first on `PATH`. Drag to select; `Ctrl+C` copies a selection and
+  interrupts otherwise; `Ctrl+V` pastes. The shell is set under
+  **File > Settings > Scripts**. Windows needs version 10 1809 or later.
+- With nothing open, the editor shows a **welcome page** with recent projects
+  and these shortcuts.
+
 ## Keyboard shortcuts
 
 | Keys | Action |
 | --- | --- |
+| `Ctrl+P` | Go to a file (`>` commands, `@` classes, `:` line) |
+| `Ctrl+Shift+P` | Run a command |
+| `` Ctrl+` `` | Show or hide the terminal |
 | `Ctrl+1` to `Ctrl+5` | Switch workspace |
 | `Ctrl+O` / `Ctrl+S` | Open / save project |
 | `Ctrl+,` | Settings |

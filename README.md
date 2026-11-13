@@ -14,7 +14,12 @@ through bytecode and native libraries, and debug it live on a device.
   stepping and object inspection, plus Logcat and a process monitor.
 - **Traffic capture**: map an app's HTTP API from a device or emulator.
 - **Python scripting** and an **MCP server** for AI assistants.
+- **VS Code-style workbench**: quick open and command palette (`Ctrl+P`,
+  `Ctrl+Shift+P`), an integrated terminal (`` Ctrl+` ``), breadcrumbs and a
+  welcome page.
 - **APK comparison**: see what changed between two versions.
+- **Viewers** for images, audio, video, fonts and signing certificates, and a
+  hex editor-style viewer for everything else.
 
 ## Get started
 

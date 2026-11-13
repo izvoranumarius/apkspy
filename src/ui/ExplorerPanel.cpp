@@ -165,6 +165,11 @@ bool drawFileTypeIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, const 
         if (ext == "arsc") drawBadgeIcon(dl, mn, mx, IM_COL32(0, 137, 123, 255), "RS");
         else if (ext == "rsa" || ext == "dsa" || ext == "ec") drawBadgeIcon(dl, mn, mx, IM_COL32(176, 120, 30, 255), "SIG");
         else if (ext == "ttf" || ext == "otf" || ext == "ttc") drawBadgeIcon(dl, mn, mx, IM_COL32(90, 90, 160, 255), "F");
+        else if (ext == "ogg" || ext == "mp3" || ext == "wav" || ext == "flac" || ext == "m4a" || ext == "aac" ||
+                 ext == "opus" || ext == "amr" || ext == "mid" || ext == "midi" || ext == "oga")
+            drawBadgeIcon(dl, mn, mx, IM_COL32(200, 80, 120, 255), "AU");
+        else if (ext == "mp4" || ext == "webm" || ext == "3gp" || ext == "mkv" || ext == "m4v" || ext == "mov") drawBadgeIcon(dl, mn, mx, IM_COL32(180, 60, 60, 255), "VID");
+        else if (ext == "db" || ext == "sqlite" || ext == "realm") drawBadgeIcon(dl, mn, mx, IM_COL32(60, 120, 170, 255), "DB");
         else if (ext == "jar" || ext == "zip" || ext == "apk" || ext == "aar") drawBadgeIcon(dl, mn, mx, IM_COL32(150, 110, 40, 255), "ZIP");
         else if (ext == "kotlin_module" || ext == "kotlin_builtins") drawBadgeIcon(dl, mn, mx, IM_COL32(127, 82, 255, 255), "KM");
         else if (ext == "version") drawBadgeIcon(dl, mn, mx, IM_COL32(110, 120, 135, 255), "V");
@@ -179,6 +184,10 @@ bool drawFileTypeIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, const 
 void ExplorerPanel::drawContents() {
     // Switch to the Decompiled tab as soon as results become available.
     if (workspace_.takeDecompileSwitch()) selectTab_ = 1;
+    if (workspace_.pendingReveal().node && !revealTabSet_) {
+        selectTab_ = workspace_.pendingReveal().kind == RootKind::Decompiled ? 1 : 0;
+        revealTabSet_ = true;
+    }
 
     // One-shot selection request: SetSelected must only be passed on the frame
     // that wants to force a tab. Re-asserting it every frame (from a mirrored
@@ -289,7 +298,27 @@ std::set<const TreeNode*> ExplorerPanel::rowRange(const Root* root, const TreeNo
 
 void ExplorerPanel::drawTree(Root& root) {
     rows_.clear();
+    // Reveal: open the folders down to the node before walking the tree.
+    const Workspace::RevealRequest reveal = workspace_.pendingReveal();
+    const bool revealHere = reveal.node && reveal.group == root.title && reveal.kind == root.kind;
+    if (revealHere)
+        if (ImGuiStorage* storage = ImGui::GetStateStorage())
+            for (const TreeNode* folder : Workspace::chainTo(*root.tree, reveal.node))
+                if (folder != reveal.node || folder->isFolder()) storage->SetInt((int)ImGui::GetID(folder), 1);
+    const float startY = ImGui::GetCursorPosY();
     walk(root, *root.tree, 0, true);
+    if (revealHere) {
+        for (size_t i = 0; i < rows_.size(); ++i)
+            if (rows_[i].node == reveal.node) {
+                setSelection({reveal.node});
+                anchorNode_ = reveal.node;
+                const float y = startY + (float)i * ImGui::GetTextLineHeightWithSpacing();
+                ImGui::SetScrollY(std::max(0.f, y - ImGui::GetWindowHeight() * 0.35f));
+                break;
+            }
+        workspace_.clearReveal();
+        revealTabSet_ = false;
+    }
     allRows_.insert(allRows_.end(), rows_.begin(), rows_.end());
     // Virtualized rendering: only the rows in view are submitted, so huge
     // packages don't pay for thousands of hidden tree nodes per frame.
@@ -456,7 +485,7 @@ void ExplorerPanel::drawRow(Root& root, const TreeNode& node, int depth, bool is
         anchorNode_ = &node;
         if (!node.isFolder()) {
             // Single click: open (or replace) the preview tab.
-            if (jump) workspace_.navigateTo(root, node, -1, &origin);
+            if (jump) workspace_.navigateTo(root, node, -1, &origin, Workspace::OpenMode::Preview);
             else workspace_.openNode(root, node, -1, Workspace::OpenMode::Preview);
         }
     }

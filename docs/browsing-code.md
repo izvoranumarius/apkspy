@@ -61,8 +61,24 @@ everything it did decompile.
   HTML, JavaScript, CSS and Python.
 - **Images**: JPEG, PNG, GIF, BMP, TGA, PSD, HDR, PNM and WebP (first frame of
   animated files).
-- **Fonts** cover Latin, Greek, Cyrillic and common CJK characters and scale with
-  the monitor DPI.
+- **Audio**: WAV, MP3, FLAC and Ogg Vorbis play in the editor, with a waveform to
+  click or drag through, volume, and `Space` to play or pause. Opus and MIDI
+  show their details and open in hex.
+- **Video** (Windows build): MP4, 3GP, MOV, WebM, MKV, WMV and AVI play with
+  their sound through Windows Media Foundation, as do AAC and M4A audio: a seek
+  bar, volume, `Space` or a click on the picture to play or pause. Pictures
+  larger than 1920 pixels are scaled down while decoding. What plays depends on
+  the codecs Windows has (H.264, VP9 and AAC out of the box; HEVC needs the
+  extension from the Microsoft Store).
+- **Font files**: TTF, OTF and TTC show their name, sample text at five sizes and
+  the first glyphs, so icon fonts can be read too.
+- **Signature blocks** (`META-INF/*.RSA`, `.DSA`, `.EC`): the signing
+  certificate's subject, issuer and SHA-256 fingerprint.
+- Audio, video and fonts are also recognised by content when a file has no
+  extension.
+  Every one of these viewers has a **Hex** button.
+- **Interface fonts** cover Latin, Greek, Cyrillic and common CJK characters and
+  scale with the monitor DPI.
 
 ## Bookmarks and comments
 
@@ -84,8 +100,19 @@ listings opened in the editor) are recreated on demand and cannot be annotated.
 
 ## Hex viewer
 
-Binary files (DEX, native libraries, anything that is not text or an image)
-open in the hex viewer: jump to an offset, search hex patterns
-(`64 65 78 0a`) or text with wrap-around, click a byte to select it, and the
-**data inspector** shows the value at the selection as signed / unsigned 8-,
-16-, 32- and 64-bit integers, float, double, ULEB128 and ASCII.
+Binary files open in the hex viewer, which also names the format it recognises
+(DEX, ELF, ZIP, SQLite, Ogg, Unity bundle and others).
+
+- Offset, hex and text columns with a column header; zero bytes are dimmed
+  and text bytes bright. 8, 16 or 32 bytes per row.
+- Click a byte, drag or Shift+click to select a range, or use the arrow keys,
+  Page Up/Down and Home/End (with Shift to extend). Ctrl+A selects all.
+- **Ctrl+C** copies the selection as hex; right-click copies it as text, as a
+  C array, or its offset.
+- **Go to** takes a hex offset (`1f00` or `0x1f00`), a decimal one (`#1234`)
+  or a relative one (`+20`, `-20`).
+- **Find** searches hex bytes (`64 65 78`) or text, forward (Enter) or back
+  (Shift+Enter), wrapping around.
+- The **data inspector** shows the value at the selection in little or big
+  endian: binary, 8- to 64-bit integers, float, double, ULEB128, a Unix time
+  when the value is a plausible one, and ASCII and UTF-16 text.

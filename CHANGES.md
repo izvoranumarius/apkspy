@@ -1,5 +1,82 @@
 # Changelog
 
+## Workbench: terminal, command palette, icons
+
+Researched against VS Code, JADX, Binary Ninja, Ghidra and IDA.
+
+- **Terminal** panel (`` Ctrl+` ``): a real shell in a pseudo-terminal (ConPTY
+  on Windows, forkpty elsewhere) with colours, scrollback, the alternate
+  screen for full-screen programs, selection, copy and paste. It starts in the
+  project folder with adb and jadx first on `PATH`. In every workspace but
+  Analysis, beside Output or Logcat.
+- **Quick open and command palette** (`Ctrl+P`, `Ctrl+Shift+P`): fuzzy search
+  over every file, `>` for commands, `@` for classes and `:` for a line.
+- **Icons** from the Windows icon font (Segoe Fluent Icons, or Segoe MDL2
+  Assets on Windows 10) on panel tabs, the workspace switcher, the welcome page,
+  the palette and buttons. Other systems keep text labels.
+- **A darker, calmer theme** after VS Code's Dark Modern: side panels a shade
+  darker than the code, a blue line on the selected tab, rounded inputs and thin
+  scrollbars.
+- **Breadcrumbs** above a file; click a folder to show it in the Explorer.
+- Tab menu: **Reveal in Explorer**, **Copy Path**, **Copy Name**, **Keep Open**
+  and **Close to the Right**.
+- A **welcome page** with start actions, recent projects and the shortcuts.
+
+## Video, and a round of fixes
+
+- **Video** plays in the editor on Windows (MP4, 3GP, MOV, WebM, MKV, WMV, AVI,
+  and AAC / M4A audio) through Media Foundation, with sound, a seek bar and
+  volume. Very large pictures are scaled to 1920 pixels while decoding; a
+  4500 x 3000 test clip went from frames of 54 MB each to 10 MB.
+- Closing the last tab while a sound or video played left it playing; closed
+  tabs now always stop.
+- Attaching the debugger left Logcat on the previous device when another one
+  was selected; it now follows the attached device.
+- A finished decompilation no longer pulls the Explorer to the Decompiled tab
+  while you are reading a file, or for an APK with no code.
+- Search results containing `##` (Markdown headings, preprocessor lines) showed
+  only part of the line.
+- Hex viewer: the arrow keys move the cursor only, without keyboard navigation
+  also scrolling the view.
+- Format names for WebM, AVI, WMV and M4A.
+
+## A clearer Analysis workspace
+
+- **Analysis** is laid out like JADX, Ghidra and Binary Ninja: a navigator on
+  the left with classes as a package tree and readable method signatures, the
+  code in the center, and callers and callees of the selection along the
+  bottom in the new **References** panel.
+- Clicking a class or method opens its decompiled Java in a preview tab, at the
+  method. The new **Function** panel shows the method's smali, control-flow graph
+  or call graph, and native functions' listings and graphs.
+- Query results (string uses, type references, resource ids) appear in
+  References, with **<** to go back to the selection.
+- Strings that contain control bytes show them escaped instead of as blank rows.
+
+## Files
+
+- **Audio** (WAV, MP3, FLAC, Ogg Vorbis) plays in the editor with a waveform,
+  seeking and volume, using miniaudio.
+- **Font files** show their name, sample text at five sizes and their glyphs.
+- **Signature blocks** (`META-INF/*.RSA`) show the signing certificate.
+- Audio and fonts are recognised by content too, and the Explorer has icons for
+  audio, video and database files.
+
+## Hex viewer
+
+- Rewritten: column header, coloured bytes, range selection with the mouse or
+  keyboard, copy as hex, text or a C array, find backwards, 8 / 16 / 32 bytes
+  per row, relative and decimal Go to, the file's format, and a data inspector
+  with big endian, binary, Unix time and UTF-16.
+
+## Fixes and layout
+
+- The workspace switcher sits at the bottom left of the status bar.
+- A single click in the Explorer or Search opens a preview tab again instead of
+  a new tab each time, when another file was already open.
+- **Native**: the Sections view no longer reports an ID conflict (both of its
+  rows had a "Sections" button).
+
 ## One output window
 
 - **Output** now carries everything. Each line starts with its source, in its
