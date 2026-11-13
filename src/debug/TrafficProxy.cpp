@@ -16,7 +16,7 @@ constexpr int kIdleMs = 60000;
 
 double unixNow() {
     using namespace std::chrono;
-    return (double)duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count() / 1000.0;
+    return static_cast<double>(duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count()) / 1000.0;
 }
 
 bool iequals(const std::string& a, const char* b) { return tex::asciiIEqual(a, b); }
@@ -37,7 +37,7 @@ bool readHead(Socket& s, std::string& head, std::string& rest) {
         if (buf.size() > kMaxHead || !s.waitReadable(kIdleMs)) return false;
         const long n = s.recvSome(chunk, sizeof chunk);
         if (n <= 0) return false;
-        buf.append(chunk, (size_t)n);
+        buf.append(chunk, static_cast<size_t>(n));
     }
 }
 
@@ -46,7 +46,7 @@ bool readMore(Socket& s, std::string& buf) {
     if (!s.waitReadable(kIdleMs)) return false;
     const long n = s.recvSome(chunk, sizeof chunk);
     if (n <= 0) return false;
-    buf.append(chunk, (size_t)n);
+    buf.append(chunk, static_cast<size_t>(n));
     return true;
 }
 
@@ -70,7 +70,7 @@ size_t chunkedLength(const std::string& b) {
         }
         if (size > kMaxRequestBody) return b.size();
         if (pos + size + 2 > b.size()) return std::string::npos;
-        pos += (size_t)size + 2;
+        pos += static_cast<size_t>(size) + 2;
     }
 }
 
@@ -249,10 +249,10 @@ void TrafficProxy::serveTunnel(Socket& client, std::shared_ptr<Flow> flow, std::
     if (pending.empty() && client.waitReadable(10000)) {
         char chunk[16384];
         const long n = client.recvSome(chunk, sizeof chunk);
-        if (n > 0) pending.assign(chunk, (size_t)n);
+        if (n > 0) pending.assign(chunk, static_cast<size_t>(n));
     }
     if (!pending.empty()) {
-        const std::string sni = parseSni((const uint8_t*)pending.data(), pending.size());
+        const std::string sni = parseSni(reinterpret_cast<const uint8_t*>(pending.data()), pending.size());
         std::lock_guard<std::mutex> lock(mutex_);
         flow->sni = sni;
         flow->bytesUp += pending.size();
@@ -266,9 +266,9 @@ void TrafficProxy::serveTunnel(Socket& client, std::shared_ptr<Flow> flow, std::
         char buf[65536];
         for (;;) {
             const long n = client.recvSome(buf, sizeof buf);
-            if (n <= 0 || !upstream.sendAll(buf, (size_t)n)) break;
+            if (n <= 0 || !upstream.sendAll(buf, static_cast<size_t>(n))) break;
             std::lock_guard<std::mutex> lock(mutex_);
-            flow->bytesUp += (uint64_t)n;
+            flow->bytesUp += static_cast<uint64_t>(n);
         }
         upstream.shutdownBoth();
         client.shutdownBoth();
@@ -276,9 +276,9 @@ void TrafficProxy::serveTunnel(Socket& client, std::shared_ptr<Flow> flow, std::
     char buf[65536];
     for (;;) {
         const long n = upstream.recvSome(buf, sizeof buf);
-        if (n <= 0 || !client.sendAll(buf, (size_t)n)) break;
+        if (n <= 0 || !client.sendAll(buf, static_cast<size_t>(n))) break;
         std::lock_guard<std::mutex> lock(mutex_);
-        flow->bytesDown += (uint64_t)n;
+        flow->bytesDown += static_cast<uint64_t>(n);
     }
     client.shutdownBoth();
     upstream.shutdownBoth();
@@ -318,7 +318,7 @@ void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::st
         }
         while (body.size() < want)
             if (!readMore(client, body)) break;
-        if (body.size() > want) body.resize((size_t)want);
+        if (body.size() > want) body.resize(static_cast<size_t>(want));
     }
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -374,10 +374,10 @@ void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::st
         if (!upstream.waitReadable(kIdleMs)) break;
         const long n = upstream.recvSome(buf, sizeof buf);
         if (n <= 0) break;
-        if (!client.sendAll(buf, (size_t)n)) break;
-        total += (uint64_t)n;
+        if (!client.sendAll(buf, static_cast<size_t>(n))) break;
+        total += static_cast<uint64_t>(n);
         if (!headDone) {
-            captured.append(buf, (size_t)n);
+            captured.append(buf, static_cast<size_t>(n));
             // Skip interim 1xx responses (100 Continue).
             for (;;) {
                 const size_t end = captured.find("\r\n\r\n");
@@ -402,7 +402,7 @@ void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::st
             if (captured.size() > kMaxHead && !headDone) break;  // not HTTP
         } else {
             std::lock_guard<std::mutex> lock(mutex_);
-            capture(flow->response, buf, (size_t)n);
+            capture(flow->response, buf, static_cast<size_t>(n));
         }
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -439,7 +439,7 @@ std::vector<TrafficProxy::Flow> TrafficProxy::flows(uint64_t sinceId, size_t lim
         copy.request.bodySize = f->request.bodySize;
         out.push_back(std::move(copy));
     }
-    if (out.size() > limit) out.erase(out.begin(), out.begin() + (ptrdiff_t)(out.size() - limit));
+    if (out.size() > limit) out.erase(out.begin(), out.begin() + static_cast<ptrdiff_t>(out.size() - limit));
     return out;
 }
 
@@ -502,7 +502,7 @@ std::string TrafficProxy::pathTemplate(const std::string& path) {
         bool digits = !seg.empty(), hex = seg.size() >= 16, alnumMix = seg.size() >= 24;
         bool hasDigit = false, hasAlpha = false;
         for (char c : seg) {
-            const unsigned char u = (unsigned char)c;
+            const unsigned char u = static_cast<unsigned char>(c);
             if (!std::isdigit(u)) digits = false;
             if (!std::isxdigit(u) && c != '-') hex = false;
             if (!(std::isalnum(u) || c == '-' || c == '_')) alnumMix = false;
@@ -529,7 +529,7 @@ std::string TrafficProxy::decodeBody(const Message& m, std::string* note) {
             const unsigned long long size = std::strtoull(body.c_str() + pos, nullptr, 16);
             pos = eol + 2;
             if (size == 0 || pos >= body.size()) break;
-            const size_t take = (size_t)std::min<unsigned long long>(size, body.size() - pos);
+            const size_t take = static_cast<size_t>(std::min<unsigned long long>(size, body.size() - pos));
             plain.append(body, pos, take);
             pos += take + 2;
         }
@@ -537,13 +537,13 @@ std::string TrafficProxy::decodeBody(const Message& m, std::string* note) {
     }
     const std::string enc = tex::asciiLower(m.header("content-encoding"));
     if (enc.find("gzip") != std::string::npos || enc.find("deflate") != std::string::npos) {
-        const auto* d = (const uint8_t*)body.data();
+        const auto* d = reinterpret_cast<const uint8_t*>(body.data());
         size_t start = 0;
         int flags = 0;
         if (enc.find("gzip") != std::string::npos && body.size() > 18 && d[0] == 0x1f && d[1] == 0x8b) {
             const uint8_t flg = d[3];
             start = 10;
-            if (flg & 4) start += 2 + (size_t)(d[start] | d[start + 1] << 8);  // FEXTRA
+            if (flg & 4) start += 2 + static_cast<size_t>(d[start] | d[start + 1] << 8);  // FEXTRA
             if (flg & 8) while (start < body.size() && d[start++]) {}           // FNAME
             if (flg & 16) while (start < body.size() && d[start++]) {}          // FCOMMENT
             if (flg & 2) start += 2;                                             // FHCRC
@@ -554,7 +554,7 @@ std::string TrafficProxy::decodeBody(const Message& m, std::string* note) {
             size_t outLen = 0;
             void* inflated = tinfl_decompress_mem_to_heap(d + start, body.size() - start, &outLen, flags);
             if (inflated) {
-                body.assign((const char*)inflated, std::min<size_t>(outLen, 16u << 20));
+                body.assign(static_cast<const char*>(inflated), std::min<size_t>(outLen, 16u << 20));
                 mz_free(inflated);
                 if (note) *note = "decoded from " + enc;
             } else if (note) {
@@ -574,22 +574,22 @@ std::string TrafficProxy::parseSni(const uint8_t* d, size_t len) {
     if (p >= len) return {};
     p += 1 + d[p];  // session id
     if (p + 2 > len) return {};
-    p += 2 + (size_t)(d[p] << 8 | d[p + 1]);  // cipher suites
+    p += 2 + static_cast<size_t>(d[p] << 8 | d[p + 1]);  // cipher suites
     if (p + 1 > len) return {};
     p += 1 + d[p];  // compression methods
     if (p + 2 > len) return {};
-    const size_t extEnd = std::min(len, p + 2 + (size_t)(d[p] << 8 | d[p + 1]));
+    const size_t extEnd = std::min(len, p + 2 + static_cast<size_t>(d[p] << 8 | d[p + 1]));
     p += 2;
     while (p + 4 <= extEnd) {
-        const unsigned type = (unsigned)(d[p] << 8 | d[p + 1]);
-        const size_t elen = (size_t)(d[p + 2] << 8 | d[p + 3]);
+        const unsigned type = static_cast<unsigned>(d[p] << 8 | d[p + 1]);
+        const size_t elen = static_cast<size_t>(d[p + 2] << 8 | d[p + 3]);
         p += 4;
         if (type == 0 && p + 5 <= extEnd) {  // server_name list -> host_name
-            const size_t nameLen = (size_t)(d[p + 3] << 8 | d[p + 4]);
+            const size_t nameLen = static_cast<size_t>(d[p + 3] << 8 | d[p + 4]);
             if (d[p + 2] == 0 && p + 5 + nameLen <= extEnd) {
-                std::string name((const char*)d + p + 5, nameLen);
+                std::string name(reinterpret_cast<const char*>(d) + p + 5, nameLen);
                 for (char c : name)
-                    if (!(std::isalnum((unsigned char)c) || c == '.' || c == '-')) return {};
+                    if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '-')) return {};
                 return name;
             }
             return {};

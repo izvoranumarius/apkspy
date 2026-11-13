@@ -128,7 +128,8 @@ private:
     ScriptPanel* scriptPanel_ = nullptr;      // non-owning
     std::unique_ptr<WindowFrame> windowFrame_;
     std::unique_ptr<TitleBar> titleBar_;
-    std::unique_ptr<Texture> appIcon_;  // favicon frame drawn in the title bar
+    std::unique_ptr<Texture> appIcon_;      // favicon frame drawn in the title bar
+    std::unique_ptr<Texture> appIconDark_;  // its light variant for dark themes
     SettingsDialog settingsDialog_;
     FileBrowser projOpenBrowser_;
     FileBrowser projSaveBrowser_;

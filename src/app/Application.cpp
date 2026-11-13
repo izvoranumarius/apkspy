@@ -102,6 +102,8 @@ Application::Application()
     panels_.push_back(std::make_unique<BookmarksPanel>(workspace_, show));
     mcpSettings_ = std::make_unique<McpSettings>(workspace_, settings_, *mcp_);
     settingsDialog_.setMcp(mcpSettings_.get());
+    settingsDialog_.setZoomControl([this] { return zoomTarget(); }, [this](float zoom) { setZoom(zoom); });
+    settingsDialog_.setResetLayout([this] { resetLayout_ = true; });
     auto scriptPanel = std::make_unique<ScriptPanel>(workspace_, settings_, *mcp_);
     scriptPanel_ = scriptPanel.get();
     panels_.push_back(std::move(scriptPanel));
@@ -164,10 +166,25 @@ void Application::loadWindowIcon() {
     images.reserve(frames.size());
     for (const ico::Image& f : frames)
         images.push_back({f.width, f.height, const_cast<unsigned char*>(f.rgba.data())});
-    glfwSetWindowIcon(window_, (int)images.size(), images.data());
+    glfwSetWindowIcon(window_, static_cast<int>(images.size()), images.data());
     // Best frame for the custom title bar (~32 logical px).
-    if (const ico::Image* pick = ico::bestFrame(frames, 32))
+    if (const ico::Image* pick = ico::bestFrame(frames, 32)) {
         appIcon_ = std::make_unique<Texture>(pick->rgba.data(), pick->width, pick->height);
+        // Dark-theme variant: the neutral greys get their lightness flipped
+        // (dark figure -> light figure, contrast between its parts kept);
+        // coloured pixels such as the red handle are left as they are.
+        std::vector<uint8_t> light(pick->rgba);
+        for (size_t i = 0; i + 3 < light.size(); i += 4) {
+            const int r = light[i], g = light[i + 1], b = light[i + 2];
+            if (std::max({r, g, b}) - std::min({r, g, b}) > 48) continue;  // saturated: keep
+            // Flip the brightness only, to a pure grey (inverting each channel
+            // turned the faintly blue greys beige).
+            const int luma = (r * 2 + g * 5 + b) / 8;
+            const auto v = static_cast<uint8_t>(std::clamp(235 - luma * 9 / 10, 0, 255));
+            light[i] = light[i + 1] = light[i + 2] = v;
+        }
+        appIconDark_ = std::make_unique<Texture>(light.data(), pick->width, pick->height);
+    }
 }
 
 void Application::initTitleBar() {
@@ -183,8 +200,9 @@ void Application::initTitleBar() {
     titleBar_->addMenu("View", [this] { drawViewMenu(); });
     titleBar_->addMenu("Navigate", [this] { drawNavigateMenu(); });
     if (appIcon_)
-        titleBar_->setIcon((ImTextureID)(uintptr_t)appIcon_->id(), (float)appIcon_->width(),
-                           (float)appIcon_->height());
+        titleBar_->setIcon(static_cast<ImTextureID>(appIcon_->id()), static_cast<float>(appIcon_->width()),
+                           static_cast<float>(appIcon_->height()),
+                           appIconDark_ ? static_cast<ImTextureID>(appIconDark_->id()) : ImTextureID{0});
 }
 
 void Application::initImGui() {
@@ -195,15 +213,15 @@ void Application::initImGui() {
     migrateLegacyConfig("apkspy.ini");
     static const std::string iniPath = pathutil::configFile("apkspy.ini");
     io.IniFilename = iniPath.c_str();  // dock layout persistence between sessions
-    {
-        // The font choice is needed before the general settings are loaded.
-        Settings early;
-        early.load(pathutil::configFile("apkspy.settings"));
-        fullCjkFonts_ = early.getBool(Settings::kFullCjkFonts, false);
-        uiZoom_ = std::clamp(early.getInt(Settings::kUiZoomPercent, 100), 60, 200) / 100.f;
-    }
+    // Fonts, zoom and colours are needed before the general settings are
+    // loaded (the first frame must already use them).
+    Settings early;
+    early.load(pathutil::configFile("apkspy.settings"));
+    fullCjkFonts_ = early.getBool(Settings::kFullCjkFonts, false);
+    uiZoom_ = std::clamp(early.getInt(Settings::kUiZoomPercent, 100), 60, 200) / 100.f;
     Theme::loadFonts(io, contentScale_ * uiZoom_, fullCjkFonts_);
     Theme::apply();
+    Theme::load(early);
     Theme::scaleStyle(contentScale_ * uiZoom_);
     ImGui_ImplGlfw_InitForOpenGL(window_, true);
     ImGui_ImplOpenGL3_Init("#version 130");
@@ -224,7 +242,7 @@ void Application::loadSettings() {
                 shown = settings_.getBool(Settings::workspacePanelKey(p.name, title), shown);
     const std::string activeName = settings_.getString(Settings::kActiveWorkspace, "");
     for (size_t i = 0; i < perspectives_.size(); ++i)
-        if (perspectives_[i].name == activeName) activePerspective_ = (int)i;
+        if (perspectives_[i].name == activeName) activePerspective_ = static_cast<int>(i);
     if (newLayout) {
         resetAllLayouts_ = true;  // new panels: dock them into the default layouts once
         settings_.set(Settings::kLayoutVersion, kLayoutVersion);
@@ -253,16 +271,16 @@ void Application::restoreSession() {
 void Application::saveSettings() {
     for (const Perspective& p : perspectives_)
         for (const auto& [title, shown] : p.visible) settings_.set(Settings::workspacePanelKey(p.name, title), shown);
-    settings_.set(Settings::kActiveWorkspace, perspectives_[(size_t)activePerspective_].name);
+    settings_.set(Settings::kActiveWorkspace, perspectives_[static_cast<size_t>(activePerspective_)].name);
     settings_.set(Settings::kJadxPath, workspace_.jadxPath());
     settings_.set(Settings::kJadxArgs, workspace_.jadxArgs());
     settings_.set(Settings::kAdbPath, devices_.adbPath());
-    settings_.set(Settings::kUiZoomPercent, (int)std::lround(uiZoom_ * 100.f));
+    settings_.set(Settings::kUiZoomPercent, static_cast<int>(std::lround(uiZoom_ * 100.f)));
     if (mcpSettings_) mcpSettings_->storeSettings();
     settings_.set(Settings::kLastProject, project_.isOpen() ? project_.path() : "");
-    const int n = (int)std::min<size_t>(recents_.size(), 10);
+    const int n = static_cast<int>(std::min<size_t>(recents_.size(), 10));
     settings_.set(Settings::kRecentCount, n);
-    for (int i = 0; i < n; ++i) settings_.set(Settings::recentKey(i), recents_[(size_t)i]);
+    for (int i = 0; i < n; ++i) settings_.set(Settings::recentKey(i), recents_[static_cast<size_t>(i)]);
     settings_.save(pathutil::configFile("apkspy.settings"));
 }
 
@@ -432,8 +450,8 @@ void Application::frame() {
     if (ImGui::IsMouseClicked(4)) workspace_.navForward();
     debuggerPanel_->processShortcuts();  // F7/F8/F9/F12 while a debug session is attached
     if (io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
-        for (int i = 0; i < (int)perspectives_.size(); ++i)
-            if (ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_1 + i), false)) pendingPerspective_ = i;
+        for (int i = 0; i < static_cast<int>(perspectives_.size()); ++i)
+            if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_1 + i), false)) pendingPerspective_ = i;
     // Zoom: Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 and Ctrl+mouse wheel.
     if (io.KeyCtrl && !io.KeyAlt) {
         if (ImGui::IsKeyPressed(ImGuiKey_Equal) || ImGui::IsKeyPressed(ImGuiKey_KeypadAdd)) setZoom(zoomTarget() + 0.1f);
@@ -446,10 +464,10 @@ void Application::frame() {
     if (titleBar_) titleBar_->render();
     else drawMenuBar();
     // A file opened from a workspace without an editor needs one.
-    if (workspace_.hasFocusRequest() && pendingPerspective_ < 0 && !perspectives_[(size_t)activePerspective_].shows("Editor"))
+    if (workspace_.hasFocusRequest() && pendingPerspective_ < 0 && !perspectives_[static_cast<size_t>(activePerspective_)].shows("Editor"))
         showPanel("Editor");
     drawDockHost();
-    Perspective& perspective = perspectives_[(size_t)activePerspective_];
+    Perspective& perspective = perspectives_[static_cast<size_t>(activePerspective_)];
     for (auto& panel : panels_) {
         if (perspective.shows(panel->title())) panel->render(perspective.windowName(panel->title()));
     }
@@ -772,15 +790,15 @@ void Application::drawRecentProjects() {
 }
 
 void Application::drawViewMenu() {
-    for (int i = 0; i < (int)perspectives_.size(); ++i) {
-        const Perspective& p = perspectives_[(size_t)i];
+    for (int i = 0; i < static_cast<int>(perspectives_.size()); ++i) {
+        const Perspective& p = perspectives_[static_cast<size_t>(i)];
         const std::string shortcut = "Ctrl+" + std::to_string(i + 1);
         if (ImGui::MenuItem(p.name.c_str(), shortcut.c_str(), i == activePerspective_)) pendingPerspective_ = i;
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", p.description.c_str());
     }
     ImGui::Separator();
     if (ImGui::BeginMenu("Panels in this Workspace")) {
-        Perspective& perspective = perspectives_[(size_t)activePerspective_];
+        Perspective& perspective = perspectives_[static_cast<size_t>(activePerspective_)];
         for (auto& panel : panels_) ImGui::MenuItem(panel->title().c_str(), nullptr, &perspective.visible[panel->title()]);
         ImGui::EndMenu();
     }
@@ -789,7 +807,7 @@ void Application::drawViewMenu() {
     if (ImGui::MenuItem("Zoom In", "Ctrl+=")) setZoom(zoomTarget() + 0.1f);
     if (ImGui::MenuItem("Zoom Out", "Ctrl+-")) setZoom(zoomTarget() - 0.1f);
     char zoomLabel[48];
-    std::snprintf(zoomLabel, sizeof zoomLabel, "Reset Zoom (%d%%)", (int)std::lround(uiZoom_ * 100.f));
+    std::snprintf(zoomLabel, sizeof zoomLabel, "Reset Zoom (%d%%)", static_cast<int>(std::lround(uiZoom_ * 100.f)));
     if (ImGui::MenuItem(zoomLabel, "Ctrl+0")) setZoom(1.f);
 }
 
@@ -831,7 +849,7 @@ void Application::updateTitle() {
         dirtyCheckEpoch_ = project_.epoch();
         dirtyCheckResult_ = projectHasUnsavedChanges();
     }
-    const std::string& workspaceName = perspectives_[(size_t)activePerspective_].name;
+    const std::string& workspaceName = perspectives_[static_cast<size_t>(activePerspective_)].name;
     std::string title = workspaceName + " - ApkSpy";
     if (project_.isOpen()) {
         title = project_.name();
@@ -849,7 +867,7 @@ void Application::drawWindowBorder() {
     if (!titleBar_ || windowFrame_->maximized()) return;
     ImGuiViewport* vp = ImGui::GetMainViewport();
     ImVec2 max(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y);
-    ImGui::GetForegroundDrawList()->AddRect(vp->Pos, max, IM_COL32(63, 63, 70, 255));
+    ImGui::GetForegroundDrawList()->AddRect(vp->Pos, max, theme::u32(Col::Border));
 }
 
 void Application::drawDockHost() {
@@ -882,7 +900,7 @@ void Application::drawDockHost() {
         switchPerspective(pendingPerspective_);
         pendingPerspective_ = -1;
     }
-    Perspective& active = perspectives_[(size_t)activePerspective_];
+    Perspective& active = perspectives_[static_cast<size_t>(activePerspective_)];
     const ImGuiID dockId = ImGui::GetID(active.dockName().c_str());
     if (resetLayout_) {
         std::vector<std::string> titles;
@@ -923,13 +941,13 @@ bool Application::showPanel(const std::string& title) {
     if (!known) return false;
     const int current = pendingPerspective_ >= 0 ? pendingPerspective_ : activePerspective_;
     int target = current;
-    if (!perspectives_[(size_t)current].shows(title)) {
+    if (!perspectives_[static_cast<size_t>(current)].shows(title)) {
         target = -1;
-        for (int i = 0; i < (int)perspectives_.size() && target < 0; ++i)
-            if (perspectives_[(size_t)i].shows(title)) target = i;
+        for (int i = 0; i < static_cast<int>(perspectives_.size()) && target < 0; ++i)
+            if (perspectives_[static_cast<size_t>(i)].shows(title)) target = i;
         if (target < 0) {  // closed everywhere: bring it back here
             target = current;
-            perspectives_[(size_t)target].visible[title] = true;
+            perspectives_[static_cast<size_t>(target)].visible[title] = true;
         }
     }
     if (target != activePerspective_) pendingPerspective_ = target;
@@ -941,9 +959,9 @@ void Application::switchPerspective(int index) {
     if (index == activePerspective_) return;
     activePerspective_ = index;
     // Otherwise ImGui focuses whichever window comes next, which also flips its dock tab.
-    if (pendingFocusPanel_.empty()) pendingFocusPanel_ = perspectives_[(size_t)index].mainPanel;
+    if (pendingFocusPanel_.empty()) pendingFocusPanel_ = perspectives_[static_cast<size_t>(index)].mainPanel;
     // Each workspace has its own editor tab bar: keep it on the current file.
-    if (perspectives_[(size_t)index].shows("Editor") && !workspace_.hasFocusRequest())
+    if (perspectives_[static_cast<size_t>(index)].shows("Editor") && !workspace_.hasFocusRequest())
         workspace_.requestFocus(workspace_.activeDocument());
 }
 
@@ -955,7 +973,7 @@ void Application::drawStatusBar() {
     const float width = ImGui::GetContentRegionAvail().x;
     const float pad = ImGui::GetFontSize() * 0.6f;
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(origin, ImVec2(origin.x + width, origin.y + height), ImGui::GetColorU32(ImGuiCol_MenuBarBg));
+    dl->AddRectFilled(origin, ImVec2(origin.x + width, origin.y + height), theme::u32(Col::StatusBar));
 
     std::string activity;
     const JadxRunner& jadx = workspace_.jadx();
@@ -978,31 +996,31 @@ void Application::drawStatusBar() {
     const float activityW = ImGui::CalcTextSize(activity.c_str()).x;
     const float textY = origin.y + (height - ImGui::GetTextLineHeight()) * 0.5f;
     if (!activity.empty())
-        dl->AddText(ImVec2(origin.x + width - activityW - pad, textY), IM_COL32(120, 180, 240, 255), activity.c_str());
+        dl->AddText(ImVec2(origin.x + width - activityW - pad, textY), theme::u32(Col::Info), activity.c_str());
 
     // Workspace switcher, bottom left: the current workspace, click for the others.
     ImGui::SetCursorScreenPos(origin);
-    const std::string current = ui::icon(Perspective::workspaceIcon(perspectives_[(size_t)activePerspective_].name),
-                                         perspectives_[(size_t)activePerspective_].name.c_str());
+    const std::string current = ui::icon(Perspective::workspaceIcon(perspectives_[static_cast<size_t>(activePerspective_)].name),
+                                         perspectives_[static_cast<size_t>(activePerspective_)].name.c_str());
     const float arrow = ImGui::GetFontSize() * 0.32f;  // drawn: the UI font has no triangle glyphs
     const float switchW = ImGui::CalcTextSize(current.c_str()).x + arrow * 2.f + pad * 3.f;
     const bool switchClicked = ImGui::InvisibleButton("##workspace", ImVec2(switchW, height));
     const bool switchHovered = ImGui::IsItemHovered();
     const bool switchOpen = ImGui::IsPopupOpen("##workspaces");
     dl->AddRectFilled(origin, ImVec2(origin.x + switchW, origin.y + height),
-                      switchHovered || switchOpen ? IM_COL32(28, 151, 234, 255) : IM_COL32(0, 122, 204, 255));
-    dl->AddText(ImVec2(origin.x + pad, textY), IM_COL32(255, 255, 255, 255), current.c_str());
+                      switchHovered || switchOpen ? theme::blend(Col::Accent, Col::TextOnAccent, 0.15f) : theme::u32(Col::Accent));
+    dl->AddText(ImVec2(origin.x + pad, textY), theme::u32(Col::TextOnAccent), current.c_str());
     {
         const float cx = origin.x + switchW - pad - arrow, cy = origin.y + height * 0.5f;
         dl->AddTriangleFilled(ImVec2(cx - arrow, cy + arrow * 0.5f), ImVec2(cx + arrow, cy + arrow * 0.5f),
-                              ImVec2(cx, cy - arrow * 0.6f), IM_COL32(255, 255, 255, 255));
+                              ImVec2(cx, cy - arrow * 0.6f), theme::u32(Col::TextOnAccent));
     }
-    if (switchHovered && !switchOpen) ImGui::SetTooltip("Switch workspace (Ctrl+1 to Ctrl+%d)", (int)perspectives_.size());
+    if (switchHovered && !switchOpen) ImGui::SetTooltip("Switch workspace (Ctrl+1 to Ctrl+%d)", static_cast<int>(perspectives_.size()));
     if (switchClicked) ImGui::OpenPopup("##workspaces");
     ImGui::SetNextWindowPos(origin, ImGuiCond_Appearing, ImVec2(0.f, 1.f));  // opens upward
     if (ImGui::BeginPopup("##workspaces")) {
-        for (int i = 0; i < (int)perspectives_.size(); ++i) {
-            const Perspective& p = perspectives_[(size_t)i];
+        for (int i = 0; i < static_cast<int>(perspectives_.size()); ++i) {
+            const Perspective& p = perspectives_[static_cast<size_t>(i)];
             const std::string shortcut = "Ctrl+" + std::to_string(i + 1);
             if (ImGui::MenuItem(ui::icon(Perspective::workspaceIcon(p.name), p.name.c_str()).c_str(), shortcut.c_str(), i == activePerspective_))
                 pendingPerspective_ = i;
@@ -1019,15 +1037,15 @@ void Application::drawStatusBar() {
     const auto& lines = workspace_.logLines();
     if (!lines.empty()) {
         const LogSeverity severity = logsev::classify(lines.back());
-        const ImU32 color = severity == LogSeverity::Error  ? IM_COL32(240, 120, 120, 255)
-                            : severity == LogSeverity::Warn ? IM_COL32(235, 190, 110, 255)
-                                                                    : ImGui::GetColorU32(ImGuiCol_TextDisabled);
+        const ImU32 color = severity == LogSeverity::Error  ? theme::u32(Col::Error)
+                            : severity == LogSeverity::Warn ? theme::u32(Col::Warning)
+                                                            : theme::u32(Col::StatusBarText);
         dl->PushClipRect(logOrigin, ImVec2(logOrigin.x + logWidth, origin.y + height), true);
         dl->AddText(ImVec2(logOrigin.x + pad, textY), color, lines.back().c_str());
         dl->PopClipRect();
     }
     if (clicked) {
-        Perspective& p = perspectives_[(size_t)activePerspective_];
+        Perspective& p = perspectives_[static_cast<size_t>(activePerspective_)];
         ImGuiWindow* output = ImGui::FindWindowByName(p.windowName("Output").c_str());
         if (p.shows("Output") && output && GImGui->NavWindow == output) {
             p.visible["Output"] = false;
@@ -1101,7 +1119,6 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
 // ---------------------------------------------------------------------------
 
 std::string Application::projectFolder() const {
-    namespace fs = std::filesystem;
     if (project_.isOpen() && !project_.path().empty())
         return pathutil::toUtf8(pathutil::fromUtf8(project_.path()).parent_path());
     for (Root* r : workspace_.apkRoots())
@@ -1110,7 +1127,7 @@ std::string Application::projectFolder() const {
 }
 
 void Application::toggleTerminal() {
-    Perspective& p = perspectives_[(size_t)activePerspective_];
+    Perspective& p = perspectives_[static_cast<size_t>(activePerspective_)];
     ImGuiWindow* window = ImGui::FindWindowByName(p.windowName("Terminal").c_str());
     // Focused terminal: hide it (as Ctrl+` does in VS Code); otherwise show and focus it.
     const bool focused = window && GImGui->NavWindow && GImGui->NavWindow->RootWindow == window;
@@ -1127,8 +1144,8 @@ std::vector<CommandPalette::Command> Application::paletteCommands() {
     const auto add = [&](std::string name, std::string keys, const char* icon, std::function<void()> run) {
         c.push_back({std::move(name), std::move(keys), icon, std::move(run)});
     };
-    for (int i = 0; i < (int)perspectives_.size(); ++i)
-        add("Workspace: " + perspectives_[(size_t)i].name, "Ctrl+" + std::to_string(i + 1), Perspective::workspaceIcon(perspectives_[(size_t)i].name),
+    for (int i = 0; i < static_cast<int>(perspectives_.size()); ++i)
+        add("Workspace: " + perspectives_[static_cast<size_t>(i)].name, "Ctrl+" + std::to_string(i + 1), Perspective::workspaceIcon(perspectives_[static_cast<size_t>(i)].name),
             [this, i] { pendingPerspective_ = i; });
     add("Go to File...", "Ctrl+P", icons::FILE, [this] { palette_->open(""); });
     add("Go to Class...", "", icons::CODE, [this] { palette_->open("@"); });
@@ -1179,18 +1196,18 @@ void Application::drawWelcome() {
         }
         return clicked;
     };
-    ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.95f, 1.f), "Start");
+    ImGui::TextColored(theme::vec(Col::Info), "Start");
     if (link(icons::PACKAGE, "Open an APK...", nullptr)) addApkRequested_ = true;
     if (link(icons::FOLDER_OPEN, "Open Project...", "Ctrl+O")) requestAction(PendingAction::OpenProject);
     if (link(icons::ADD, "New Project", nullptr)) requestAction(PendingAction::NewProject);
     ImGui::Dummy(ImVec2(0, ui::em(0.8f)));
 
     if (!recents_.empty()) {
-        ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.95f, 1.f), "Recent");
+        ImGui::TextColored(theme::vec(Col::Info), "Recent");
         for (size_t i = 0; i < recents_.size() && i < 6; ++i) {
             const std::string& path = recents_[i];
             const std::string name = pathutil::toUtf8(pathutil::fromUtf8(path).stem());
-            ImGui::PushID((int)i);
+            ImGui::PushID(static_cast<int>(i));
             if (ImGui::Selectable(ui::icon(icons::HISTORY, name.c_str()).c_str(), false, ImGuiSelectableFlags_None, ImVec2(ui::em(16.f), 0)))
                 requestAction(PendingAction::OpenProject, path);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", path.c_str());
@@ -1199,7 +1216,7 @@ void Application::drawWelcome() {
         ImGui::Dummy(ImVec2(0, ui::em(0.8f)));
     }
 
-    ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.95f, 1.f), "Get around");
+    ImGui::TextColored(theme::vec(Col::Info), "Get around");
     if (link(icons::FILE, "Go to file", "Ctrl+P")) palette_->open("");
     if (link(icons::SEARCH, "Run a command", "Ctrl+Shift+P")) palette_->open(">");
     if (link(icons::TERMINAL, "Terminal", "Ctrl+`")) toggleTerminal();

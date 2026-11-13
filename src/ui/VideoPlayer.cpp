@@ -56,7 +56,7 @@ bool startMediaFoundation() {
 
 // A source reader over the file bytes, with only one stream selected.
 IMFSourceReader* makeReader(const std::vector<uint8_t>& data, DWORD stream, bool videoProcessing) {
-    IStream* mem = SHCreateMemStream(data.data(), (UINT)data.size());
+    IStream* mem = SHCreateMemStream(data.data(), static_cast<UINT>(data.size()));
     if (!mem) return nullptr;
     IMFByteStream* bytes = nullptr;
     HRESULT hr = MFCreateMFByteStreamOnStream(mem, &bytes);
@@ -80,7 +80,7 @@ IMFSourceReader* makeReader(const std::vector<uint8_t>& data, DWORD stream, bool
     if (attrs) attrs->Release();
     bytes->Release();
     if (FAILED(hr)) return nullptr;
-    reader->SetStreamSelection((DWORD)MF_SOURCE_READER_ALL_STREAMS, FALSE);
+    reader->SetStreamSelection(static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS), FALSE);
     if (FAILED(reader->SetStreamSelection(stream, TRUE))) {
         reader->Release();
         return nullptr;
@@ -92,7 +92,7 @@ void seekReader(IMFSourceReader* reader, double seconds) {
     PROPVARIANT pos;
     PropVariantInit(&pos);
     pos.vt = VT_I8;
-    pos.hVal.QuadPart = (LONGLONG)(seconds * 1e7);
+    pos.hVal.QuadPart = static_cast<LONGLONG>(seconds * 1e7);
     reader->SetCurrentPosition(GUID_NULL, pos);
     PropVariantClear(&pos);
 }
@@ -145,13 +145,13 @@ struct VideoPlayer::Impl {
     static void audioCallback(ma_device* dev, void* out, const void*, ma_uint32 frameCount) {
         auto* self = static_cast<Impl*>(dev->pUserData);
         float* dst = static_cast<float*>(out);
-        const size_t want = (size_t)frameCount * (size_t)self->channels;
+        const size_t want = static_cast<size_t>(frameCount) * static_cast<size_t>(self->channels);
         size_t got = 0;
         if (self->playing.load()) {
             std::lock_guard<std::mutex> lock(self->audioMutex);
             got = std::min(want, self->samples.size());
-            std::copy(self->samples.begin(), self->samples.begin() + (ptrdiff_t)got, dst);
-            self->samples.erase(self->samples.begin(), self->samples.begin() + (ptrdiff_t)got);
+            std::copy(self->samples.begin(), self->samples.begin() + static_cast<ptrdiff_t>(got), dst);
+            self->samples.erase(self->samples.begin(), self->samples.begin() + static_cast<ptrdiff_t>(got));
         }
         std::fill(dst + got, dst + want, 0.f);
         self->audioCv.notify_one();
@@ -159,13 +159,13 @@ struct VideoPlayer::Impl {
 
     void videoLoop(std::promise<void> ready) {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        IMFSourceReader* reader = makeReader(data, (DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, true);
+        IMFSourceReader* reader = makeReader(data, static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), true);
         LONG stride = 0;
         if (reader) {
             // The file's own size, scaled to fit kMaxSide (a 4K frame is 33 MB as RGBA).
             UINT32 nativeW = 0, nativeH = 0;
             IMFMediaType* native = nullptr;
-            if (SUCCEEDED(reader->GetNativeMediaType((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &native))) {
+            if (SUCCEEDED(reader->GetNativeMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0, &native))) {
                 MFGetAttributeSize(native, MF_MT_FRAME_SIZE, &nativeW, &nativeH);
                 native->Release();
             }
@@ -175,23 +175,23 @@ struct VideoPlayer::Impl {
             type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
             bool typeOk = false;
             if (nativeW > kMaxSide || nativeH > kMaxSide) {
-                const double scale = (double)kMaxSide / (double)std::max(nativeW, nativeH);
-                const UINT32 w = std::max<UINT32>(2, (UINT32)(nativeW * scale) & ~1u);
-                const UINT32 h = std::max<UINT32>(2, (UINT32)(nativeH * scale) & ~1u);
+                const double scale = static_cast<double>(kMaxSide) / static_cast<double>(std::max(nativeW, nativeH));
+                const UINT32 w = std::max<UINT32>(2, static_cast<UINT32>(nativeW * scale) & ~1u);
+                const UINT32 h = std::max<UINT32>(2, static_cast<UINT32>(nativeH * scale) & ~1u);
                 MFSetAttributeSize(type, MF_MT_FRAME_SIZE, w, h);
-                typeOk = SUCCEEDED(reader->SetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, type));
+                typeOk = SUCCEEDED(reader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), nullptr, type));
                 if (!typeOk) type->DeleteItem(MF_MT_FRAME_SIZE);  // full size, then
             }
-            if (!typeOk) typeOk = SUCCEEDED(reader->SetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, type));
+            if (!typeOk) typeOk = SUCCEEDED(reader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), nullptr, type));
             if (typeOk) {
                 IMFMediaType* current = nullptr;
-                if (SUCCEEDED(reader->GetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, &current))) {
+                if (SUCCEEDED(reader->GetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), &current))) {
                     UINT32 w = 0, h = 0;
                     MFGetAttributeSize(current, MF_MT_FRAME_SIZE, &w, &h);
-                    width = (int)w;
-                    height = (int)h;
+                    width = static_cast<int>(w);
+                    height = static_cast<int>(h);
                     UINT32 s = 0;
-                    stride = SUCCEEDED(current->GetUINT32(MF_MT_DEFAULT_STRIDE, &s)) ? (LONG)(INT32)s : (LONG)w * 4;
+                    stride = SUCCEEDED(current->GetUINT32(MF_MT_DEFAULT_STRIDE, &s)) ? static_cast<LONG>(static_cast<INT32>(s)) : static_cast<LONG>(w) * 4;
                     current->Release();
                     video = width > 0 && height > 0;
                 }
@@ -199,8 +199,8 @@ struct VideoPlayer::Impl {
             type->Release();
             PROPVARIANT var;
             PropVariantInit(&var);
-            if (SUCCEEDED(reader->GetPresentationAttribute((DWORD)MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION, &var)))
-                duration = (double)var.uhVal.QuadPart / 1e7;
+            if (SUCCEEDED(reader->GetPresentationAttribute(static_cast<DWORD>(MF_SOURCE_READER_MEDIASOURCE), MF_PD_DURATION, &var)))
+                duration = static_cast<double>(var.uhVal.QuadPart) / 1e7;
             PropVariantClear(&var);
             if (!video) release(reader);
         }
@@ -223,7 +223,7 @@ struct VideoPlayer::Impl {
             DWORD flags = 0;
             LONGLONG ts = 0;
             IMFSample* sample = nullptr;
-            if (FAILED(reader->ReadSample((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, nullptr, &flags, &ts, &sample))) {
+            if (FAILED(reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0, nullptr, &flags, &ts, &sample))) {
                 std::lock_guard<std::mutex> lock(frameMutex);
                 videoEof = true;
                 continue;
@@ -239,14 +239,14 @@ struct VideoPlayer::Impl {
                 DWORD len = 0;
                 if (SUCCEEDED(buffer->Lock(&p, nullptr, &len))) {
                     Frame f;
-                    f.time = (double)ts / 1e7;
-                    f.rgba.resize((size_t)width * (size_t)height * 4);
+                    f.time = static_cast<double>(ts) / 1e7;
+                    f.rgba.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 4);
                     const LONG pitch = stride == 0 ? width * 4 : std::abs(stride);
                     for (int y = 0; y < height; ++y) {
                         const int srcRow = stride < 0 ? height - 1 - y : y;
-                        if ((size_t)(srcRow + 1) * (size_t)pitch > len) break;
-                        const BYTE* src = p + (size_t)srcRow * (size_t)pitch;
-                        uint8_t* dst = &f.rgba[(size_t)y * (size_t)width * 4];
+                        if (static_cast<size_t>(srcRow + 1) * static_cast<size_t>(pitch) > len) break;
+                        const BYTE* src = p + static_cast<size_t>(srcRow) * static_cast<size_t>(pitch);
+                        uint8_t* dst = &f.rgba[static_cast<size_t>(y) * static_cast<size_t>(width) * 4];
                         for (int x = 0; x < width; ++x) {  // BGRX -> RGBA
                             dst[x * 4 + 0] = src[x * 4 + 2];
                             dst[x * 4 + 1] = src[x * 4 + 1];
@@ -268,17 +268,17 @@ struct VideoPlayer::Impl {
 
     void audioLoop(std::promise<void> ready) {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        IMFSourceReader* reader = makeReader(data, (DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, false);
+        IMFSourceReader* reader = makeReader(data, static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), false);
         if (reader) {
             IMFMediaType* type = nullptr;
             MFCreateMediaType(&type);
             type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
             type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_Float);
-            if (SUCCEEDED(reader->SetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, nullptr, type))) {
+            if (SUCCEEDED(reader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), nullptr, type))) {
                 IMFMediaType* current = nullptr;
-                if (SUCCEEDED(reader->GetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, &current))) {
-                    channels = (int)MFGetAttributeUINT32(current, MF_MT_AUDIO_NUM_CHANNELS, 0);
-                    sampleRate = (int)MFGetAttributeUINT32(current, MF_MT_AUDIO_SAMPLES_PER_SECOND, 0);
+                if (SUCCEEDED(reader->GetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), &current))) {
+                    channels = static_cast<int>(MFGetAttributeUINT32(current, MF_MT_AUDIO_NUM_CHANNELS, 0));
+                    sampleRate = static_cast<int>(MFGetAttributeUINT32(current, MF_MT_AUDIO_SAMPLES_PER_SECOND, 0));
                     current->Release();
                     audio = channels > 0 && sampleRate > 0;
                 }
@@ -287,8 +287,8 @@ struct VideoPlayer::Impl {
             if (duration <= 0.0) {
                 PROPVARIANT var;
                 PropVariantInit(&var);
-                if (SUCCEEDED(reader->GetPresentationAttribute((DWORD)MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION, &var)))
-                    duration = (double)var.uhVal.QuadPart / 1e7;
+                if (SUCCEEDED(reader->GetPresentationAttribute(static_cast<DWORD>(MF_SOURCE_READER_MEDIASOURCE), MF_PD_DURATION, &var)))
+                    duration = static_cast<double>(var.uhVal.QuadPart) / 1e7;
                 PropVariantClear(&var);
             }
             if (!audio) release(reader);
@@ -305,7 +305,7 @@ struct VideoPlayer::Impl {
             }
             {
                 std::unique_lock<std::mutex> lock(audioMutex);
-                if (eof || samples.size() >= (size_t)(kAudioBufferSeconds * sampleRate * channels)) {
+                if (eof || samples.size() >= static_cast<size_t>(kAudioBufferSeconds * sampleRate * channels)) {
                     audioCv.wait_for(lock, std::chrono::milliseconds(10));
                     continue;
                 }
@@ -313,7 +313,7 @@ struct VideoPlayer::Impl {
             DWORD flags = 0;
             LONGLONG ts = 0;
             IMFSample* sample = nullptr;
-            if (FAILED(reader->ReadSample((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, nullptr, &flags, &ts, &sample))) {
+            if (FAILED(reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), 0, nullptr, &flags, &ts, &sample))) {
                 eof = true;
                 continue;
             }
@@ -372,8 +372,8 @@ bool VideoPlayer::open(const std::vector<uint8_t>& bytes, std::string& error) {
     if (d.audio) {
         ma_device_config dc = ma_device_config_init(ma_device_type_playback);
         dc.playback.format = ma_format_f32;
-        dc.playback.channels = (ma_uint32)d.channels;
-        dc.sampleRate = (ma_uint32)d.sampleRate;
+        dc.playback.channels = static_cast<ma_uint32>(d.channels);
+        dc.sampleRate = static_cast<ma_uint32>(d.sampleRate);
         dc.dataCallback = &Impl::audioCallback;
         dc.pUserData = &d;
         d.deviceOk = ma_device_init(nullptr, &dc, &d.device) == MA_SUCCESS && ma_device_start(&d.device) == MA_SUCCESS;

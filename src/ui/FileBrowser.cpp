@@ -186,10 +186,10 @@ void FileBrowser::render() {
     std::string pendingDir;
     bool pendingAccept = false;
     ImGuiListClipper clipper;
-    clipper.Begin((int)entries_.size());
+    clipper.Begin(static_cast<int>(entries_.size()));
     while (clipper.Step()) {
         for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-            const Entry& e = entries_[(size_t)i];
+            const Entry& e = entries_[static_cast<size_t>(i)];
             ImGui::PushID(i);
             const bool folderMode = mode_ == Mode::SelectFolder;
             const bool selected = multi       ? selectedNames_.count(e.name) > 0
@@ -225,7 +225,7 @@ void FileBrowser::render() {
 
     // Name + buttons --------------------------------------------------------
     if (multi) {
-        ImGui::TextDisabled("%d file(s) selected", (int)selectedNames_.size());
+        ImGui::TextDisabled("%d file(s) selected", static_cast<int>(selectedNames_.size()));
     } else {
         ImGui::SetNextItemWidth(-buttonW * 2 - 12.f);
         ImGui::InputText("##name", nameBuffer_, sizeof nameBuffer_);

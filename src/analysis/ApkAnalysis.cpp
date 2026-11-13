@@ -57,17 +57,17 @@ std::vector<TryRange> parseTries(const DexFile& dex, const DexFile::CodeItem& co
     if (code.tries == 0) return out;
     const uint8_t* d = dex.data();
     const size_t size = dex.sizeBytes();
-    size_t pos = (size_t)code.offset + 16 + (size_t)code.insnsSize * 2;
+    size_t pos = static_cast<size_t>(code.offset) + 16 + static_cast<size_t>(code.insnsSize) * 2;
     if (code.insnsSize & 1) pos += 2;  // padding to 4 bytes
     const size_t triesAt = pos;
-    const size_t handlersAt = triesAt + (size_t)code.tries * 8;
+    const size_t handlersAt = triesAt + static_cast<size_t>(code.tries) * 8;
     if (handlersAt > size) return out;
     for (uint32_t t = 0; t < code.tries; ++t) {
-        const uint8_t* p = d + triesAt + (size_t)t * 8;
+        const uint8_t* p = d + triesAt + static_cast<size_t>(t) * 8;
         TryRange r;
-        r.start = (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
-        const uint32_t count = (uint32_t)(p[4] | p[5] << 8);
-        const uint32_t handlerOff = (uint32_t)(p[6] | p[7] << 8);
+        r.start = static_cast<uint32_t>(p[0]) | static_cast<uint32_t>(p[1]) << 8 | static_cast<uint32_t>(p[2]) << 16 | static_cast<uint32_t>(p[3]) << 24;
+        const uint32_t count = static_cast<uint32_t>(p[4] | p[5] << 8);
+        const uint32_t handlerOff = static_cast<uint32_t>(p[6] | p[7] << 8);
         r.end = r.start + count;
         size_t hp = handlersAt + handlerOff;
         int32_t n = 0;
@@ -94,7 +94,7 @@ double entropy(std::string_view s) {
     double h = 0;
     for (int c : counts)
         if (c) {
-            const double p = (double)c / (double)s.size();
+            const double p = static_cast<double>(c) / static_cast<double>(s.size());
             h -= p * std::log2(p);
         }
     return h;
@@ -114,9 +114,9 @@ std::shared_ptr<ApkAnalysis> ApkAnalysis::build(std::vector<std::shared_ptr<DexF
 
     DexFile::ClassData data;
     size_t done = 0;
-    for (uint16_t di = 0; di < (uint16_t)a->dexes_.size(); ++di) {
+    for (uint16_t di = 0; di < static_cast<uint16_t>(a->dexes_.size()); ++di) {
         const DexFile& dex = *a->dexes_[di];
-        for (uint32_t ci = 0; ci < (uint32_t)dex.classes().size(); ++ci) {
+        for (uint32_t ci = 0; ci < static_cast<uint32_t>(dex.classes().size()); ++ci) {
             if (stop.load()) return nullptr;
             a->classes_.push_back({di, ci});
             if (progressDone) *progressDone = ++done;
@@ -126,7 +126,7 @@ std::shared_ptr<ApkAnalysis> ApkAnalysis::build(std::vector<std::shared_ptr<DexF
                 DexFile::CodeItem code;
                 if (!m.codeOff || !dex.codeItem(m.codeOff, code)) continue;
                 ++a->stats_.methodsWithCode;
-                a->stats_.codeBytes += (size_t)code.insnsSize * 2;
+                a->stats_.codeBytes += static_cast<size_t>(code.insnsSize) * 2;
                 for (uint32_t pc = 0; pc < code.insnsSize;) {
                     const Insn in = dalvik::decode(code, pc);
                     pc += std::max<uint32_t>(in.size, 1);
@@ -280,7 +280,7 @@ std::vector<ApkAnalysis::XrefHit> ApkAnalysis::callersOf(std::string_view cls, s
                                                          std::string_view proto, size_t limit) const {
     std::vector<XrefHit> out;
     const std::string desc = toDescriptor(cls);
-    for (uint16_t di = 0; di < (uint16_t)dexes_.size(); ++di)
+    for (uint16_t di = 0; di < static_cast<uint16_t>(dexes_.size()); ++di)
         for (uint32_t m : dexes_[di]->findMethods(desc, name, proto)) collect(XrefKind::Call, di, m, limit, out);
     return out;
 }
@@ -289,7 +289,7 @@ std::vector<ApkAnalysis::XrefHit> ApkAnalysis::fieldAccesses(std::string_view cl
                                                              size_t limit) const {
     std::vector<XrefHit> out;
     const std::string desc = toDescriptor(cls);
-    for (uint16_t di = 0; di < (uint16_t)dexes_.size(); ++di)
+    for (uint16_t di = 0; di < static_cast<uint16_t>(dexes_.size()); ++di)
         for (uint32_t f : dexes_[di]->findFields(desc, name)) {
             collect(XrefKind::FieldRead, di, f, limit, out);
             collect(XrefKind::FieldWrite, di, f, limit, out);
@@ -299,7 +299,7 @@ std::vector<ApkAnalysis::XrefHit> ApkAnalysis::fieldAccesses(std::string_view cl
 
 std::vector<ApkAnalysis::XrefHit> ApkAnalysis::stringUses(std::string_view text, bool substring, size_t limit) const {
     std::vector<XrefHit> out;
-    for (uint16_t di = 0; di < (uint16_t)dexes_.size() && out.size() < limit; ++di) {
+    for (uint16_t di = 0; di < static_cast<uint16_t>(dexes_.size()) && out.size() < limit; ++di) {
         const DexFile& d = *dexes_[di];
         if (!substring) {
             const uint32_t idx = d.findString(text);
@@ -334,7 +334,7 @@ std::vector<std::string> ApkAnalysis::extractUrls(std::string_view s) {
         if (best == std::string_view::npos) break;
         size_t end = best + schemeLen;
         while (end < s.size()) {
-            const unsigned char c = (unsigned char)s[end];
+            const unsigned char c = static_cast<unsigned char>(s[end]);
             if (c <= ' ' || c == '"' || c == '\'' || c == '<' || c == '>' || c == '`' || c == ')' || c == ']' ||
                 c == '}' || c == '|' || c >= 0x7F)
                 break;
@@ -351,7 +351,7 @@ std::vector<std::string> ApkAnalysis::extractUrls(std::string_view s) {
 std::vector<ApkAnalysis::XrefHit> ApkAnalysis::typeUses(std::string_view cls, size_t limit) const {
     std::vector<XrefHit> out;
     const std::string desc = toDescriptor(cls);
-    for (uint16_t di = 0; di < (uint16_t)dexes_.size(); ++di) {
+    for (uint16_t di = 0; di < static_cast<uint16_t>(dexes_.size()); ++di) {
         const uint32_t t = dexes_[di]->findType(desc);
         if (t != DexFile::kNoIndex) collect(XrefKind::Type, di, t, limit, out);
     }
@@ -386,7 +386,7 @@ std::vector<ApkAnalysis::ConstArgCall> ApkAnalysis::constantArguments(const Meth
     for (uint32_t pc = 0; pc < code.insnsSize;) {
         const Insn in = dalvik::decode(code, pc);
         pc += std::max<uint32_t>(in.size, 1);
-        if (in.valid && !in.payload && in.hasBranch) joins.insert((uint32_t)((int64_t)in.pc + in.branch));
+        if (in.valid && !in.payload && in.hasBranch) joins.insert(static_cast<uint32_t>(static_cast<int64_t>(in.pc) + in.branch));
     }
     for (const TryRange& t : parseTries(dex, code))
         for (uint32_t h : t.handlers) joins.insert(h);
@@ -404,7 +404,7 @@ std::vector<ApkAnalysis::ConstArgCall> ApkAnalysis::constantArguments(const Meth
             for (uint32_t k = 0; k < n; ++k) {
                 const uint32_t reg = in.range ? in.regs[0] + k : in.regs[k];
                 auto it = known.find(reg);
-                if (it != known.end()) call.args.emplace_back((int)k, it->second);
+                if (it != known.end()) call.args.emplace_back(static_cast<int>(k), it->second);
             }
             if (!call.args.empty()) out.push_back(std::move(call));
             continue;
@@ -466,12 +466,12 @@ std::vector<ApkAnalysis::BasicBlock> ApkAnalysis::controlFlowGraph(const MethodD
         if (!in.valid) continue;
         const Flow flow = dalvik::opInfo(in.opcode).flow;
         if (in.hasBranch && flow != Flow::Normal) {  // fill-array-data's offset is not a branch
-            const int64_t t = (int64_t)in.pc + in.branch;
+            const int64_t t = static_cast<int64_t>(in.pc) + in.branch;
             if (flow == Flow::Switch) {
-                for (uint32_t st : dalvik::switchTargets(code, in.pc, (uint32_t)t))
+                for (uint32_t st : dalvik::switchTargets(code, in.pc, static_cast<uint32_t>(t)))
                     if (st < code.insnsSize) leaders.insert(st);
             } else if (t >= 0 && t < code.insnsSize) {
-                leaders.insert((uint32_t)t);
+                leaders.insert(static_cast<uint32_t>(t));
             }
         }
         if (flow == Flow::Goto || flow == Flow::Branch || flow == Flow::Switch || flow == Flow::Return ||
@@ -489,12 +489,12 @@ std::vector<ApkAnalysis::BasicBlock> ApkAnalysis::controlFlowGraph(const MethodD
         BasicBlock b;
         b.startPc = ordered[i];
         b.endPc = i + 1 < ordered.size() ? ordered[i + 1] : code.insnsSize;
-        blockAt[b.startPc] = (uint32_t)blocks.size();
+        blockAt[b.startPc] = static_cast<uint32_t>(blocks.size());
         blocks.push_back(b);
     }
     const auto blockOf = [&](uint32_t pc) -> int64_t {
         auto it = blockAt.find(pc);
-        return it == blockAt.end() ? -1 : (int64_t)it->second;
+        return it == blockAt.end() ? -1 : static_cast<int64_t>(it->second);
     };
     size_t ii = 0;
     for (BasicBlock& b : blocks) {
@@ -504,19 +504,19 @@ std::vector<ApkAnalysis::BasicBlock> ApkAnalysis::controlFlowGraph(const MethodD
         const Flow flow = last->valid ? dalvik::opInfo(last->opcode).flow : Flow::Normal;
         const uint32_t next = last->pc + std::max<uint32_t>(last->size, 1);
         const auto add = [&](int64_t blk) {
-            if (blk >= 0 && std::find(b.successors.begin(), b.successors.end(), (uint32_t)blk) == b.successors.end())
-                b.successors.push_back((uint32_t)blk);
+            if (blk >= 0 && std::find(b.successors.begin(), b.successors.end(), static_cast<uint32_t>(blk)) == b.successors.end())
+                b.successors.push_back(static_cast<uint32_t>(blk));
         };
         if (flow == Flow::Return || flow == Flow::Throw) {
             b.exit = true;
         } else if (flow == Flow::Goto) {
-            add(blockOf((uint32_t)((int64_t)last->pc + last->branch)));
+            add(blockOf(static_cast<uint32_t>(static_cast<int64_t>(last->pc) + last->branch)));
         } else if (flow == Flow::Branch) {
-            add(blockOf((uint32_t)((int64_t)last->pc + last->branch)));
+            add(blockOf(static_cast<uint32_t>(static_cast<int64_t>(last->pc) + last->branch)));
             add(blockOf(next));
         } else if (flow == Flow::Switch) {
             add(blockOf(next));
-            for (uint32_t st : dalvik::switchTargets(code, last->pc, (uint32_t)((int64_t)last->pc + last->branch)))
+            for (uint32_t st : dalvik::switchTargets(code, last->pc, static_cast<uint32_t>(static_cast<int64_t>(last->pc) + last->branch)))
                 add(blockOf(st));
         } else {
             add(blockOf(next));
@@ -526,8 +526,8 @@ std::vector<ApkAnalysis::BasicBlock> ApkAnalysis::controlFlowGraph(const MethodD
                 for (uint32_t h : t.handlers) {
                     const int64_t hb = blockOf(h);
                     if (hb >= 0 &&
-                        std::find(b.exceptional.begin(), b.exceptional.end(), (uint32_t)hb) == b.exceptional.end())
-                        b.exceptional.push_back((uint32_t)hb);
+                        std::find(b.exceptional.begin(), b.exceptional.end(), static_cast<uint32_t>(hb)) == b.exceptional.end())
+                        b.exceptional.push_back(static_cast<uint32_t>(hb));
                 }
         }
     }
@@ -564,7 +564,7 @@ std::string ApkAnalysis::cfgToDot(const MethodDef& m, const std::vector<BasicBlo
     for (size_t i = 0; i < blocks.size(); ++i) {
         out += "  b" + std::to_string(i) + " [label=\"";
         for (const auto& l : lines)
-            if (l.first >= (int32_t)blocks[i].startPc && l.first < (int32_t)blocks[i].endPc) out += esc(l.second) + "\\l";
+            if (l.first >= static_cast<int32_t>(blocks[i].startPc) && l.first < static_cast<int32_t>(blocks[i].endPc)) out += esc(l.second) + "\\l";
         out += "\"];\n";
     }
     for (size_t i = 0; i < blocks.size(); ++i) {
@@ -658,14 +658,14 @@ ApkAnalysis::StringCategory ApkAnalysis::classify(std::string_view s) {
         const size_t at = s.find('@');
         if (at != std::string_view::npos && at > 0 && s.find(' ') == std::string_view::npos &&
             s.find('.', at) != std::string_view::npos && s.find('@', at + 1) == std::string_view::npos &&
-            s.back() != '.' && std::isalpha((unsigned char)s.back()))
+            s.back() != '.' && std::isalpha(static_cast<unsigned char>(s.back())))
             return StringCategory::Email;
     }
     // API-like paths: "/api/v1/users", "/v2/login?x=1".
     if (s.front() == '/' && s.size() >= 4 && std::count(s.begin(), s.end(), '/') >= 2 && s.find(';') == std::string_view::npos) {
         bool clean = true;
         for (char c : s)
-            if (!(std::isalnum((unsigned char)c) || std::string_view("/_-.{}:?=&%").find(c) != std::string_view::npos)) {
+            if (!(std::isalnum(static_cast<unsigned char>(c)) || std::string_view("/_-.{}:?=&%").find(c) != std::string_view::npos)) {
                 clean = false;
                 break;
             }
@@ -675,7 +675,7 @@ ApkAnalysis::StringCategory ApkAnalysis::classify(std::string_view s) {
     if (s.size() >= 32 && s.size() <= 256 && s.find(' ') == std::string_view::npos) {
         bool tokenChars = true;
         for (char c : s)
-            if (!(std::isalnum((unsigned char)c) || c == '+' || c == '/' || c == '=' || c == '_' || c == '-')) {
+            if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '+' || c == '/' || c == '=' || c == '_' || c == '-')) {
                 tokenChars = false;
                 break;
             }
@@ -701,7 +701,7 @@ std::vector<ApkAnalysis::StringHit> ApkAnalysis::strings(std::string_view needle
     std::vector<StringHit> out;
     std::unordered_set<std::string_view> seen;
     std::unordered_set<std::string> urlSeen;
-    for (uint16_t di = 0; di < (uint16_t)dexes_.size() && out.size() < limit; ++di) {
+    for (uint16_t di = 0; di < static_cast<uint16_t>(dexes_.size()) && out.size() < limit; ++di) {
         const DexFile& d = *dexes_[di];
         for (uint32_t i = 0; i < d.stringCount() && out.size() < limit; ++i) {
             const std::string_view raw = d.stringView(i);

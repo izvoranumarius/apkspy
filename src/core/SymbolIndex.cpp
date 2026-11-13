@@ -18,10 +18,10 @@ bool isIdentPart(unsigned char c) { return std::isalnum(c) || c == '_' || c == '
 
 // Pulls the next identifier out of `text` starting at (and advancing) `pos`.
 bool nextIdentifier(const std::string& text, size_t& pos, std::string& out) {
-    while (pos < text.size() && !isIdentStart((unsigned char)text[pos])) ++pos;
+    while (pos < text.size() && !isIdentStart(static_cast<unsigned char>(text[pos]))) ++pos;
     if (pos >= text.size()) return false;
     size_t start = pos;
-    while (pos < text.size() && isIdentPart((unsigned char)text[pos])) ++pos;
+    while (pos < text.size() && isIdentPart(static_cast<unsigned char>(text[pos]))) ++pos;
     out.assign(text, start, pos - start);
     return true;
 }
@@ -30,13 +30,13 @@ bool nextIdentifier(const std::string& text, size_t& pos, std::string& out) {
 // navigation: the value is only used to build fully qualified keys.
 std::string packageOf(const std::string& text) {
     size_t pk = text.find("package");
-    while (pk != std::string::npos && pk > 0 && isIdentPart((unsigned char)text[pk - 1]))
+    while (pk != std::string::npos && pk > 0 && isIdentPart(static_cast<unsigned char>(text[pk - 1])))
         pk = text.find("package", pk + 1);
     if (pk == std::string::npos) return {};
     size_t q = pk + 7;
     while (q < text.size() && (text[q] == ' ' || text[q] == '\t' || text[q] == '\r' || text[q] == '\n')) ++q;
     std::string qualified;
-    while (q < text.size() && (isIdentPart((unsigned char)text[q]) || text[q] == '.'))
+    while (q < text.size() && (isIdentPart(static_cast<unsigned char>(text[q])) || text[q] == '.'))
         qualified += text[q++];
     const size_t end = qualified.find_last_not_of('.');
     return end == std::string::npos ? std::string() : qualified.substr(0, end + 1);
@@ -98,18 +98,18 @@ std::shared_ptr<const SymbolIndex::Table> SymbolIndex::buildTable(const Request&
         if (stop.load()) break;
         // Bound the read: class declarations live at the top of a file.
         std::error_code ec;
-        uint64_t size = (uint64_t)fs::file_size(pathutil::fromUtf8(f.path), ec);
+        uint64_t size = static_cast<uint64_t>(fs::file_size(pathutil::fromUtf8(f.path), ec));
         if (ec || size == 0) continue;
         std::ifstream in(pathutil::fromUtf8(f.path), std::ios::binary);
         if (!in) continue;
-        size_t toRead = (size_t)std::min<uint64_t>(size, kMaxScanBytes);
+        size_t toRead = static_cast<size_t>(std::min<uint64_t>(size, kMaxScanBytes));
         text.resize(toRead);
-        in.read(text.data(), (std::streamsize)toRead);
-        text.resize((size_t)std::max<size_t>(0, (size_t)in.gcount()));
+        in.read(text.data(), static_cast<std::streamsize>(toRead));
+        text.resize(static_cast<size_t>(std::max<size_t>(0, static_cast<size_t>(in.gcount()))));
         if (text.empty()) continue;
 
         const std::string pkg = packageOf(text);
-        const uint32_t pathIndex = (uint32_t)table->paths.size();
+        const uint32_t pathIndex = static_cast<uint32_t>(table->paths.size());
         table->paths.push_back(f.path);
 
         // File stems: Foo.java registers "Foo"; Foo$Bar.java registers both

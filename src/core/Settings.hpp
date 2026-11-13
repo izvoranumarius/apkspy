@@ -23,6 +23,7 @@ public:
     void set(const std::string& key, int value);
     void set(const std::string& key, bool value);
 
+    void remove(const std::string& key) { map_.erase(key); }
     void clear() { map_.clear(); }
 
     // Well-known keys (kept here so call sites stay typo-free).

@@ -16,20 +16,20 @@ void OverviewPanel::drawContents() {
             if (r->apkPath == it->first) alive = true;
         it = alive ? std::next(it) : cache_.erase(it);
     }
-    if (apkIdx_ >= (int)apks.size()) apkIdx_ = 0;
+    if (apkIdx_ >= static_cast<int>(apks.size())) apkIdx_ = 0;
 
-    Root* apk = apks[(size_t)apkIdx_];
+    Root* apk = apks[static_cast<size_t>(apkIdx_)];
     if (apks.size() > 1) {
         ImGui::Text("APK:");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(220.f);
         if (ImGui::BeginCombo("##apk", apk->title.c_str())) {
-            for (int i = 0; i < (int)apks.size(); ++i)
-                if (ImGui::Selectable(apks[(size_t)i]->title.c_str(), i == apkIdx_)) apkIdx_ = i;
+            for (int i = 0; i < static_cast<int>(apks.size()); ++i)
+                if (ImGui::Selectable(apks[static_cast<size_t>(i)]->title.c_str(), i == apkIdx_)) apkIdx_ = i;
             ImGui::EndCombo();
         }
         ImGui::Separator();
-        apk = apks[(size_t)apkIdx_];
+        apk = apks[static_cast<size_t>(apkIdx_)];
     }
 
     auto it = cache_.find(apk->apkPath);
@@ -42,7 +42,7 @@ void OverviewPanel::drawContents() {
 
 void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
     if (!info.ok) {
-        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.3f, 1.f), "Could not read the manifest of %s", apk.title.c_str());
+        ImGui::TextColored(theme::vec(Col::Warning), "Could not read the manifest of %s", apk.title.c_str());
         ImGui::TextDisabled("The Overview panel needs a readable (binary) AndroidManifest.xml.");
         return;
     }
@@ -62,11 +62,11 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
     ImGui::PopTextWrapPos();
     if (info.debuggable || info.allowBackup) {
         if (info.debuggable) {
-            ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1.f), "debuggable");
+            ImGui::TextColored(theme::vec(Col::Warning), "debuggable");
             ImGui::SameLine();
         }
         if (info.allowBackup) {
-            ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1.f), "allowBackup");
+            ImGui::TextColored(theme::vec(Col::Warning), "allowBackup");
             ImGui::SameLine();
         }
         ImGui::NewLine();
@@ -75,7 +75,7 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
 
     // Permissions ----------------------------------------------------------
     char header[128];
-    std::snprintf(header, sizeof header, "Permissions (%d)", (int)info.permissions.size());
+    std::snprintf(header, sizeof header, "Permissions (%d)", static_cast<int>(info.permissions.size()));
     if (ImGui::CollapsingHeader(header)) {
         if (info.permissions.empty()) ImGui::TextDisabled("None declared");
         // Runtime ("dangerous") permissions are highlighted: they are what a
@@ -95,7 +95,7 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
                 if (p == std::string("android.permission.") + d) dangerous = true;
             ImGui::Bullet();
             ImGui::PushTextWrapPos(0.f);
-            if (dangerous) ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1.f), "%s", p.c_str());
+            if (dangerous) ImGui::TextColored(theme::vec(Col::Warning), "%s", p.c_str());
             else ImGui::TextUnformatted(p.c_str());
             ImGui::PopTextWrapPos();
             if (dangerous && ImGui::IsItemHovered()) ImGui::SetTooltip("Runtime (dangerous) permission");
@@ -103,7 +103,7 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
     }
 
     // Components -----------------------------------------------------------
-    std::snprintf(header, sizeof header, "Components (%d)", (int)info.components.size());
+    std::snprintf(header, sizeof header, "Components (%d)", static_cast<int>(info.components.size()));
     if (ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen)) {
         if (info.components.empty()) ImGui::TextDisabled("None declared");
         // Clicking a row jumps to the class in the decompiled sources (M3
@@ -117,10 +117,10 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
                 ImGui::PushID(i++);
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                const ImVec4 typeColor = c.type == "activity" || c.type == "activity-alias" ? ImVec4(0.55f, 0.75f, 0.95f, 1.f)
-                                         : c.type == "service"  ? ImVec4(0.6f, 0.85f, 0.6f, 1.f)
-                                         : c.type == "receiver" ? ImVec4(0.85f, 0.75f, 0.45f, 1.f)
-                                                                : ImVec4(0.8f, 0.6f, 0.9f, 1.f);
+                const ImVec4 typeColor = c.type == "activity" || c.type == "activity-alias" ? theme::vec(Col::Blue)
+                                         : c.type == "service"  ? theme::vec(Col::Green)
+                                         : c.type == "receiver" ? theme::vec(Col::Yellow)
+                                                                : theme::vec(Col::Purple);
                 ImGui::TextColored(typeColor, "%s", c.type == "activity-alias" ? "alias" : c.type.c_str());
                 ImGui::TableNextColumn();
                 // Short class name first (the part that tells components
@@ -140,7 +140,7 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
                 }
                 if (c.exported) {
                     ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1.f), "exported");
+                    ImGui::TextColored(theme::vec(Col::Warning), "exported");
                 }
                 if (dot != std::string::npos) {
                     ImGui::SameLine();
@@ -155,7 +155,7 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
     }
 
     // Signing --------------------------------------------------------------
-    std::snprintf(header, sizeof header, "Signing (%d)", (int)info.signatures.size());
+    std::snprintf(header, sizeof header, "Signing (%d)", static_cast<int>(info.signatures.size()));
     if (ImGui::CollapsingHeader(header)) {
         if (info.signatures.empty()) {
             ImGui::TextDisabled("No signatures found (unsigned or unsupported scheme)");

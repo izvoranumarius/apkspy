@@ -10,21 +10,21 @@
 
 namespace {
 
-const ImVec4 kDim(0.6f, 0.6f, 0.6f, 1.f);
-const ImVec4 kGood(0.45f, 0.8f, 0.45f, 1.f);
-const ImVec4 kWarn(0.95f, 0.65f, 0.35f, 1.f);
-const ImVec4 kError(0.95f, 0.45f, 0.4f, 1.f);
-const ImVec4 kAccent(0.55f, 0.75f, 0.95f, 1.f);
+ImVec4 kDim() { return theme::vec(Col::TextMuted); }
+ImVec4 kGood() { return theme::vec(Col::Success); }
+ImVec4 kWarn() { return theme::vec(Col::Warning); }
+ImVec4 kError() { return theme::vec(Col::Error); }
+ImVec4 kAccent() { return theme::vec(Col::Info); }
 
 ImVec4 levelColor(char level) {
     switch (level) {
-    case 'V': return ImVec4(0.6f, 0.6f, 0.6f, 1.f);
-    case 'D': return ImVec4(0.55f, 0.75f, 0.95f, 1.f);
-    case 'I': return ImVec4(0.8f, 0.8f, 0.8f, 1.f);
-    case 'W': return ImVec4(0.95f, 0.8f, 0.35f, 1.f);
-    case 'E': return ImVec4(0.95f, 0.45f, 0.4f, 1.f);
-    case 'F': return ImVec4(1.f, 0.3f, 0.6f, 1.f);
-    default: return ImVec4(0.8f, 0.8f, 0.8f, 1.f);
+    case 'V': return theme::vec(Col::TextMuted);
+    case 'D': return theme::vec(Col::Blue);
+    case 'I': return theme::vec(Col::Text);
+    case 'W': return theme::vec(Col::Warning);
+    case 'E': return theme::vec(Col::Error);
+    case 'F': return theme::vec(Col::Pink);
+    default: return theme::vec(Col::Text);
     }
 }
 
@@ -93,7 +93,7 @@ void DevicesPanel::drawContents() {
         firstRefresh_ = false;
         devices_.refreshDevices();
     }
-    if (!devices_.lastError().empty()) ui::wrappedColored(kWarn, devices_.lastError());
+    if (!devices_.lastError().empty()) ui::wrappedColored(kWarn(), devices_.lastError());
     const std::vector<adb::Device> devices = devices_.devices();
     const std::string selected = devices_.selected();
     if (devices.empty()) {
@@ -205,11 +205,11 @@ void DevicesPanel::drawContents() {
                 else devices_.startMonitor(selected, p.pid);
             }
             ImGui::TableNextColumn();
-            if (debuggable) ImGui::TextColored(kGood, "%s", p.name.c_str());
+            if (debuggable) ImGui::TextColored(kGood(), "%s", p.name.c_str());
             else ImGui::TextUnformatted(p.name.c_str());
             if (wide) {
                 ImGui::TableNextColumn();
-                ImGui::TextDisabled("%.1f MB", (double)p.rssKb / 1024.0);
+                ImGui::TextDisabled("%.1f MB", static_cast<double>(p.rssKb) / 1024.0);
             }
             ImGui::PopID();
         }
@@ -230,9 +230,9 @@ void DevicesPanel::drawMonitor() {
     std::vector<float> cpu, mem, threads;
     float maxMem = 1.f, maxThreads = 1.f;
     for (const auto& s : samples) {
-        cpu.push_back((float)s.cpuPercent);
-        mem.push_back((float)s.rssKb / 1024.f);
-        threads.push_back((float)s.threads);
+        cpu.push_back(static_cast<float>(s.cpuPercent));
+        mem.push_back(static_cast<float>(s.rssKb) / 1024.f);
+        threads.push_back(static_cast<float>(s.threads));
         maxMem = std::max(maxMem, mem.back());
         maxThreads = std::max(maxThreads, threads.back());
     }
@@ -243,13 +243,13 @@ void DevicesPanel::drawMonitor() {
     const float h = row ? ui::em(6.f) : ui::em(3.f);
     char overlay[64];
     std::snprintf(overlay, sizeof overlay, "CPU %.1f%%", cpu.back());
-    ImGui::PlotLines("##cpu", cpu.data(), (int)cpu.size(), 0, overlay, 0.f, 100.f, ImVec2(w, h));
+    ImGui::PlotLines("##cpu", cpu.data(), static_cast<int>(cpu.size()), 0, overlay, 0.f, 100.f, ImVec2(w, h));
     if (row) ImGui::SameLine();
     std::snprintf(overlay, sizeof overlay, "RSS %.1f MB", mem.back());
-    ImGui::PlotLines("##mem", mem.data(), (int)mem.size(), 0, overlay, 0.f, maxMem * 1.2f, ImVec2(w, h));
+    ImGui::PlotLines("##mem", mem.data(), static_cast<int>(mem.size()), 0, overlay, 0.f, maxMem * 1.2f, ImVec2(w, h));
     if (row) ImGui::SameLine();
     std::snprintf(overlay, sizeof overlay, "%d threads", samples.back().threads);
-    ImGui::PlotLines("##thr", threads.data(), (int)threads.size(), 0, overlay, 0.f, maxThreads * 1.2f, ImVec2(w, h));
+    ImGui::PlotLines("##thr", threads.data(), static_cast<int>(threads.size()), 0, overlay, 0.f, maxThreads * 1.2f, ImVec2(w, h));
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +265,7 @@ void DebuggerPanel::followFrame(const DebugSession::FrameRow& frame) {
         if (auto analysis = workspace_.analysis().get(r->title)) {
             const auto defs = analysis->findMethodDefs(cls, name, proto);
             if (!defs.empty()) {
-                workspace_.openMethodListing(r->title, *analysis, defs.front(), (uint32_t)frame.location.index);
+                workspace_.openMethodListing(r->title, *analysis, defs.front(), static_cast<uint32_t>(frame.location.index));
                 return;
             }
         }
@@ -313,10 +313,10 @@ void DebuggerPanel::drawContents() {
     // Status + toolbar (flows onto several rows in a narrow panel).
     const bool attached = s.state == DebugSession::State::Running || s.state == DebugSession::State::Suspended;
     const bool suspended = s.state == DebugSession::State::Suspended;
-    const ImVec4 stateCol = suspended ? kWarn
-                            : s.state == DebugSession::State::Running ? kGood
-                            : s.state == DebugSession::State::Failed  ? kError
-                                                                      : kDim;
+    const ImVec4 stateCol = suspended ? kWarn()
+                            : s.state == DebugSession::State::Running ? kGood()
+                            : s.state == DebugSession::State::Failed  ? kError()
+                                                                      : kDim();
     if (attached) {
         const auto keyTip = [](const char* text) {
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", text);
@@ -341,7 +341,7 @@ void DebuggerPanel::drawContents() {
     } else {
         ImGui::TextDisabled("Not attached. Double-click a green process in Devices.");
     }
-    if (!s.error.empty()) ui::wrappedColored(kError, s.error);
+    if (!s.error.empty()) ui::wrappedColored(kError(), s.error);
 
     // Threads, stack and locals in three columns with room to spare (the Debug
     // workspace), side by side when wide, stacked when narrow.
@@ -353,8 +353,8 @@ void DebuggerPanel::drawContents() {
         // Show the code a stop landed on. Runs from here, so the Debug workspace's
         // editor catches up on a stop that happened while another one was open.
         if (!suspended) followed_.clear();
-        if (suspended && s.selectedFrame >= 0 && s.selectedFrame < (int)s.frames.size()) {
-            const auto& frame = s.frames[(size_t)s.selectedFrame];
+        if (suspended && s.selectedFrame >= 0 && s.selectedFrame < static_cast<int>(s.frames.size())) {
+            const auto& frame = s.frames[static_cast<size_t>(s.selectedFrame)];
             const std::string key = frame.method + "@" + std::to_string(frame.location.index);
             if (key != followed_) {
                 followed_ = key;
@@ -364,13 +364,13 @@ void DebuggerPanel::drawContents() {
         const float upperH = wide ? -bottomH : std::max(ui::em(8.f), (ImGui::GetContentRegionAvail().y - bottomH) * 0.3f);
         ImGui::BeginChild("##dbgThreads", ImVec2(threeColumns ? availW * 0.30f : wide ? availW * 0.38f : 0.f, upperH),
                           ImGuiChildFlags_Borders);
-        ImGui::TextColored(kAccent, "Threads (%zu)", s.threads.size());
+        ImGui::TextColored(kAccent(), "Threads (%zu)", s.threads.size());
         if (ImGui::BeginTable("##thr", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable)) {
             ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, ui::em(4.f));
             ImGui::TableHeadersRow();
             for (const auto& t : s.threads) {
-                ImGui::PushID((int)(t.id & 0x7fffffff));
+                ImGui::PushID(static_cast<int>(t.id & 0x7fffffff));
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 if (ImGui::Selectable(t.name.c_str(), t.id == s.currentThread, ImGuiSelectableFlags_SpanAllColumns)) d.selectThread(t.id);
@@ -385,11 +385,11 @@ void DebuggerPanel::drawContents() {
         if (wide) ImGui::SameLine();
         ImGui::BeginChild("##dbgStack", ImVec2(threeColumns ? availW * 0.32f : 0.f, wide ? -bottomH : upperH * 2.f),
                           ImGuiChildFlags_Borders);
-        ImGui::TextColored(kAccent, "Call stack");
+        ImGui::TextColored(kAccent(), "Call stack");
         ImGui::BeginChild("##stack", ImVec2(0, threeColumns ? 0.f : ImGui::GetContentRegionAvail().y * 0.5f), ImGuiChildFlags_None,
                           ImGuiWindowFlags_HorizontalScrollbar);
-        for (int i = 0; i < (int)s.frames.size(); ++i) {
-            const auto& f = s.frames[(size_t)i];
+        for (int i = 0; i < static_cast<int>(s.frames.size()); ++i) {
+            const auto& f = s.frames[static_cast<size_t>(i)];
             const std::string name = shortMethod(f.method);
             char label[1024];
             if (f.line > 0) std::snprintf(label, sizeof label, "#%d  %s : %d", i, name.c_str(), f.line);
@@ -399,7 +399,7 @@ void DebuggerPanel::drawContents() {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s\n%s  bytecode @%llx", f.method.c_str(),
                                   f.line > 0 ? ("line " + std::to_string(f.line)).c_str() : "no line info",
-                                  (unsigned long long)f.location.index);
+                                  static_cast<unsigned long long>(f.location.index));
             if (ImGui::BeginPopupContextItem("##fr")) {
                 if (ImGui::MenuItem("Open decompiled source")) {
                     const std::string cls = javaClassOf(f.method);
@@ -428,10 +428,10 @@ void DebuggerPanel::drawContents() {
         } else {
             ImGui::Separator();
         }
-        ImGui::TextColored(kAccent, "Locals");
+        ImGui::TextColored(kAccent(), "Locals");
         if (!s.exception.empty()) {
             const std::string type = s.exceptionType.substr(s.exceptionType.find_last_of('.') + 1);
-            ui::wrappedColored(kWarn, type + " in " + shortMethod(s.exceptionAt) +
+            ui::wrappedColored(kWarn(), type + " in " + shortMethod(s.exceptionAt) +
                                           (s.exceptionCatch.empty() ? ", uncaught" : ", caught in " + shortMethod(s.exceptionCatch)));
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", s.exception.c_str());
         }
@@ -492,9 +492,9 @@ void DebuggerPanel::drawContents() {
     // Breakpoints + events.
     ImGui::BeginChild("##bps", ImVec2(wide ? ImGui::GetContentRegionAvail().x * 0.55f : 0.f, wide ? 0.f : bottomH),
                       ImGuiChildFlags_Borders);
-    ImGui::TextColored(kAccent, "Breakpoints");
+    ImGui::TextColored(kAccent(), "Breakpoints");
     ImGui::SameLine();
-    if (ImGui::SmallButton("Add...")) ImGui::OpenPopup("##addbp");
+    if (ui::smallButton("Add...")) ImGui::OpenPopup("##addbp");
     if (ImGui::BeginPopup("##addbp")) {
         ImGui::SetNextItemWidth(ui::em(20.f));
         ImGui::InputTextWithHint("##bpc", "Class, e.g. com.example.Foo", bpClass_, sizeof bpClass_);
@@ -526,19 +526,19 @@ void DebuggerPanel::drawContents() {
     }
     for (const auto& b : s.breakpoints) {
         ImGui::PushID(b.id);
-        if (ImGui::SmallButton("x")) d.removeBreakpoint(b.id);
+        if (ui::smallButton("x")) d.removeBreakpoint(b.id);
         ImGui::SameLine();
         const std::string where =
             b.exception ? "exception " + (b.classDescriptor.empty() ? std::string("(any)") : javaClassOf(b.classDescriptor + "->"))
                         : javaClassOf(b.classDescriptor + "->") + "." + b.method +
                               (b.line >= 0 ? ":" + std::to_string(b.line) : std::string());
-        ui::wrappedColored(b.resolved ? kGood : kDim, where + "   hits " + std::to_string(b.hits) + " - " + b.status);
+        ui::wrappedColored(b.resolved ? kGood() : kDim(), where + "   hits " + std::to_string(b.hits) + " - " + b.status);
         ImGui::PopID();
     }
     ImGui::EndChild();
     if (wide) ImGui::SameLine();
     ImGui::BeginChild("##events", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    ImGui::TextColored(kAccent, "Events");
+    ImGui::TextColored(kAccent(), "Events");
     for (const auto& e : s.events) ImGui::TextWrapped("%s", e.c_str());
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.f) ImGui::SetScrollHereY(1.f);
     ImGui::EndChild();
@@ -596,7 +596,7 @@ void LogcatPanel::drawContents() {
     if (serial.empty()) {
         ImGui::TextDisabled("No device selected.");
     } else if (!error_.empty()) {
-        ui::wrappedColored(kWarn, error_);
+        ui::wrappedColored(kWarn(), error_);
     }
 
     // Rebuild the filtered view when the filter changed; otherwise append
@@ -618,7 +618,7 @@ void LogcatPanel::drawContents() {
         viewHead_ = devices_.logHead();
         view_.insert(view_.end(), std::make_move_iterator(fresh.begin()), std::make_move_iterator(fresh.end()));
         if (view_.size() > kViewCap) {
-            view_.erase(view_.begin(), view_.begin() + (ptrdiff_t)(view_.size() - kViewCap));
+            view_.erase(view_.begin(), view_.begin() + static_cast<ptrdiff_t>(view_.size() - kViewCap));
             selection_.reset();  // rows shifted
         }
     }
@@ -627,28 +627,28 @@ void LogcatPanel::drawContents() {
     ImGui::PushFont(Theme::monoFont());
     const float rowH = ImGui::GetTextLineHeight();
     const auto rowText = [&](int i) {
-        const auto& e = view_[(size_t)i];
+        const auto& e = view_[static_cast<size_t>(i)];
         char head[64];
         std::snprintf(head, sizeof head, "%s %5d %5d %c ", e.time.c_str(), e.pid, e.tid, e.level);
         return std::string(head) + e.tag + ": " + e.message;
     };
     ImGuiListClipper clipper;
-    clipper.Begin((int)view_.size());
+    clipper.Begin(static_cast<int>(view_.size()));
     while (clipper.Step()) {
         for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-            const auto& e = view_[(size_t)i];
+            const auto& e = view_[static_cast<size_t>(i)];
             const ImVec2 rowPos = ImGui::GetCursorPos();
             ImGui::PushID(i);
             ImGui::Selectable("##row", selection_.contains(i), ImGuiSelectableFlags_AllowOverlap, ImVec2(0, rowH));
             selection_.handleRow(i);
             ImGui::PopID();
             ImGui::SetCursorPos(rowPos);
-            ImGui::TextColored(kDim, "%s %5d %5d", e.time.c_str(), e.pid, e.tid);
+            ImGui::TextColored(kDim(), "%s %5d %5d", e.time.c_str(), e.pid, e.tid);
             ImGui::SameLine();
             ImGui::TextColored(levelColor(e.level), "%c %s: %s", e.level, e.tag.c_str(), e.message.c_str());
         }
     }
-    const std::string copied = selection_.handleCommands((int)view_.size(), rowText, "##logcatCtx");
+    const std::string copied = selection_.handleCommands(static_cast<int>(view_.size()), rowText, "##logcatCtx");
     if (!copied.empty()) ImGui::SetClipboardText(copied.c_str());
     if (autoScroll_ && !paused_ && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - ui::em(2.f)) ImGui::SetScrollHereY(1.f);
     ImGui::PopFont();

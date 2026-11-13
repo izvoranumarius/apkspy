@@ -158,7 +158,7 @@ bool certFromPkcs7(const std::vector<uint8_t>& blob, ApkSigningInfo& out) {
 // --- APK signing block (v2/v3) ----------------------------------------------
 
 uint32_t readU32(const uint8_t* p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) | (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
 }
 
 uint64_t readU64(const uint8_t* p) {
@@ -177,23 +177,23 @@ bool firstCertOfSigners(const uint8_t* p, size_t len, ApkSigningInfo& out, const
     auto u32At = [&](size_t at) -> uint32_t { return at + 4 <= len ? readU32(p + at) : 0; };
     size_t pos = 0;
     const uint32_t signersLen = u32At(pos);
-    if (signersLen == 0 || (uint64_t)pos + 4 + signersLen > len) return false;
+    if (signersLen == 0 || static_cast<uint64_t>(pos) + 4 + signersLen > len) return false;
     pos += 4;
     const uint32_t signerLen = u32At(pos);
-    if (signerLen == 0 || (uint64_t)pos + 4 + signerLen > len) return false;
+    if (signerLen == 0 || static_cast<uint64_t>(pos) + 4 + signerLen > len) return false;
     pos += 4;
     const uint32_t signedDataLen = u32At(pos);
-    if (signedDataLen == 0 || (uint64_t)pos + 4 + signedDataLen > len) return false;
+    if (signedDataLen == 0 || static_cast<uint64_t>(pos) + 4 + signedDataLen > len) return false;
     pos += 4;
     // signed data: digests (len-prefixed), certificates (len-prefixed), ...
     const uint32_t digestsLen = u32At(pos);
-    if ((uint64_t)pos + 4 + digestsLen > len) return false;
+    if (static_cast<uint64_t>(pos) + 4 + digestsLen > len) return false;
     pos += 4 + digestsLen;
     const uint32_t certsLen = u32At(pos);
-    if (certsLen == 0 || (uint64_t)pos + 4 + certsLen > len) return false;
+    if (certsLen == 0 || static_cast<uint64_t>(pos) + 4 + certsLen > len) return false;
     pos += 4;
     const uint32_t certLen = u32At(pos);
-    if (certLen == 0 || (uint64_t)pos + 4 + certLen > len) return false;
+    if (certLen == 0 || static_cast<uint64_t>(pos) + 4 + certLen > len) return false;
     out = describeCert(p + pos + 4, certLen, scheme);
     return true;
 }
@@ -244,20 +244,20 @@ bool ApkInfo::parseSigningBlock(const std::vector<uint8_t>& buffer, uint64_t buf
     if (readU64(buffer.data() + (blockStart - bufferOffset)) != sizeFooter) return false;
 
     // Length-prefixed (u64) pairs: u32 id + payload.
-    size_t pos = (size_t)(blockStart - bufferOffset) + 8;
-    const size_t pairsEnd = (size_t)(cdOffset - 24 - bufferOffset);
+    size_t pos = static_cast<size_t>(blockStart - bufferOffset) + 8;
+    const size_t pairsEnd = static_cast<size_t>(cdOffset - 24 - bufferOffset);
     while (pos + 12 <= pairsEnd) {
         const uint64_t pairLen = readU64(buffer.data() + pos);
         if (pairLen < 4 || pos + 8 + pairLen > pairsEnd) break;
         const uint32_t id = readU32(buffer.data() + pos + 8);
         const uint8_t* payload = buffer.data() + pos + 12;
-        const size_t payloadLen = (size_t)pairLen - 4;
+        const size_t payloadLen = static_cast<size_t>(pairLen) - 4;
         const char* scheme = id == kV2BlockId ? "v2" : (id == kV3BlockId ? "v3" : nullptr);
         if (scheme) {
             ApkSigningInfo s;
             if (firstCertOfSigners(payload, payloadLen, s, scheme)) out.push_back(std::move(s));
         }
-        pos += 8 + (size_t)pairLen;
+        pos += 8 + static_cast<size_t>(pairLen);
     }
     return !out.empty();
 }
@@ -302,12 +302,12 @@ ApkInfo ApkInfo::extract(Root& apkRoot) {
                 // block window. If the block were bigger than this window the
                 // v2/v3 info is simply not reported - v1 still is.
                 const std::streamoff tailLen = std::min<std::streamoff>(fileSize, 0x10000 + 1024 * 1024);
-                std::vector<uint8_t> tail((size_t)tailLen);
+                std::vector<uint8_t> tail(static_cast<size_t>(tailLen));
                 in.seekg(-tailLen, std::ios::end);
                 in.read(reinterpret_cast<char*>(tail.data()), tailLen);
-                if ((size_t)in.gcount() == (size_t)tailLen) {
+                if (static_cast<size_t>(in.gcount()) == static_cast<size_t>(tailLen)) {
                     std::vector<ApkSigningInfo> blockSigs;
-                    if (parseSigningBlock(tail, (uint64_t)(fileSize - tailLen), blockSigs))
+                    if (parseSigningBlock(tail, static_cast<uint64_t>(fileSize - tailLen), blockSigs))
                         info.signatures.insert(info.signatures.end(), blockSigs.begin(), blockSigs.end());
                 }
             }

@@ -29,8 +29,8 @@ inline void compress(Context& c, const uint8_t* p) {
         0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
     uint32_t w[64];
     for (int i = 0; i < 16; ++i)
-        w[i] = ((uint32_t)p[i * 4] << 24) | ((uint32_t)p[i * 4 + 1] << 16) | ((uint32_t)p[i * 4 + 2] << 8) |
-               (uint32_t)p[i * 4 + 3];
+        w[i] = (static_cast<uint32_t>(p[i * 4]) << 24) | (static_cast<uint32_t>(p[i * 4 + 1]) << 16) | (static_cast<uint32_t>(p[i * 4 + 2]) << 8) |
+               static_cast<uint32_t>(p[i * 4 + 3]);
     for (int i = 16; i < 64; ++i) {
         const uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
         const uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
@@ -61,7 +61,7 @@ inline void init(Context& c) {
 
 // Buffers and compresses full blocks; partial bytes stay in c.buf.
 inline void update(Context& c, const uint8_t* data, size_t len) {
-    c.bits += (uint64_t)len * 8;
+    c.bits += static_cast<uint64_t>(len) * 8;
     while (len > 0) {
         const size_t take = len < 64 - c.bufLen ? len : 64 - c.bufLen;
         for (size_t i = 0; i < take; ++i) c.buf[c.bufLen + i] = data[i];
@@ -83,7 +83,7 @@ inline void finish(Context& c, uint8_t out[32]) {
     uint8_t pad[72];
     pad[0] = 0x80;
     for (size_t i = 1; i < k; ++i) pad[i] = 0;
-    for (int i = 0; i < 8; ++i) pad[k + i] = (uint8_t)(bits >> (56 - 8 * i));
+    for (int i = 0; i < 8; ++i) pad[k + i] = static_cast<uint8_t>(bits >> (56 - 8 * i));
     const size_t padLen = k + 8;
     // Feed the padding WITHOUT counting it into c.bits. (The message is fully
     // buffered or compressed by update(); only this tail remains.)
@@ -101,10 +101,10 @@ inline void finish(Context& c, uint8_t out[32]) {
         }
     }
     for (int i = 0; i < 8; ++i) {
-        out[i * 4] = (uint8_t)(c.h[i] >> 24);
-        out[i * 4 + 1] = (uint8_t)(c.h[i] >> 16);
-        out[i * 4 + 2] = (uint8_t)(c.h[i] >> 8);
-        out[i * 4 + 3] = (uint8_t)c.h[i];
+        out[i * 4] = static_cast<uint8_t>(c.h[i] >> 24);
+        out[i * 4 + 1] = static_cast<uint8_t>(c.h[i] >> 16);
+        out[i * 4 + 2] = static_cast<uint8_t>(c.h[i] >> 8);
+        out[i * 4 + 3] = static_cast<uint8_t>(c.h[i]);
     }
 }
 

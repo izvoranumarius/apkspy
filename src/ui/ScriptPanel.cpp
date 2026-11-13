@@ -27,7 +27,7 @@ fs::path supportDir() { return pathutil::configDir() / "scripting"; }
 int resizeText(ImGuiInputTextCallbackData* data) {
     if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
         auto* text = static_cast<std::string*>(data->UserData);
-        text->resize((size_t)data->BufTextLen);
+        text->resize(static_cast<size_t>(data->BufTextLen));
         data->Buf = text->data();
     }
     return 0;
@@ -37,7 +37,7 @@ int resizeText(ImGuiInputTextCallbackData* data) {
 std::string cleanName(std::string name) {
     std::string out;
     for (char c : name)
-        if (std::isalnum((unsigned char)c) || c == '_' || c == '-') out.push_back(c);
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-') out.push_back(c);
         else if (c == '.' && out.find('.') == std::string::npos) break;
     return out.empty() ? out : out + ".py";
 }
@@ -207,26 +207,26 @@ void ScriptPanel::drawSource() {
             const size_t end = i + 1 < lineStarts_.size() ? lineStarts_[i + 1] - 1 : size;
             return all.substr(lineStarts_[i], end - lineStarts_[i]);
         };
-        const int first = std::max(0, (int)(scrollY / fontSize) - 1);
-        const int last = std::min((int)lineStarts_.size(), first + (int)((frameMax.y - frameMin.y) / fontSize) + 3);
+        const int first = std::max(0, static_cast<int>(scrollY / fontSize) - 1);
+        const int last = std::min(static_cast<int>(lineStarts_.size()), first + static_cast<int>((frameMax.y - frameMin.y) / fontSize) + 3);
         std::vector<Span> spans;
         for (int i = first; i < last; ++i) {
-            const std::string_view line = lineAt((size_t)i);
-            bool inString = lineInString_[(size_t)i] != 0;
+            const std::string_view line = lineAt(static_cast<size_t>(i));
+            bool inString = lineInString_[static_cast<size_t>(i)] != 0;
             SyntaxHighlighter::tokenize(line, Language::Python, inString, spans);
             float x = origin.x;
-            const float y = origin.y + (float)i * fontSize;
+            const float y = origin.y + static_cast<float>(i) * fontSize;
             for (const Span& span : spans) {
                 const char* s = line.data() + span.begin;
                 const char* e = line.data() + span.end;
-                dl->AddText(Theme::monoFont(), fontSize, ImVec2(x, y), span.color, s, e);
+                dl->AddText(Theme::monoFont(), fontSize, ImVec2(x, y), theme::syntax(span.token), s, e);
                 x += ImGui::CalcTextSize(s, e).x;
             }
         }
 
-        size_t caretLine = (size_t)-1;
-        if (ImGui::IsItemActive() && state && (size_t)state->Stb->cursor <= size)
-            caretLine = (size_t)(std::upper_bound(lineStarts_.begin(), lineStarts_.end(), (size_t)state->Stb->cursor) - lineStarts_.begin()) - 1;
+        size_t caretLine = static_cast<size_t>(-1);
+        if (ImGui::IsItemActive() && state && static_cast<size_t>(state->Stb->cursor) <= size)
+            caretLine = static_cast<size_t>(std::upper_bound(lineStarts_.begin(), lineStarts_.end(), static_cast<size_t>(state->Stb->cursor)) - lineStarts_.begin()) - 1;
         if (numbered) {
             ImDrawList* window = ImGui::GetWindowDrawList();
             window->PushClipRect(ImVec2(frameMin.x - gutter, frameMin.y), ImVec2(frameMin.x, frameMax.y), true);
@@ -234,8 +234,8 @@ void ScriptPanel::drawSource() {
             for (int i = first; i < last; ++i) {
                 std::snprintf(number, sizeof number, "%d", i + 1);
                 const float x = frameMin.x - ImGui::CalcTextSize(number).x - ui::em(0.5f);
-                window->AddText(ImVec2(x, origin.y + (float)i * fontSize),
-                                (size_t)i == caretLine ? IM_COL32(200, 200, 200, 255) : IM_COL32(110, 110, 110, 255), number);
+                window->AddText(ImVec2(x, origin.y + static_cast<float>(i) * fontSize),
+                                theme::u32(static_cast<size_t>(i) == caretLine ? Col::LineNumberActive : Col::LineNumber), number);
             }
             window->PopClipRect();
         }
@@ -244,11 +244,11 @@ void ScriptPanel::drawSource() {
         if (ImGui::IsItemActive() && state) {
             const bool blink = !ImGui::GetIO().ConfigInputTextCursorBlink || state->CursorAnim <= 0.f ||
                                ImFmod(state->CursorAnim, 1.20f) <= 0.80f;
-            const size_t cursor = (size_t)state->Stb->cursor;
+            const size_t cursor = static_cast<size_t>(state->Stb->cursor);
             if (blink && cursor <= size) {
-                const size_t index = (size_t)(std::upper_bound(lineStarts_.begin(), lineStarts_.end(), cursor) - lineStarts_.begin()) - 1;
+                const size_t index = static_cast<size_t>(std::upper_bound(lineStarts_.begin(), lineStarts_.end(), cursor) - lineStarts_.begin()) - 1;
                 const float x = origin.x + ImGui::CalcTextSize(all.data() + lineStarts_[index], all.data() + cursor).x;
-                const float y = origin.y + (float)index * fontSize;
+                const float y = origin.y + static_cast<float>(index) * fontSize;
                 dl->AddLine(ImVec2(x, y), ImVec2(x, y + fontSize), ImGui::GetColorU32(ImGuiCol_Text));
             }
         }

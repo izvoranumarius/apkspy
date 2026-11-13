@@ -30,13 +30,13 @@ constexpr int kMaxConcurrent = 8;          // in-flight stdio requests
 long readStdin(char* buf, size_t len) {
 #ifdef _WIN32
     DWORD got = 0;
-    if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), buf, (DWORD)len, &got, nullptr)) return -1;
-    return (long)got;
+    if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), buf, static_cast<DWORD>(len), &got, nullptr)) return -1;
+    return static_cast<long>(got);
 #else
     ssize_t n;
     do n = ::read(0, buf, len);
     while (n < 0 && errno == EINTR);
-    return (long)n;
+    return static_cast<long>(n);
 #endif
 }
 
@@ -50,7 +50,7 @@ void writeStdoutLine(const std::string& line) {
     size_t off = 0;
     while (off < out.size()) {
         DWORD wrote = 0;
-        if (!WriteFile(h, out.data() + off, (DWORD)(out.size() - off), &wrote, nullptr) || wrote == 0) return;
+        if (!WriteFile(h, out.data() + off, static_cast<DWORD>(out.size() - off), &wrote, nullptr) || wrote == 0) return;
         off += wrote;
     }
     FlushFileBuffers(h);
@@ -62,7 +62,7 @@ void writeStdoutLine(const std::string& line) {
             if (n < 0 && errno == EINTR) continue;
             return;
         }
-        off += (size_t)n;
+        off += static_cast<size_t>(n);
     }
 #endif
 }
@@ -71,14 +71,14 @@ bool ciEquals(const std::string& a, const char* b) {
     size_t n = std::char_traits<char>::length(b);
     if (a.size() != n) return false;
     for (size_t i = 0; i < n; ++i)
-        if (std::tolower((unsigned char)a[i]) != std::tolower((unsigned char)b[i])) return false;
+        if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
     return true;
 }
 
 bool constantTimeEquals(const std::string& a, const std::string& b) {
     if (a.size() != b.size()) return false;
     unsigned char diff = 0;
-    for (size_t i = 0; i < a.size(); ++i) diff |= (unsigned char)(a[i] ^ b[i]);
+    for (size_t i = 0; i < a.size(); ++i) diff |= static_cast<unsigned char>(a[i] ^ b[i]);
     return diff == 0;
 }
 
@@ -148,7 +148,7 @@ int runMcpStdio(McpServer& server, std::atomic<bool>& stop) {
     while (!stop.load()) {
         const long n = readStdin(buf, sizeof buf);
         if (n <= 0) break;  // client closed stdin: shut down
-        pending.append(buf, (size_t)n);
+        pending.append(buf, static_cast<size_t>(n));
         size_t start = 0;
         for (size_t nl = pending.find('\n'); nl != std::string::npos; nl = pending.find('\n', start)) {
             std::string line = pending.substr(start, nl - start);
@@ -234,7 +234,7 @@ void McpHttpServer::acceptLoop() {
 }
 
 void McpHttpServer::serve(std::shared_ptr<Socket> client) {
-    const std::string sessionKey = "http-" + std::to_string((uintptr_t)client.get());
+    const std::string sessionKey = "http-" + std::to_string(reinterpret_cast<uintptr_t>(client.get()));
     std::string buffer;
     char chunk[16384];
     const auto respond = [&](int status, const std::string& body, const std::string& extraHeaders, bool keepAlive) {
@@ -255,7 +255,7 @@ void McpHttpServer::serve(std::shared_ptr<Socket> client) {
             if (buffer.size() > 64 * 1024 || !client->waitReadable(30000)) goto done;  // idle / oversized
             const long n = client->recvSome(chunk, sizeof chunk);
             if (n <= 0) goto done;
-            buffer.append(chunk, (size_t)n);
+            buffer.append(chunk, static_cast<size_t>(n));
         }
         {
             HttpRequest req;
@@ -279,14 +279,14 @@ void McpHttpServer::serve(std::shared_ptr<Socket> client) {
                 const size_t colon = line.find(':');
                 if (colon == std::string::npos) continue;
                 std::string key = line.substr(0, colon);
-                std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+                std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
                 std::string value = line.substr(colon + 1);
                 while (!value.empty() && value.front() == ' ') value.erase(value.begin());
                 req.headers[key] = value;
             }
             if (req.headers.count("connection") && ciEquals(req.headers["connection"], "close")) req.keepAlive = false;
             size_t length = 0;
-            if (req.headers.count("content-length")) length = (size_t)std::strtoull(req.headers["content-length"].c_str(), nullptr, 10);
+            if (req.headers.count("content-length")) length = static_cast<size_t>(std::strtoull(req.headers["content-length"].c_str(), nullptr, 10));
             if (length > kMaxMessage) {
                 respond(413, "", "", false);
                 goto done;
@@ -295,7 +295,7 @@ void McpHttpServer::serve(std::shared_ptr<Socket> client) {
                 if (!client->waitReadable(30000)) goto done;
                 const long n = client->recvSome(chunk, sizeof chunk);
                 if (n <= 0) goto done;
-                buffer.append(chunk, (size_t)n);
+                buffer.append(chunk, static_cast<size_t>(n));
             }
             req.body = buffer.substr(0, length);
             buffer.erase(0, length);

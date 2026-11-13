@@ -24,7 +24,7 @@ ImVec4 statusColor(int status) {
 }
 
 std::string clock(double unix) {
-    const std::time_t t = (std::time_t)unix;
+    const std::time_t t = static_cast<std::time_t>(unix);
     std::tm tm{};
 #ifdef _WIN32
     localtime_s(&tm, &t);
@@ -33,15 +33,15 @@ std::string clock(double unix) {
 #endif
     char buf[32];
     std::snprintf(buf, sizeof buf, "%02d:%02d:%02d.%03d", tm.tm_hour, tm.tm_min, tm.tm_sec,
-                  (int)((unix - (double)t) * 1000.0));
+                  static_cast<int>((unix - static_cast<double>(t)) * 1000.0));
     return buf;
 }
 
 std::string humanBytes(uint64_t n) {
     char buf[32];
-    if (n < 1024) std::snprintf(buf, sizeof buf, "%llu B", (unsigned long long)n);
-    else if (n < 1024 * 1024) std::snprintf(buf, sizeof buf, "%.1f KB", (double)n / 1024.0);
-    else std::snprintf(buf, sizeof buf, "%.1f MB", (double)n / (1024.0 * 1024.0));
+    if (n < 1024) std::snprintf(buf, sizeof buf, "%llu B", static_cast<unsigned long long>(n));
+    else if (n < 1024 * 1024) std::snprintf(buf, sizeof buf, "%.1f KB", static_cast<double>(n) / 1024.0);
+    else std::snprintf(buf, sizeof buf, "%.1f MB", static_cast<double>(n) / (1024.0 * 1024.0));
     return buf;
 }
 
@@ -54,7 +54,7 @@ std::string presentBody(const std::string& body, const std::string& contentType)
         return j.dump(true);
     size_t binary = 0;
     for (size_t i = 0; i < std::min<size_t>(body.size(), 4096); ++i) {
-        const unsigned char c = (unsigned char)body[i];
+        const unsigned char c = static_cast<unsigned char>(body[i]);
         if (c < 9 || (c > 13 && c < 32)) ++binary;
     }
     if (binary > 16) return "(" + std::to_string(body.size()) + " bytes of binary data - " + contentType + ")";
@@ -75,13 +75,13 @@ void drawMessage(const char* id, const TrafficProxy::Message& m) {
     std::string note;
     const std::string body = TrafficProxy::decodeBody(m, &note);
     if (!note.empty()) ImGui::TextDisabled("(%s)", note.c_str());
-    if (m.truncated) ImGui::TextDisabled("(body capped at %zu bytes of %llu)", TrafficProxy::kMaxBody, (unsigned long long)m.bodySize);
+    if (m.truncated) ImGui::TextDisabled("(body capped at %zu bytes of %llu)", TrafficProxy::kMaxBody, static_cast<unsigned long long>(m.bodySize));
     const std::string shown = presentBody(body, m.header("content-type"));
     if (shown.empty()) ImGui::TextDisabled("(no body)");
     else ImGui::TextUnformatted(shown.c_str());
     ImGui::PopTextWrapPos();
     ImGui::PopFont();
-    if (!body.empty() && ImGui::SmallButton("Copy body")) ImGui::SetClipboardText(body.c_str());
+    if (!body.empty() && ui::smallButton("Copy body")) ImGui::SetClipboardText(body.c_str());
     ImGui::PopID();
 }
 
@@ -266,11 +266,11 @@ void TrafficPanel::drawRequests() {
         if (wide) ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed, ui::em(3.5f));
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
-        clipper.Begin((int)shown.size());
+        clipper.Begin(static_cast<int>(shown.size()));
         while (clipper.Step()) {
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                const TrafficProxy::Flow& f = *shown[(size_t)i];
-                ImGui::PushID((int)f.id);
+                const TrafficProxy::Flow& f = *shown[static_cast<size_t>(i)];
+                ImGui::PushID(static_cast<int>(f.id));
                 ImGui::TableNextRow();
                 if (wide) {
                     ImGui::TableNextColumn();
@@ -338,7 +338,7 @@ void TrafficPanel::drawDetail() {
     std::snprintf(line, sizeof line, "status %d | %s up, %s down | %.0f ms%s%s", f.status, humanBytes(f.bytesUp).c_str(),
                   humanBytes(f.bytesDown).c_str(), f.durationMs, f.error.empty() ? "" : " | ", f.error.c_str());
     ui::wrappedColored(kDim, line);
-    if (ImGui::SmallButton("Copy URL")) ImGui::SetClipboardText(f.url().c_str());
+    if (ui::smallButton("Copy URL")) ImGui::SetClipboardText(f.url().c_str());
     if (!f.tunnel && ui::flowSmallButton("Copy as cURL")) ImGui::SetClipboardText(TrafficProxy::curl(f).c_str());
     if (ui::flowSmallButton("Close")) selected_ = 0;
     if (f.tunnel) {
@@ -386,7 +386,7 @@ void TrafficPanel::drawEndpoints() {
         ImGui::TableHeadersRow();
         for (size_t i = 0; i < eps.size(); ++i) {
             const auto& e = eps[i];
-            ImGui::PushID((int)i);
+            ImGui::PushID(static_cast<int>(i));
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             if (ImGui::Selectable(e.method.c_str(), false, ImGuiSelectableFlags_SpanAllColumns)) {

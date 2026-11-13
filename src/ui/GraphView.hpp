@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include "analysis/GraphLayout.hpp"
+#include "app/Theme.hpp"
 #include "imgui.h"
 
 // Interactive block graph shared by the bytecode and native views: drag to pan,
@@ -10,15 +11,25 @@
 // caller maps a block / line back to its own data through the draw() result.
 class GraphView {
 public:
+    // A theme token (resolved at draw time, so a built graph follows theme
+    // changes) or a fixed RGBA colour.
+    struct Paint {
+        Paint(Col c) : token(c) {}
+        Paint(ImU32 c) : rgba(c), fixed(true) {}
+        ImU32 resolve() const { return fixed ? rgba : theme::u32(token); }
+        Col token = Col::Text;
+        ImU32 rgba = 0;
+        bool fixed = false;
+    };
     struct Span {
         std::string text;
-        ImU32 color = IM_COL32(212, 212, 212, 255);
+        Paint color = Col::Text;
     };
     using Line = std::vector<Span>;
     struct Block {
         std::vector<Line> lines;
-        ImU32 border = IM_COL32(90, 90, 110, 255);
-        ImU32 fill = IM_COL32(37, 37, 42, 255);
+        Paint border = Col::GraphNodeBorder;
+        Paint fill = Col::GraphNode;
     };
     struct Result {
         int block = -1;          // block under the cursor when something happened

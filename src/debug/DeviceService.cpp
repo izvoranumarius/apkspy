@@ -324,13 +324,13 @@ void DebugSession::loadLocals() {
     FrameRow frame;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (snap_.frames.empty() || snap_.selectedFrame < 0 || snap_.selectedFrame >= (int)snap_.frames.size()) {
+        if (snap_.frames.empty() || snap_.selectedFrame < 0 || snap_.selectedFrame >= static_cast<int>(snap_.frames.size())) {
             snap_.locals.clear();
             bump();
             return;
         }
         thread = snap_.currentThread;
-        frame = snap_.frames[(size_t)snap_.selectedFrame];
+        frame = snap_.frames[static_cast<size_t>(snap_.selectedFrame)];
     }
     std::vector<Local> locals;
     std::string error;
@@ -353,7 +353,7 @@ void DebugSession::loadLocals() {
         for (const auto& v : vars) {
             if (v.name == "this") continue;
             if (frame.location.index < v.codeIndex || frame.location.index >= v.codeIndex + v.length) continue;
-            const uint8_t tag = v.signature.empty() ? 'I' : (uint8_t)v.signature[0];
+            const uint8_t tag = v.signature.empty() ? 'I' : static_cast<uint8_t>(v.signature[0]);
             slots.emplace_back(v.slot, tag);
             live.push_back(&v);
         }
@@ -990,8 +990,8 @@ void DeviceService::startMonitor(const std::string& serial, int pid) {
                 Sample s;
                 s.t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
                 if (prev.ok && st.cpuTotalJiffies > prev.cpuTotalJiffies)
-                    s.cpuPercent = 100.0 * (double)(st.procJiffies - prev.procJiffies) /
-                                   (double)(st.cpuTotalJiffies - prev.cpuTotalJiffies);
+                    s.cpuPercent = 100.0 * static_cast<double>(st.procJiffies - prev.procJiffies) /
+                                   static_cast<double>(st.cpuTotalJiffies - prev.cpuTotalJiffies);
                 s.rssKb = st.rssKb;
                 s.threads = st.threads;
                 std::lock_guard<std::mutex> lock(sampleMutex_);

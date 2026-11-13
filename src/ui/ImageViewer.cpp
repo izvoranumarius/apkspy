@@ -1,4 +1,5 @@
 #include "ui/ImageViewer.hpp"
+#include "app/Theme.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -15,13 +16,13 @@ std::string ImageViewer::formatSize(size_t bytes) {
     char buf[32];
     if (bytes >= 1024 * 1024) std::snprintf(buf, sizeof buf, "%.2f MB", bytes / (1024.0 * 1024.0));
     else if (bytes >= 1024) std::snprintf(buf, sizeof buf, "%.1f KB", bytes / 1024.0);
-    else std::snprintf(buf, sizeof buf, "%u B", (unsigned)bytes);
+    else std::snprintf(buf, sizeof buf, "%u B", static_cast<unsigned>(bytes));
     return buf;
 }
 
 float ImageViewer::fitScale(const Texture& tex, ImVec2 view) {
     if (view.x < 8.f || view.y < 8.f) return 1.f;
-    float s = std::min((view.x - 2.f) / (float)tex.width(), (view.y - 2.f) / (float)tex.height());
+    float s = std::min((view.x - 2.f) / static_cast<float>(tex.width()), (view.y - 2.f) / static_cast<float>(tex.height()));
     return std::clamp(s, kMinZoom, kMaxFit);
 }
 
@@ -61,9 +62,10 @@ void ImageViewer::drawChecker(ImDrawList* dl, ImVec2 min, ImVec2 max) {
     ImVec2 a(std::max(min.x, clipMin.x), std::max(min.y, clipMin.y));
     ImVec2 b(std::min(max.x, clipMax.x), std::min(max.y, clipMax.y));
     if (a.x >= b.x || a.y >= b.y) return;
-    dl->AddRectFilled(a, b, IM_COL32(70, 70, 70, 255));
-    int ix0 = (int)std::floor((a.x - min.x) / kTile);
-    int iy0 = (int)std::floor((a.y - min.y) / kTile);
+    // Transparency checkerboard in two control shades (light on light themes).
+    dl->AddRectFilled(a, b, theme::u32(Col::Control));
+    int ix0 = static_cast<int>(std::floor((a.x - min.x) / kTile));
+    int iy0 = static_cast<int>(std::floor((a.y - min.y) / kTile));
     for (int iy = iy0;; ++iy) {
         float y0 = min.y + iy * kTile;
         if (y0 >= b.y) break;
@@ -73,7 +75,7 @@ void ImageViewer::drawChecker(ImDrawList* dl, ImVec2 min, ImVec2 max) {
             if (((ix + iy) & 1) == 0) continue;
             ImVec2 p0(std::max(x0, a.x), std::max(y0, a.y));
             ImVec2 p1(std::min(x0 + kTile, b.x), std::min(y0 + kTile, b.y));
-            dl->AddRectFilled(p0, p1, IM_COL32(100, 100, 100, 255));
+            dl->AddRectFilled(p0, p1, theme::u32(Col::ControlHover));
         }
     }
 }
@@ -92,7 +94,7 @@ void ImageViewer::drawCanvas(Document& doc) {
     v.lastScale = scale;
     tex.setNearest(scale >= 2.f);
 
-    ImVec2 size((float)tex.width() * scale, (float)tex.height() * scale);
+    ImVec2 size(static_cast<float>(tex.width()) * scale, static_cast<float>(tex.height()) * scale);
     ImVec2 offset(std::max(0.f, (view.x - size.x) * 0.5f), std::max(0.f, (view.y - size.y) * 0.5f));
 
     if (v.hasPendingScroll) {
@@ -104,13 +106,13 @@ void ImageViewer::drawCanvas(Document& doc) {
     ImGui::SetCursorPos(offset);
     ImVec2 origin = ImGui::GetCursorScreenPos();
     if (v.checker) drawChecker(ImGui::GetWindowDrawList(), origin, ImVec2(origin.x + size.x, origin.y + size.y));
-    ImGui::Image((ImTextureID)(intptr_t)tex.id(), size);
+    ImGui::Image(static_cast<ImTextureID>(tex.id()), size);
 
     ImGuiIO& io = ImGui::GetIO();
     int px = -1, py = -1;
     if (ImGui::IsItemHovered()) {
-        px = (int)std::floor((io.MousePos.x - origin.x) / scale);
-        py = (int)std::floor((io.MousePos.y - origin.y) / scale);
+        px = static_cast<int>(std::floor((io.MousePos.x - origin.x) / scale));
+        py = static_cast<int>(std::floor((io.MousePos.y - origin.y) / scale));
     }
 
     bool hovered = ImGui::IsWindowHovered();
@@ -119,7 +121,7 @@ void ImageViewer::drawCanvas(Document& doc) {
         ImVec2 winPos = ImGui::GetWindowPos();
         ImVec2 m(io.MousePos.x - winPos.x, io.MousePos.y - winPos.y);
         ImVec2 point((m.x + ImGui::GetScrollX() - offset.x) / scale, (m.y + ImGui::GetScrollY() - offset.y) / scale);
-        ImVec2 newSize((float)tex.width() * newScale, (float)tex.height() * newScale);
+        ImVec2 newSize(static_cast<float>(tex.width()) * newScale, static_cast<float>(tex.height()) * newScale);
         ImVec2 newOffset(std::max(0.f, (view.x - newSize.x) * 0.5f), std::max(0.f, (view.y - newSize.y) * 0.5f));
         v.pendingScroll = ImVec2(std::max(0.f, point.x * newScale + newOffset.x - m.x),
                                  std::max(0.f, point.y * newScale + newOffset.y - m.y));

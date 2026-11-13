@@ -140,8 +140,8 @@ Json strEnum(const std::string& description, std::vector<std::string> values) {
 }
 
 Json integer(const std::string& description, int64_t min, int64_t max) {
-    return Json::obj({{"type", "integer"}, {"description", description}, {"minimum", (long long)min},
-                      {"maximum", (long long)max}});
+    return Json::obj({{"type", "integer"}, {"description", description}, {"minimum", static_cast<long long>(min)},
+                      {"maximum", static_cast<long long>(max)}});
 }
 
 Json boolean(const std::string& description) { return Json::obj({{"type", "boolean"}, {"description", description}}); }
@@ -158,7 +158,7 @@ bool McpServer::validate(const Json& schema, const Json& v, std::string& error, 
         else if (type == "string") ok = v.isString();
         else if (type == "boolean") ok = v.isBool();
         else if (type == "number") ok = v.isNumber();
-        else if (type == "integer") ok = v.isNumber() && (double)v.asInt() == v.asNumber();
+        else if (type == "integer") ok = v.isNumber() && static_cast<double>(v.asInt()) == v.asNumber();
         else ok = true;
         if (!ok) {
             error = where + ": expected " + type + ", got " + typeOf(v);
@@ -186,7 +186,7 @@ bool McpServer::validate(const Json& schema, const Json& v, std::string& error, 
             return false;
         }
     }
-    if (v.isString() && schema.has("maxLength") && (int64_t)v.asString().size() > schema.get("maxLength").asInt()) {
+    if (v.isString() && schema.has("maxLength") && static_cast<int64_t>(v.asString().size()) > schema.get("maxLength").asInt()) {
         error = where + ": string too long";
         return false;
     }

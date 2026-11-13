@@ -5,15 +5,15 @@
 #include <unordered_set>
 
 namespace {
-const ImU32 kDefault = IM_COL32(220, 220, 220, 255);
-const ImU32 kKeyword = IM_COL32(86, 156, 214, 255);
-const ImU32 kString = IM_COL32(214, 157, 133, 255);
-const ImU32 kComment = IM_COL32(87, 166, 74, 255);
-const ImU32 kNumber = IM_COL32(181, 206, 168, 255);
-const ImU32 kType = IM_COL32(78, 201, 176, 255);
-const ImU32 kPunct = IM_COL32(180, 180, 180, 255);
-const ImU32 kAttr = IM_COL32(156, 220, 254, 255);
-const ImU32 kDirective = IM_COL32(197, 134, 192, 255);
+constexpr SyntaxToken kDefault = SyntaxToken::Default;
+constexpr SyntaxToken kKeyword = SyntaxToken::Keyword;
+constexpr SyntaxToken kString = SyntaxToken::String;
+constexpr SyntaxToken kComment = SyntaxToken::Comment;
+constexpr SyntaxToken kNumber = SyntaxToken::Number;
+constexpr SyntaxToken kType = SyntaxToken::Type;
+constexpr SyntaxToken kPunct = SyntaxToken::Punctuation;
+constexpr SyntaxToken kAttr = SyntaxToken::Attribute;
+constexpr SyntaxToken kDirective = SyntaxToken::Directive;
 
 enum KeywordSet { KwJava, KwKotlin, KwGroovy, KwJs };
 
@@ -52,9 +52,9 @@ const std::unordered_set<std::string_view>& keywordSet(int set) {
     }
 }
 
-void push(std::vector<Span>& out, size_t b, size_t e, ImU32 c) {
+void push(std::vector<Span>& out, size_t b, size_t e, SyntaxToken c) {
     if (e <= b) return;
-    if (!out.empty() && out.back().color == c && out.back().end == b)
+    if (!out.empty() && out.back().token == c && out.back().end == b)
         out.back().end = e;
     else
         out.push_back({b, e, c});
@@ -99,7 +99,7 @@ void SyntaxHighlighter::tokenizeCLike(std::string_view line, bool& inBlock, std:
             }
             continue;
         }
-        unsigned char c = (unsigned char)line[i];
+        unsigned char c = static_cast<unsigned char>(line[i]);
         if (c == '/' && i + 1 < n && line[i + 1] == '/') {
             push(out, i, n, kComment);
             break;
@@ -112,7 +112,7 @@ void SyntaxHighlighter::tokenizeCLike(std::string_view line, bool& inBlock, std:
         }
         if (c == '"' || c == '\'') {
             size_t j = i + 1;
-            while (j < n && line[j] != (char)c) {
+            while (j < n && line[j] != static_cast<char>(c)) {
                 if (line[j] == '\\') ++j;
                 ++j;
             }
@@ -123,16 +123,16 @@ void SyntaxHighlighter::tokenizeCLike(std::string_view line, bool& inBlock, std:
         }
         if (std::isdigit(c)) {
             size_t j = i;
-            while (j < n && (std::isalnum((unsigned char)line[j]) || line[j] == '.' || line[j] == '_')) ++j;
+            while (j < n && (std::isalnum(static_cast<unsigned char>(line[j])) || line[j] == '.' || line[j] == '_')) ++j;
             push(out, i, j, kNumber);
             i = j;
             continue;
         }
         if (isIdentStart(c)) {
             size_t j = i;
-            while (j < n && isIdentPart((unsigned char)line[j])) ++j;
+            while (j < n && isIdentPart(static_cast<unsigned char>(line[j]))) ++j;
             std::string_view word = line.substr(i, j - i);
-            ImU32 col = kDefault;
+            SyntaxToken col = kDefault;
             if (words.count(word)) col = kKeyword;
             else if (std::isupper(c)) col = kType;
             push(out, i, j, col);
@@ -176,14 +176,14 @@ void SyntaxHighlighter::tokenizePython(std::string_view line, bool& inBlock, std
             inBlock = false;
             continue;
         }
-        const unsigned char c = (unsigned char)line[i];
+        const unsigned char c = static_cast<unsigned char>(line[i]);
         if (c == '#') {
             push(out, i, n, kComment);
             return;
         }
         if (c == '@') {  // decorator
             size_t j = i + 1;
-            while (j < n && (isIdentPart((unsigned char)line[j]) || line[j] == '.')) ++j;
+            while (j < n && (isIdentPart(static_cast<unsigned char>(line[j])) || line[j] == '.')) ++j;
             push(out, i, j, j > i + 1 ? kDirective : kPunct);
             i = j;
             continue;
@@ -216,16 +216,16 @@ void SyntaxHighlighter::tokenizePython(std::string_view line, bool& inBlock, std
         }
         if (std::isdigit(c)) {
             size_t j = i;
-            while (j < n && (std::isalnum((unsigned char)line[j]) || line[j] == '.' || line[j] == '_')) ++j;
+            while (j < n && (std::isalnum(static_cast<unsigned char>(line[j])) || line[j] == '.' || line[j] == '_')) ++j;
             push(out, i, j, kNumber);
             i = j;
             continue;
         }
         if (isIdentStart(c)) {
             size_t j = i;
-            while (j < n && isIdentPart((unsigned char)line[j])) ++j;
+            while (j < n && isIdentPart(static_cast<unsigned char>(line[j]))) ++j;
             const std::string_view word = line.substr(i, j - i);
-            ImU32 color = kDefault;
+            SyntaxToken color = kDefault;
             if (nameFollows) color = kType;
             else if (keywords.count(word)) color = kKeyword;
             else if (builtins.count(word)) color = kAttr;
@@ -244,7 +244,7 @@ void SyntaxHighlighter::tokenizeJson(std::string_view line, std::vector<Span>& o
     size_t i = 0;
     const size_t n = line.size();
     while (i < n) {
-        unsigned char c = (unsigned char)line[i];
+        unsigned char c = static_cast<unsigned char>(line[i]);
         if (std::isspace(c)) {
             push(out, i, i + 1, kDefault);
             ++i;
@@ -252,20 +252,20 @@ void SyntaxHighlighter::tokenizeJson(std::string_view line, std::vector<Span>& o
         }
         if (c == '"' || c == '\'') {
             size_t j = i + 1;
-            while (j < n && line[j] != (char)c) {
+            while (j < n && line[j] != static_cast<char>(c)) {
                 if (line[j] == '\\') ++j;
                 ++j;
             }
             j = std::min(j + 1, n);
             size_t k = j;
-            while (k < n && std::isspace((unsigned char)line[k])) ++k;
+            while (k < n && std::isspace(static_cast<unsigned char>(line[k]))) ++k;
             push(out, i, j, k < n && line[k] == ':' ? kAttr : kString);
             i = j;
             continue;
         }
-        if (std::isdigit(c) || (c == '-' && i + 1 < n && std::isdigit((unsigned char)line[i + 1]))) {
+        if (std::isdigit(c) || (c == '-' && i + 1 < n && std::isdigit(static_cast<unsigned char>(line[i + 1])))) {
             size_t j = i + 1;
-            while (j < n && (std::isdigit((unsigned char)line[j]) || line[j] == '.' || line[j] == 'e' ||
+            while (j < n && (std::isdigit(static_cast<unsigned char>(line[j])) || line[j] == '.' || line[j] == 'e' ||
                              line[j] == 'E' || line[j] == '+' || line[j] == '-'))
                 ++j;
             push(out, i, j, kNumber);
@@ -274,7 +274,7 @@ void SyntaxHighlighter::tokenizeJson(std::string_view line, std::vector<Span>& o
         }
         if (isIdentStart(c)) {
             size_t j = i;
-            while (j < n && isIdentPart((unsigned char)line[j])) ++j;
+            while (j < n && isIdentPart(static_cast<unsigned char>(line[j]))) ++j;
             std::string_view word = line.substr(i, j - i);
             push(out, i, j, word == "true" || word == "false" || word == "null" ? kKeyword : kDefault);
             i = j;
@@ -289,7 +289,7 @@ void SyntaxHighlighter::tokenizeSmali(std::string_view line, std::vector<Span>& 
     size_t i = 0;
     const size_t n = line.size();
     while (i < n) {
-        unsigned char c = (unsigned char)line[i];
+        unsigned char c = static_cast<unsigned char>(line[i]);
         if (std::isspace(c)) {
             push(out, i, i + 1, kDefault);
             ++i;
@@ -312,22 +312,22 @@ void SyntaxHighlighter::tokenizeSmali(std::string_view line, std::vector<Span>& 
         }
         if (c == '.') {
             size_t j = i;
-            while (j < n && !std::isspace((unsigned char)line[j])) ++j;
+            while (j < n && !std::isspace(static_cast<unsigned char>(line[j]))) ++j;
             push(out, i, j, kDirective);
             i = j;
             continue;
         }
         if (c == ':') {
             size_t j = i;
-            while (j < n && !std::isspace((unsigned char)line[j])) ++j;
+            while (j < n && !std::isspace(static_cast<unsigned char>(line[j]))) ++j;
             push(out, i, j, kAttr);
             i = j;
             continue;
         }
         if (c == 'v' || c == 'p') {
             size_t j = i + 1;
-            if (j < n && std::isdigit((unsigned char)line[j])) {
-                while (j < n && std::isdigit((unsigned char)line[j])) ++j;
+            if (j < n && std::isdigit(static_cast<unsigned char>(line[j]))) {
+                while (j < n && std::isdigit(static_cast<unsigned char>(line[j]))) ++j;
                 push(out, i, j, kNumber);
                 i = j;
                 continue;
@@ -336,14 +336,14 @@ void SyntaxHighlighter::tokenizeSmali(std::string_view line, std::vector<Span>& 
         if (std::isdigit(c) || c == '-') {
             // smali literals: -42, 0x1F, wide register pairs
             size_t j = i + 1;
-            while (j < n && (std::isalnum((unsigned char)line[j]) || line[j] == '-')) ++j;
+            while (j < n && (std::isalnum(static_cast<unsigned char>(line[j])) || line[j] == '-')) ++j;
             push(out, i, j, kNumber);
             i = j;
             continue;
         }
         if (isIdentStart(c)) {
             size_t j = i;
-            while (j < n && (isIdentPart((unsigned char)line[j]) || line[j] == '/' || line[j] == '-' ||
+            while (j < n && (isIdentPart(static_cast<unsigned char>(line[j])) || line[j] == '/' || line[j] == '-' ||
                              line[j] == '>' || line[j] == ';'))
                 ++j;
             push(out, i, j, kDefault);
@@ -387,7 +387,7 @@ void SyntaxHighlighter::tokenizeCss(std::string_view line, bool& inBlock, std::v
     size_t i = 0;
     const size_t n = line.size();
     while (i < n) {
-        unsigned char c = (unsigned char)line[i];
+        unsigned char c = static_cast<unsigned char>(line[i]);
         if (c == '/' && i + 1 < n && line[i + 1] == '*') {
             size_t e = line.find("*/", i + 2);
             if (e == std::string::npos) {
@@ -414,7 +414,7 @@ void SyntaxHighlighter::tokenizeCss(std::string_view line, bool& inBlock, std::v
         }
         if (c == '"' || c == '\'') {
             size_t j = i + 1;
-            while (j < n && line[j] != (char)c) ++j;
+            while (j < n && line[j] != static_cast<char>(c)) ++j;
             j = std::min(j + 1, n);
             push(out, i, j, kString);
             i = j;
@@ -427,7 +427,7 @@ void SyntaxHighlighter::tokenizeCss(std::string_view line, bool& inBlock, std::v
         }
         if (c == '#') {  // hex color or id selector
             size_t j = i + 1;
-            while (j < n && (std::isxdigit((unsigned char)line[j]) || line[j] == '#' || line[j] == '-')) ++j;
+            while (j < n && (std::isxdigit(static_cast<unsigned char>(line[j])) || line[j] == '#' || line[j] == '-')) ++j;
             push(out, i, j, kNumber);
             i = j;
             continue;
@@ -470,7 +470,7 @@ void SyntaxHighlighter::tokenizeXml(std::string_view line, bool& inBlock, std::v
                 ++i;
             }
             size_t j = i;
-            while (j < n && !std::isspace((unsigned char)line[j]) && line[j] != '>' && line[j] != '/') ++j;
+            while (j < n && !std::isspace(static_cast<unsigned char>(line[j])) && line[j] != '>' && line[j] != '/') ++j;
             push(out, i, j, kKeyword);
             i = j;
             while (i < n && line[i] != '>') {
@@ -481,12 +481,12 @@ void SyntaxHighlighter::tokenizeXml(std::string_view line, bool& inBlock, std::v
                     j = std::min(j + 1, n);
                     push(out, i, j, kString);
                     i = j;
-                } else if (std::isspace((unsigned char)c) || c == '=' || c == '/' || c == '?') {
+                } else if (std::isspace(static_cast<unsigned char>(c)) || c == '=' || c == '/' || c == '?') {
                     push(out, i, i + 1, kPunct);
                     ++i;
                 } else {
                     j = i;
-                    while (j < n && !std::isspace((unsigned char)line[j]) && line[j] != '=' && line[j] != '>' && line[j] != '/') ++j;
+                    while (j < n && !std::isspace(static_cast<unsigned char>(line[j])) && line[j] != '=' && line[j] != '>' && line[j] != '/') ++j;
                     push(out, i, j, kAttr);
                     i = j;
                 }

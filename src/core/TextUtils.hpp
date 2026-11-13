@@ -12,12 +12,12 @@ namespace tex {
 inline std::string asciiLower(std::string_view s) {
     std::string out(s);
     std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c) { return (char)std::tolower(c); });
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return out;
 }
 
 inline char asciiLowerCh(char c) {
-    return (char)std::tolower((unsigned char)c);
+    return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 }
 
 inline bool asciiIEqual(std::string_view a, std::string_view b) {
@@ -43,7 +43,7 @@ inline size_t ciFind(std::string_view haystack, std::string_view needle) {
 // Shared identifier-character definition: letters, digits, '_' and '$'
 // (jadx emits '$' for nested classes, so it is part of identifiers here).
 inline bool isIdentChar(char c) {
-    unsigned char u = (unsigned char)c;
+    unsigned char u = static_cast<unsigned char>(c);
     return std::isalnum(u) || c == '_' || c == '$';
 }
 

@@ -26,14 +26,14 @@ struct Cursor {
     bool avail(size_t n) const { return ok && pos + n <= size; }
     uint16_t u16() {
         if (!avail(2)) { ok = false; return 0; }
-        uint16_t v = (uint16_t)(p[pos] | (p[pos + 1] << 8));
+        uint16_t v = static_cast<uint16_t>(p[pos] | (p[pos + 1] << 8));
         pos += 2;
         return v;
     }
     uint32_t u32() {
         if (!avail(4)) { ok = false; return 0; }
-        uint32_t v = (uint32_t)p[pos] | ((uint32_t)p[pos + 1] << 8) |
-                     ((uint32_t)p[pos + 2] << 16) | ((uint32_t)p[pos + 3] << 24);
+        uint32_t v = static_cast<uint32_t>(p[pos]) | (static_cast<uint32_t>(p[pos + 1]) << 8) |
+                     (static_cast<uint32_t>(p[pos + 2]) << 16) | (static_cast<uint32_t>(p[pos + 3]) << 24);
         pos += 4;
         return v;
     }
@@ -48,19 +48,19 @@ struct Cursor {
 
 void appendUtf8(std::string& out, uint32_t cp) {
     if (cp < 0x80) {
-        out.push_back((char)cp);
+        out.push_back(static_cast<char>(cp));
     } else if (cp < 0x800) {
-        out.push_back((char)(0xC0 | (cp >> 6)));
-        out.push_back((char)(0x80 | (cp & 0x3F)));
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
     } else if (cp < 0x10000) {
-        out.push_back((char)(0xE0 | (cp >> 12)));
-        out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
-        out.push_back((char)(0x80 | (cp & 0x3F)));
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
     } else {
-        out.push_back((char)(0xF0 | (cp >> 18)));
-        out.push_back((char)(0x80 | ((cp >> 12) & 0x3F)));
-        out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
-        out.push_back((char)(0x80 | (cp & 0x3F)));
+        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
     }
 }
 
@@ -79,7 +79,7 @@ bool parseStringPool(const uint8_t* data, size_t size, std::vector<std::string>&
     for (uint32_t i = 0; i < stringCount; ++i) {
         if (!c.avail(4)) return false;
         uint32_t offset = c.u32();
-        size_t base = (size_t)stringsStart + offset;
+        size_t base = static_cast<size_t>(stringsStart) + offset;
         if (base >= size) return false;
         if (utf8) {
             // two varints in a row: char length, then byte length (1-2 bytes each)
@@ -90,7 +90,7 @@ bool parseStringPool(const uint8_t* data, size_t size, std::vector<std::string>&
                 uint8_t b = data[q++];
                 if (b & 0x80) {
                     if (q >= size) return false;
-                    lens[k] = ((size_t)(b & 0x7F) << 8) | data[q++];
+                    lens[k] = (static_cast<size_t>(b & 0x7F) << 8) | data[q++];
                 } else {
                     lens[k] = b;
                 }
@@ -102,20 +102,20 @@ bool parseStringPool(const uint8_t* data, size_t size, std::vector<std::string>&
             size_t p = base;
             // Bounds-check the string data cursor p (not the offsets cursor).
             if (p + 2 > size) return false;
-            uint32_t len = (uint32_t)data[p] | ((uint32_t)data[p + 1] << 8);
+            uint32_t len = static_cast<uint32_t>(data[p]) | (static_cast<uint32_t>(data[p + 1]) << 8);
             p += 2;
             if (len & 0x8000) {
                 if (p + 2 > size) return false;
-                len = ((len & 0x7FFF) << 16) | ((uint32_t)data[p] | ((uint32_t)data[p + 1] << 8));
+                len = ((len & 0x7FFF) << 16) | (static_cast<uint32_t>(data[p]) | (static_cast<uint32_t>(data[p + 1]) << 8));
                 p += 2;
             }
-            if (p + 2 * (size_t)len > size) return false;
+            if (p + 2 * static_cast<size_t>(len) > size) return false;
             std::string s;
             s.reserve(len);
             for (uint32_t j = 0; j < len; ++j) {
-                uint32_t ch = (uint32_t)data[p + 2 * j] | ((uint32_t)data[p + 2 * j + 1] << 8);
+                uint32_t ch = static_cast<uint32_t>(data[p + 2 * j]) | (static_cast<uint32_t>(data[p + 2 * j + 1]) << 8);
                 if (ch >= 0xD800 && ch <= 0xDBFF && j + 1 < len) {
-                    uint32_t lo = (uint32_t)data[p + 2 * (j + 1)] | ((uint32_t)data[p + 2 * (j + 1) + 1] << 8);
+                    uint32_t lo = static_cast<uint32_t>(data[p + 2 * (j + 1)]) | (static_cast<uint32_t>(data[p + 2 * (j + 1) + 1]) << 8);
                     if (lo >= 0xDC00 && lo <= 0xDFFF) {
                         appendUtf8(s, 0x10000 + ((ch - 0xD800) << 10) + (lo - 0xDC00));
                         ++j;
@@ -153,7 +153,7 @@ float complexToFloat(uint32_t data) {
     // AOSP's RADIX_MULTS = {1/2^8, 1/2^15, 1/2^23, 1/2^31}.
     static const float kRadixMults[4] = {0.00390625f, 0.000030517578125f, 0.00000011920928955078125f,
                                          0.0000000004656612873077392578125f};
-    return (float)(int32_t)(data & 0xFFFFFF00u) * kRadixMults[(data >> 4) & 0x3];
+    return static_cast<float>(static_cast<int32_t>(data & 0xFFFFFF00u)) * kRadixMults[(data >> 4) & 0x3];
 }
 
 std::string formatTypedValue(uint8_t type, uint32_t data, const ResourceTable* resources) {
@@ -190,7 +190,7 @@ std::string formatTypedValue(uint8_t type, uint32_t data, const ResourceTable* r
         return buf;
     }
     case 0x10:  // INT_DEC
-        std::snprintf(buf, sizeof buf, "%d", (int32_t)data);
+        std::snprintf(buf, sizeof buf, "%d", static_cast<int32_t>(data));
         return buf;
     case 0x11:  // INT_HEX
         std::snprintf(buf, sizeof buf, "0x%08X", data);
@@ -209,7 +209,7 @@ std::string formatTypedValue(uint8_t type, uint32_t data, const ResourceTable* r
 }  // namespace
 
 bool AxmlDecoder::looksLikeAxml(const std::vector<uint8_t>& bytes) {
-    return bytes.size() >= 8 && bytes[0] == 0x03 && bytes[1] == 0x00;
+    return bytes.size() >= 8 && (bytes[0] | bytes[1] << 8) == kResXmlType;
 }
 
 // -- Event walk ---------------------------------------------------------------
@@ -300,14 +300,14 @@ bool AxmlDecoder::decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visit
 
             size_t attrBase = attrExt + attributeStart;
             for (uint16_t i = 0; i < attributeCount; ++i) {
-                size_t base = attrBase + (size_t)i * attributeSize;
+                size_t base = attrBase + static_cast<size_t>(i) * attributeSize;
                 if (base + 20 > pos + size) { error = "corrupt attributes"; return false; }
                 uint32_t nsIdx = c.peek32(base);
                 uint32_t attrNameIdx = c.peek32(base + 4);
                 uint32_t rawValue = c.peek32(base + 8);
                 // typed value: size u16, res0 u8, dataType u8, data u32
                 uint32_t tvHeader = c.peek32(base + 12);
-                uint8_t dataType = (uint8_t)(tvHeader >> 24);
+                uint8_t dataType = static_cast<uint8_t>(tvHeader >> 24);
                 uint32_t typedData = c.peek32(base + 16);
 
                 std::string name = poolString(pool, attrNameIdx);
@@ -379,11 +379,11 @@ public:
 
     void startElement(const std::string& name, const std::vector<AxmlDecoder::Attr>& attrs) override {
         if (pendingOpenTag_) { out_ += ">\n"; pendingOpenTag_ = false; }
-        out_.append((size_t)depth_ * 4, ' ');
+        out_.append(static_cast<size_t>(depth_) * 4, ' ');
         out_ += "<" + name;
         for (const AxmlDecoder::Attr& a : attrs) {
             out_ += "\n";
-            out_.append((size_t)(depth_ + 1) * 4, ' ');
+            out_.append(static_cast<size_t>(depth_ + 1) * 4, ' ');
             out_ += a.name + "=\"";
             escape(out_, a.value, true);
             out_ += "\"";
@@ -398,7 +398,7 @@ public:
             out_ += " />\n";
             pendingOpenTag_ = false;
         } else {
-            out_.append((size_t)depth_ * 4, ' ');
+            out_.append(static_cast<size_t>(depth_) * 4, ' ');
             out_ += "</" + name + ">\n";
         }
     }

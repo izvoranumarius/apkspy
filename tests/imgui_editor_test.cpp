@@ -47,7 +47,6 @@ static void testCaretOverlay() {
     std::string text = "line one\nline two\nline three";
     bool active = false, gotState = false, gotWindow = false;
     ImVec2 itemMin(0, 0), itemMax(0, 0);
-    int cursor = -1;
     float cx = 0, cy = 0, fontSize = 0;
     float gtX = 0, gtY = 0;
     bool gotGeometry = false;
@@ -95,7 +94,6 @@ static void testCaretOverlay() {
         if (frame >= 3) {
             const ImVec2 textOrigin(itemMin.x + style.FramePadding.x, itemMin.y + style.FramePadding.y);
             const int cursorLocal = state ? state->Stb->cursor : -1;
-            cursor = cursorLocal;
             if (cursorLocal >= 0 && cursorLocal <= (int)text.size()) {
                 std::vector<size_t> offsets;
                 offsets.push_back(0);

@@ -18,26 +18,26 @@ struct Reader {
     const std::vector<uint8_t>& d;
     bool in(size_t off, size_t len) const { return off <= d.size() && len <= d.size() - off; }
     uint8_t u8(size_t o) const { return in(o, 1) ? d[o] : 0; }
-    uint16_t u16(size_t o) const { return in(o, 2) ? (uint16_t)(d[o] | d[o + 1] << 8) : 0; }
+    uint16_t u16(size_t o) const { return in(o, 2) ? static_cast<uint16_t>(d[o] | d[o + 1] << 8) : 0; }
     uint32_t u32(size_t o) const {
-        return in(o, 4) ? (uint32_t)d[o] | (uint32_t)d[o + 1] << 8 | (uint32_t)d[o + 2] << 16 | (uint32_t)d[o + 3] << 24 : 0;
+        return in(o, 4) ? static_cast<uint32_t>(d[o]) | static_cast<uint32_t>(d[o + 1]) << 8 | static_cast<uint32_t>(d[o + 2]) << 16 | static_cast<uint32_t>(d[o + 3]) << 24 : 0;
     }
 };
 
 void appendUtf8(std::string& out, uint32_t cp) {
-    if (cp < 0x80) out.push_back((char)cp);
+    if (cp < 0x80) out.push_back(static_cast<char>(cp));
     else if (cp < 0x800) {
-        out.push_back((char)(0xC0 | (cp >> 6)));
-        out.push_back((char)(0x80 | (cp & 0x3F)));
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
     } else if (cp < 0x10000) {
-        out.push_back((char)(0xE0 | (cp >> 12)));
-        out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
-        out.push_back((char)(0x80 | (cp & 0x3F)));
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
     } else {
-        out.push_back((char)(0xF0 | (cp >> 18)));
-        out.push_back((char)(0x80 | ((cp >> 12) & 0x3F)));
-        out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
-        out.push_back((char)(0x80 | (cp & 0x3F)));
+        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
     }
 }
 
@@ -50,12 +50,12 @@ std::vector<std::string> readPool(const Reader& r, size_t at) {
     const uint32_t flags = r.u32(at + 16);
     const uint32_t stringsStart = r.u32(at + 20);
     const uint16_t headerSize = r.u16(at + 2);
-    if (count > kMaxStrings || !r.in(at, chunkSize) || !r.in(at + headerSize, (size_t)count * 4)) return out;
+    if (count > kMaxStrings || !r.in(at, chunkSize) || !r.in(at + headerSize, static_cast<size_t>(count) * 4)) return out;
     const bool utf8 = (flags & (1u << 8)) != 0;
     const size_t end = at + chunkSize;
     out.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
-        size_t p = at + stringsStart + r.u32(at + headerSize + (size_t)i * 4);
+        size_t p = at + stringsStart + r.u32(at + headerSize + static_cast<size_t>(i) * 4);
         std::string s;
         if (p >= end) {
             out.push_back(s);
@@ -67,7 +67,7 @@ std::vector<std::string> readPool(const Reader& r, size_t at) {
             if (n & 0x80) p++;
             size_t len = r.u8(p++);
             if (len & 0x80) len = ((len & 0x7F) << 8) | r.u8(p++);
-            if (p + len <= end) s.assign((const char*)r.d.data() + p, len);
+            if (p + len <= end) s.assign(reinterpret_cast<const char*>(r.d.data()) + p, len);
         } else {
             size_t len = r.u16(p);
             p += 2;
@@ -157,14 +157,14 @@ std::shared_ptr<const ResourceTable> ResourceTable::parse(const std::vector<uint
                     for (uint32_t e = 0; e < n; ++e) {
                         uint32_t entryIndex = e, off;
                         if (sparse) {
-                            entryIndex = r.u16(idx + (size_t)e * 4);
-                            off = (uint32_t)r.u16(idx + (size_t)e * 4 + 2) * 4;
+                            entryIndex = r.u16(idx + static_cast<size_t>(e) * 4);
+                            off = static_cast<uint32_t>(r.u16(idx + static_cast<size_t>(e) * 4 + 2)) * 4;
                         } else if (offset16) {
-                            const uint16_t o = r.u16(idx + (size_t)e * 2);
+                            const uint16_t o = r.u16(idx + static_cast<size_t>(e) * 2);
                             if (o == 0xFFFF) continue;
-                            off = (uint32_t)o * 4;
+                            off = static_cast<uint32_t>(o) * 4;
                         } else {
-                            off = r.u32(idx + (size_t)e * 4);
+                            off = r.u32(idx + static_cast<size_t>(e) * 4);
                             if (off == 0xFFFFFFFFu) continue;
                         }
                         const size_t ep = c + entriesStart + off;
@@ -173,26 +173,26 @@ std::shared_ptr<const ResourceTable> ResourceTable::parse(const std::vector<uint
                         const uint16_t esize = r.u16(ep);
                         const uint16_t eflags = r.u16(ep + 2);
                         if (eflags & 0x0008) {  // compact entry: key in size, type in flags
-                            entry.key = (uint32_t)(keyBase + esize);
-                            entry.dataType = (uint8_t)(eflags >> 8);
+                            entry.key = static_cast<uint32_t>(keyBase + esize);
+                            entry.dataType = static_cast<uint8_t>(eflags >> 8);
                             entry.data = r.u32(ep + 4);
                         } else {
-                            entry.key = (uint32_t)(keyBase + r.u32(ep + 4));
+                            entry.key = static_cast<uint32_t>(keyBase + r.u32(ep + 4));
                             entry.complex = (eflags & 0x0001) != 0;
                             if (!entry.complex && r.in(ep + esize, 8)) {
                                 entry.dataType = r.u8(ep + esize + 3);
                                 entry.data = r.u32(ep + esize + 4);
                             }
                         }
-                        entry.typeIndex = (uint8_t)std::min<size_t>(255, typeBase + typeId - 1);
+                        entry.typeIndex = static_cast<uint8_t>(std::min<size_t>(255, typeBase + typeId - 1));
                         entry.defaultConfig = isDefault;
-                        const uint32_t id = (pkgId << 24) | ((uint32_t)typeId << 16) | entryIndex;
+                        const uint32_t id = (pkgId << 24) | (static_cast<uint32_t>(typeId) << 16) | entryIndex;
                         auto it = t->entries_.find(id);
                         if (it == t->entries_.end()) {
                             entry.configs = 1;
                             t->entries_.emplace(id, entry);
                         } else {
-                            const uint16_t configs = (uint16_t)std::min(65535, it->second.configs + 1);
+                            const uint16_t configs = static_cast<uint16_t>(std::min(65535, it->second.configs + 1));
                             if (isDefault && !it->second.defaultConfig) it->second = entry;  // default config wins
                             it->second.configs = configs;
                         }
@@ -238,13 +238,13 @@ std::string ResourceTable::render(uint8_t type, uint32_t data, int depth) const 
     case 0x05:
     case 0x06: {
         static const char* units[] = {"px", "dp", "sp", "pt", "in", "mm", "", ""};
-        static const float radix[] = {1.f / (1 << 8), 1.f / (1 << 15), 1.f / (1 << 23), 1.f / ((unsigned)1 << 31)};
-        const float v = (float)(int32_t)(data & 0xFFFFFF00u) * radix[(data >> 4) & 3];
+        static const float radix[] = {1.f / (1 << 8), 1.f / (1 << 15), 1.f / (1 << 23), 1.f / (static_cast<unsigned>(1) << 31)};
+        const float v = static_cast<float>(static_cast<int32_t>(data & 0xFFFFFF00u)) * radix[(data >> 4) & 3];
         if (type == 0x06) std::snprintf(buf, sizeof buf, "%g%%%s", v * 100.f, (data & 0xF) ? "p" : "");
         else std::snprintf(buf, sizeof buf, "%g%s", v, units[data & 0xF]);
         return buf;
     }
-    case 0x10: std::snprintf(buf, sizeof buf, "%d", (int32_t)data); return buf;
+    case 0x10: std::snprintf(buf, sizeof buf, "%d", static_cast<int32_t>(data)); return buf;
     case 0x11: std::snprintf(buf, sizeof buf, "0x%X", data); return buf;
     case 0x12: return data ? "true" : "false";
     case 0x1C: case 0x1D: case 0x1E: case 0x1F:

@@ -59,7 +59,7 @@ public:
         uint32_t offset = 0;             // file offset of the code_item
         // Code unit i (bounds are the caller's job: i < insnsSize). Read
         // byte-wise: a crafted file may misalign the code item.
-        uint16_t unit(uint32_t i) const { return (uint16_t)(insns[2 * i] | (insns[2 * i + 1] << 8)); }
+        uint16_t unit(uint32_t i) const { return static_cast<uint16_t>(insns[2 * i] | (insns[2 * i + 1] << 8)); }
     };
 
     // Parses the header and id tables. `name` is the entry name (classes.dex).

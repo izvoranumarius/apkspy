@@ -27,13 +27,33 @@ public:
 
     Json() = default;
     Json(std::nullptr_t) {}
+    Json(const Json&) = default;
+    Json& operator=(const Json&) = default;
+    // A moved-from Json is null. The implicit move would copy type_ but empty
+    // arr_ / obj_, leaving an Array or Object with no storage that crashes on
+    // any later size() / items() / dump().
+    Json(Json&& o) noexcept
+        : type_(std::exchange(o.type_, Type::Null)), bool_(o.bool_), num_(o.num_), integral_(o.integral_),
+          str_(std::move(o.str_)), arr_(std::move(o.arr_)), obj_(std::move(o.obj_)) {}
+    Json& operator=(Json&& o) noexcept {
+        if (this != &o) {
+            type_ = std::exchange(o.type_, Type::Null);
+            bool_ = o.bool_;
+            num_ = o.num_;
+            integral_ = o.integral_;
+            str_ = std::move(o.str_);
+            arr_ = std::move(o.arr_);
+            obj_ = std::move(o.obj_);
+        }
+        return *this;
+    }
     Json(bool b) : type_(Type::Bool), bool_(b) {}
-    Json(int v) : type_(Type::Number), num_((double)v), integral_(true) {}
-    Json(unsigned v) : type_(Type::Number), num_((double)v), integral_(true) {}
-    Json(long v) : type_(Type::Number), num_((double)v), integral_(true) {}
-    Json(unsigned long v) : type_(Type::Number), num_((double)v), integral_(true) {}
-    Json(long long v) : type_(Type::Number), num_((double)v), integral_(true) {}
-    Json(unsigned long long v) : type_(Type::Number), num_((double)v), integral_(true) {}
+    Json(int v) : type_(Type::Number), num_(static_cast<double>(v)), integral_(true) {}
+    Json(unsigned v) : type_(Type::Number), num_(static_cast<double>(v)), integral_(true) {}
+    Json(long v) : type_(Type::Number), num_(static_cast<double>(v)), integral_(true) {}
+    Json(unsigned long v) : type_(Type::Number), num_(static_cast<double>(v)), integral_(true) {}
+    Json(long long v) : type_(Type::Number), num_(static_cast<double>(v)), integral_(true) {}
+    Json(unsigned long long v) : type_(Type::Number), num_(static_cast<double>(v)), integral_(true) {}
     Json(double v) : type_(Type::Number), num_(v), integral_(false) {}
     Json(const char* s) : type_(Type::String), str_(s ? s : "") {}
     Json(std::string s) : type_(Type::String), str_(std::move(s)) {}
@@ -58,7 +78,7 @@ public:
 
     bool asBool(bool fallback = false) const { return type_ == Type::Bool ? bool_ : fallback; }
     double asNumber(double fallback = 0) const { return type_ == Type::Number ? num_ : fallback; }
-    int64_t asInt(int64_t fallback = 0) const { return type_ == Type::Number ? (int64_t)num_ : fallback; }
+    int64_t asInt(int64_t fallback = 0) const { return type_ == Type::Number ? static_cast<int64_t>(num_) : fallback; }
     const std::string& asString() const;
     std::string asString(const std::string& fallback) const { return isString() ? str_ : fallback; }
 

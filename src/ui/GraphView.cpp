@@ -1,4 +1,6 @@
 #include "ui/GraphView.hpp"
+#include "app/Theme.hpp"
+#include "ui/UiUtil.hpp"
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -15,21 +17,21 @@ constexpr float kPadding = 7.f;
 
 ImU32 edgeColor(EdgeKind kind) {
     switch (kind) {
-    case EdgeKind::Taken: return IM_COL32(80, 200, 120, 255);
-    case EdgeKind::Fallthrough: return IM_COL32(220, 90, 90, 255);
-    case EdgeKind::Exception: return IM_COL32(230, 150, 60, 230);
-    case EdgeKind::Call: return IM_COL32(150, 150, 170, 255);
-    default: return IM_COL32(90, 150, 230, 255);
+    case EdgeKind::Taken: return theme::u32(Col::Green);
+    case EdgeKind::Fallthrough: return theme::u32(Col::Red);
+    case EdgeKind::Exception: return theme::u32(Col::Orange, 0.9f);
+    case EdgeKind::Call: return theme::u32(Col::TextMuted);
+    default: return theme::u32(Col::Blue);
     }
 }
 
-ImU32 withAlpha(ImU32 color, int alpha) { return (color & ~IM_COL32_A_MASK) | ((ImU32)alpha << IM_COL32_A_SHIFT); }
+ImU32 withAlpha(ImU32 color, int alpha) { return (color & ~IM_COL32_A_MASK) | (static_cast<ImU32>(alpha) << IM_COL32_A_SHIFT); }
 
 void dashed(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color, float thickness) {
     const float length = std::hypot(b.x - a.x, b.y - a.y);
-    const int segments = std::max(1, (int)(length / 12.f));
+    const int segments = std::max(1, static_cast<int>(length / 12.f));
     for (int i = 0; i < segments; ++i) {
-        const float t0 = (float)i / (float)segments, t1 = ((float)i + 0.55f) / (float)segments;
+        const float t0 = static_cast<float>(i) / static_cast<float>(segments), t1 = (static_cast<float>(i) + 0.55f) / static_cast<float>(segments);
         dl->AddLine(ImVec2(a.x + (b.x - a.x) * t0, a.y + (b.y - a.y) * t0),
                     ImVec2(a.x + (b.x - a.x) * t1, a.y + (b.y - a.y) * t1), color, thickness);
     }
@@ -70,7 +72,7 @@ void GraphView::ensureLayout(ImFont* font) {
             width = std::max(width, w);
         }
         nodes_[i].w = width + kPadding * 2.f;
-        nodes_[i].h = lineHeight_ * (float)std::max<size_t>(blocks_[i].lines.size(), 1) + kPadding * 2.f;
+        nodes_[i].h = lineHeight_ * static_cast<float>(std::max<size_t>(blocks_[i].lines.size(), 1)) + kPadding * 2.f;
     }
     graphlayout::Options options;
     options.gapX = leftToRight_ ? size * 5.f : size * 2.2f;
@@ -86,8 +88,8 @@ void GraphView::fit(ImVec2 canvas) {
 }
 
 void GraphView::center(int block, ImVec2 canvas, bool top) {
-    if (block < 0 || block >= (int)nodes_.size()) return;
-    const auto& n = nodes_[(size_t)block];
+    if (block < 0 || block >= static_cast<int>(nodes_.size())) return;
+    const auto& n = nodes_[static_cast<size_t>(block)];
     pan_.x = n.x + n.w * 0.5f - canvas.x * 0.5f / zoom_;
     pan_.y = top ? n.y - ImGui::GetFontSize() * 1.5f : n.y + n.h * 0.5f - canvas.y * 0.5f / zoom_;
 }
@@ -156,13 +158,13 @@ GraphView::Result GraphView::draw(const char* id, ImFont* font) {
     const ImVec2 mouseGraph = toGraph(io.MousePos);
     int hoveredBlock = -1;
     if (hovered && !onMap)
-        for (int i = 0; i < (int)nodes_.size(); ++i) {
-            const auto& n = nodes_[(size_t)i];
+        for (int i = 0; i < static_cast<int>(nodes_.size()); ++i) {
+            const auto& n = nodes_[static_cast<size_t>(i)];
             if (mouseGraph.x >= n.x && mouseGraph.x <= n.x + n.w && mouseGraph.y >= n.y && mouseGraph.y <= n.y + n.h) hoveredBlock = i;
         }
     if (hoveredBlock >= 0) {
         result.block = hoveredBlock;
-        result.line = (int)((mouseGraph.y - nodes_[(size_t)hoveredBlock].y - kPadding) / lineHeight_);
+        result.line = static_cast<int>((mouseGraph.y - nodes_[static_cast<size_t>(hoveredBlock)].y - kPadding) / lineHeight_);
     }
     if (hovered && !onMap && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) selected_ = hoveredBlock;
     if (hoveredBlock >= 0 && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) result.activated = true;
@@ -194,54 +196,54 @@ GraphView::Result GraphView::draw(const char* id, ImFont* font) {
         }
 
     const float fontSize = ImGui::GetFontSize() * zoom_;
-    for (int i = 0; i < (int)nodes_.size(); ++i) {
-        const auto& n = nodes_[(size_t)i];
+    for (int i = 0; i < static_cast<int>(nodes_.size()); ++i) {
+        const auto& n = nodes_[static_cast<size_t>(i)];
         const ImVec2 lo = toScreen(n.x, n.y), hi = toScreen(n.x + n.w, n.y + n.h);
         if (hi.x < origin.x || hi.y < origin.y || lo.x > origin.x + canvas.x || lo.y > origin.y + canvas.y) continue;
-        const Block& block = blocks_[(size_t)i];
-        dl->AddRectFilled(lo, hi, block.fill, 3.f * zoom_);
+        const Block& block = blocks_[static_cast<size_t>(i)];
+        dl->AddRectFilled(lo, hi, block.fill.resolve(), 3.f * zoom_);
         const bool selected = i == selected_;
-        dl->AddRect(lo, hi, selected ? IM_COL32(0, 150, 240, 255) : i == hoveredBlock ? IM_COL32(150, 150, 170, 255) : block.border,
+        dl->AddRect(lo, hi, selected ? theme::u32(Col::Accent) : i == hoveredBlock ? theme::u32(Col::TextMuted) : block.border.resolve(),
                     3.f * zoom_, 0, selected ? 2.f : 1.f);
         const float top = lo.y + kPadding * zoom_;
         for (size_t k = 0; k < block.lines.size(); ++k) {
-            const float y = top + (float)k * lineHeight_ * zoom_;
+            const float y = top + static_cast<float>(k) * lineHeight_ * zoom_;
             if (y > origin.y + canvas.y || y + lineHeight_ * zoom_ < origin.y) continue;
             float x = lo.x + kPadding * zoom_;
             if (zoom_ < kTextZoom) {  // too small to read: a bar per line keeps the block's shape
                 float width = 0;
                 for (const Span& span : block.lines[k]) width += font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, span.text.c_str()).x;
-                dl->AddRectFilled(ImVec2(x, y), ImVec2(x + width, y + fontSize * 0.55f), IM_COL32(110, 110, 125, 200));
+                dl->AddRectFilled(ImVec2(x, y), ImVec2(x + width, y + fontSize * 0.55f), theme::u32(Col::TextMuted, 0.6f));
                 continue;
             }
             for (const Span& span : block.lines[k]) {
-                dl->AddText(font, fontSize, ImVec2(x, y), span.color, span.text.c_str());
+                dl->AddText(font, fontSize, ImVec2(x, y), span.color.resolve(), span.text.c_str());
                 x += font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, span.text.c_str()).x;
             }
         }
     }
 
     if (partial) {
-        dl->AddRectFilled(mapMin, ImVec2(mapMin.x + mapSize.x, mapMin.y + mapSize.y), IM_COL32(20, 20, 24, 225));
+        dl->AddRectFilled(mapMin, ImVec2(mapMin.x + mapSize.x, mapMin.y + mapSize.y), theme::u32(Col::PopupBackground, 0.9f));
         for (const auto& n : nodes_)
             dl->AddRectFilled(ImVec2(mapMin.x + n.x * mapScale, mapMin.y + n.y * mapScale),
-                              ImVec2(mapMin.x + (n.x + n.w) * mapScale, mapMin.y + (n.y + n.h) * mapScale), IM_COL32(110, 110, 130, 255));
+                              ImVec2(mapMin.x + (n.x + n.w) * mapScale, mapMin.y + (n.y + n.h) * mapScale), theme::u32(Col::TextMuted, 0.7f));
         const ImVec2 mapEnd(mapMin.x + mapSize.x, mapMin.y + mapSize.y);
         const ImVec2 viewLo(std::clamp(mapMin.x + pan_.x * mapScale, mapMin.x, mapEnd.x), std::clamp(mapMin.y + pan_.y * mapScale, mapMin.y, mapEnd.y));
         const ImVec2 viewHi(std::clamp(mapMin.x + (pan_.x + canvas.x / zoom_) * mapScale, mapMin.x, mapEnd.x),
                             std::clamp(mapMin.y + (pan_.y + canvas.y / zoom_) * mapScale, mapMin.y, mapEnd.y));
-        dl->AddRect(mapMin, mapEnd, IM_COL32(80, 80, 95, 255));
-        dl->AddRect(viewLo, viewHi, IM_COL32(0, 150, 240, 255));
+        dl->AddRect(mapMin, mapEnd, theme::u32(Col::Border));
+        dl->AddRect(viewLo, viewHi, theme::u32(Col::Accent));
     }
     dl->PopClipRect();
 
     ImGui::SetCursorScreenPos(ImVec2(origin.x + 6.f, origin.y + 6.f));
-    if (ImGui::SmallButton("Fit")) fit(canvas);
+    if (ui::smallButton("Fit")) fit(canvas);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Fit the graph (F). Drag to pan, wheel to zoom, double-click to follow.");
     ImGui::SameLine(0.f, 3.f);
     char zoomLabel[16];
-    std::snprintf(zoomLabel, sizeof zoomLabel, "%d%%", (int)std::lround(zoom_ * 100.f));
-    if (ImGui::SmallButton(zoomLabel)) {
+    std::snprintf(zoomLabel, sizeof zoomLabel, "%d%%", static_cast<int>(std::lround(zoom_ * 100.f)));
+    if (ui::smallButton(zoomLabel)) {
         const ImVec2 middle(pan_.x + canvas.x * 0.5f / zoom_, pan_.y + canvas.y * 0.5f / zoom_);
         zoom_ = 1.f;
         pan_ = ImVec2(middle.x - canvas.x * 0.5f, middle.y - canvas.y * 0.5f);

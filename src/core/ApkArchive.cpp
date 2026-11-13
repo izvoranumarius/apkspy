@@ -109,11 +109,11 @@ bool ApkArchive::readEntry(const std::string& entryPath, std::vector<uint8_t>& o
     if (!mz_zip_reader_file_stat(&zip_, index, &stat) || stat.m_is_directory) return false;
     // The declared size comes from the (untrusted) central directory: cap it
     // before allocating, and let miniz verify the real size/CRC.
-    if (stat.m_uncomp_size > maxSize || stat.m_uncomp_size > (uint64_t)SIZE_MAX) return false;
+    if (stat.m_uncomp_size > maxSize || stat.m_uncomp_size > static_cast<uint64_t>(SIZE_MAX)) return false;
     // Decompress straight into the caller's buffer: one allocation sized
     // from the central directory instead of extract-to-heap + a copy (which
     // doubled the peak for every large entry such as classes.dex).
-    out.resize((size_t)stat.m_uncomp_size);
+    out.resize(static_cast<size_t>(stat.m_uncomp_size));
     if (stat.m_uncomp_size == 0) return true;
     if (!mz_zip_reader_extract_to_mem(&zip_, index, out.data(), out.size(), 0)) {
         out.clear();

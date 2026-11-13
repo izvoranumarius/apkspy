@@ -14,7 +14,7 @@ constexpr int kMaxDepth = 128;
 
 // Length of the valid UTF-8 sequence starting at s[i], 0 when invalid.
 size_t utf8SeqLen(std::string_view s, size_t i) {
-    const unsigned char c = (unsigned char)s[i];
+    const unsigned char c = static_cast<unsigned char>(s[i]);
     if (c < 0x80) return 1;
     size_t n = 0;
     uint32_t cp = 0;
@@ -24,7 +24,7 @@ size_t utf8SeqLen(std::string_view s, size_t i) {
     else return 0;
     if (i + n > s.size()) return 0;
     for (size_t k = 1; k < n; ++k) {
-        const unsigned char cc = (unsigned char)s[i + k];
+        const unsigned char cc = static_cast<unsigned char>(s[i + k]);
         if ((cc & 0xC0) != 0x80) return 0;
         cp = (cp << 6) | (cc & 0x3F);
     }
@@ -36,19 +36,19 @@ size_t utf8SeqLen(std::string_view s, size_t i) {
 
 void appendUtf8(std::string& out, uint32_t cp) {
     if (cp < 0x80) {
-        out.push_back((char)cp);
+        out.push_back(static_cast<char>(cp));
     } else if (cp < 0x800) {
-        out.push_back((char)(0xC0 | (cp >> 6)));
-        out.push_back((char)(0x80 | (cp & 0x3F)));
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
     } else if (cp < 0x10000) {
-        out.push_back((char)(0xE0 | (cp >> 12)));
-        out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
-        out.push_back((char)(0x80 | (cp & 0x3F)));
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
     } else {
-        out.push_back((char)(0xF0 | (cp >> 18)));
-        out.push_back((char)(0x80 | ((cp >> 12) & 0x3F)));
-        out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
-        out.push_back((char)(0x80 | (cp & 0x3F)));
+        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
     }
 }
 
@@ -122,7 +122,7 @@ private:
         }
         const std::string num(t_.substr(start, p_ - start));
         const double v = std::strtod(num.c_str(), nullptr);
-        out = integral ? Json((long long)v) : Json(v);
+        out = integral ? Json(static_cast<long long>(v)) : Json(v);
         return true;
     }
     bool hex4(uint32_t& v) {
@@ -131,9 +131,9 @@ private:
         for (int i = 0; i < 4; ++i) {
             const char c = t_[p_++];
             v <<= 4;
-            if (c >= '0' && c <= '9') v |= (uint32_t)(c - '0');
-            else if (c >= 'a' && c <= 'f') v |= (uint32_t)(c - 'a' + 10);
-            else if (c >= 'A' && c <= 'F') v |= (uint32_t)(c - 'A' + 10);
+            if (c >= '0' && c <= '9') v |= static_cast<uint32_t>(c - '0');
+            else if (c >= 'a' && c <= 'f') v |= static_cast<uint32_t>(c - 'a' + 10);
+            else if (c >= 'A' && c <= 'F') v |= static_cast<uint32_t>(c - 'A' + 10);
             else return fail("invalid escape");
         }
         return true;
@@ -146,7 +146,7 @@ private:
                 ++p_;
                 return true;
             }
-            if ((unsigned char)c < 0x20) return fail("control character in string");
+            if (static_cast<unsigned char>(c) < 0x20) return fail("control character in string");
             if (c != '\\') {
                 out.push_back(c);
                 ++p_;
@@ -336,7 +336,7 @@ void Json::dumpTo(std::string& out, bool pretty, int indent) const {
     const auto newline = [&](int level) {
         if (!pretty) return;
         out.push_back('\n');
-        out.append((size_t)level * 2, ' ');
+        out.append(static_cast<size_t>(level) * 2, ' ');
     };
     switch (type_) {
     case Type::Null: out += "null"; break;
@@ -345,7 +345,7 @@ void Json::dumpTo(std::string& out, bool pretty, int indent) const {
         if (!std::isfinite(num_)) {
             out += "null";  // JSON has no NaN/Inf
         } else if (integral_ && std::fabs(num_) < 9.007199254740992e15) {
-            out += std::to_string((long long)num_);
+            out += std::to_string(static_cast<long long>(num_));
         } else {
             char buf[32];
             std::snprintf(buf, sizeof buf, "%.17g", num_);
@@ -394,7 +394,7 @@ namespace json {
 void appendQuoted(std::string& out, std::string_view s) {
     out.push_back('"');
     for (size_t i = 0; i < s.size();) {
-        const unsigned char c = (unsigned char)s[i];
+        const unsigned char c = static_cast<unsigned char>(s[i]);
         if (c < 0x80) {
             switch (c) {
             case '"': out += "\\\""; break;
@@ -410,7 +410,7 @@ void appendQuoted(std::string& out, std::string_view s) {
                     std::snprintf(buf, sizeof buf, "\\u%04x", c);
                     out += buf;
                 } else {
-                    out.push_back((char)c);
+                    out.push_back(static_cast<char>(c));
                 }
             }
             ++i;

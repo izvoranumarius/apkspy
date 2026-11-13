@@ -35,9 +35,9 @@ public:
         const std::streamoff size = in.tellg();
         if (size < 0) return false;
         in.seekg(0, std::ios::beg);
-        out.resize((size_t)size);
+        out.resize(static_cast<size_t>(size));
         if (size > 0 && !in.read(reinterpret_cast<char*>(out.data()), size)) {
-            out.resize((size_t)std::max<std::streamsize>(0, in.gcount()));
+            out.resize(static_cast<size_t>(std::max<std::streamsize>(0, in.gcount())));
             return false;
         }
         return true;
@@ -50,7 +50,7 @@ public:
         std::error_code ec;
         uintmax_t size = std::filesystem::file_size(pathutil::fromUtf8(node.path()), ec);
         if (ec) return false;
-        out = (uint64_t)size;
+        out = static_cast<uint64_t>(size);
         return true;
     }
 };

@@ -1,4 +1,5 @@
 #include "ui/ExplorerPanel.hpp"
+#include "app/Theme.hpp"
 #include "core/TextUtils.hpp"
 #include <cstring>
 #include <string>
@@ -9,20 +10,20 @@
 namespace {
 ImVec4 colorFor(NodeKind kind) {
     switch (kind) {
-    case NodeKind::Folder: return ImVec4(0.86f, 0.86f, 0.86f, 1.f);
-    case NodeKind::Java: return ImVec4(0.31f, 0.79f, 0.69f, 1.f);
-    case NodeKind::Kotlin: return ImVec4(0.55f, 0.72f, 0.95f, 1.f);
-    case NodeKind::Xml: return ImVec4(0.34f, 0.61f, 0.84f, 1.f);
-    case NodeKind::Json: return ImVec4(0.85f, 0.75f, 0.45f, 1.f);
-    case NodeKind::Smali: return ImVec4(0.75f, 0.55f, 0.55f, 1.f);
-    case NodeKind::Groovy: return ImVec4(0.62f, 0.78f, 0.55f, 1.f);
-    case NodeKind::Yaml: return ImVec4(0.65f, 0.70f, 0.55f, 1.f);
-    case NodeKind::Web: return ImVec4(0.70f, 0.62f, 0.85f, 1.f);
-    case NodeKind::Text: return ImVec4(0.81f, 0.57f, 0.47f, 1.f);
-    case NodeKind::Image: return ImVec4(0.71f, 0.81f, 0.66f, 1.f);
-    case NodeKind::Dex: return ImVec4(0.77f, 0.53f, 0.75f, 1.f);
-    case NodeKind::Native: return ImVec4(0.86f, 0.86f, 0.67f, 1.f);
-    default: return ImVec4(0.65f, 0.65f, 0.65f, 1.f);
+    case NodeKind::Folder: return theme::vec(Col::Text);
+    case NodeKind::Java: return theme::vec(Col::Cyan);
+    case NodeKind::Kotlin: return theme::vec(Col::Blue);
+    case NodeKind::Xml: return theme::vec(Col::Blue);
+    case NodeKind::Json: return theme::vec(Col::Yellow);
+    case NodeKind::Smali: return theme::vec(Col::Red);
+    case NodeKind::Groovy: return theme::vec(Col::Green);
+    case NodeKind::Yaml: return theme::vec(Col::Green);
+    case NodeKind::Web: return theme::vec(Col::Purple);
+    case NodeKind::Text: return theme::vec(Col::Orange);
+    case NodeKind::Image: return theme::vec(Col::Green);
+    case NodeKind::Dex: return theme::vec(Col::Pink);
+    case NodeKind::Native: return theme::vec(Col::Yellow);
+    default: return theme::vec(Col::TextMuted);
     }
 }
 
@@ -270,7 +271,7 @@ void ExplorerPanel::walk(Root& root, const TreeNode& node, int depth, bool isRoo
     if (!node.isFolder()) return;
     bool open = isRoot;
     if (ImGuiStorage* storage = ImGui::GetStateStorage())
-        open = storage->GetInt((int)ImGui::GetID(&node), isRoot ? 1 : 0) != 0;
+        open = storage->GetInt(static_cast<int>(ImGui::GetID(&node)), isRoot ? 1 : 0) != 0;
     if (!open) return;
     for (const auto& c : node.children()) walk(root, *c, depth + 1, false);
 }
@@ -283,16 +284,16 @@ void ExplorerPanel::setSelection(std::set<const TreeNode*> nodes) {
 std::set<const TreeNode*> ExplorerPanel::rowRange(const Root* root, const TreeNode* a, const TreeNode* b) const {
     std::set<const TreeNode*> out;
     int ia = -1, ib = -1;
-    for (int i = 0; i < (int)allRows_.size(); ++i) {
-        if (allRows_[(size_t)i].root != root) continue;
-        if (allRows_[(size_t)i].node == a) ia = i;
-        if (allRows_[(size_t)i].node == b) ib = i;
+    for (int i = 0; i < static_cast<int>(allRows_.size()); ++i) {
+        if (allRows_[static_cast<size_t>(i)].root != root) continue;
+        if (allRows_[static_cast<size_t>(i)].node == a) ia = i;
+        if (allRows_[static_cast<size_t>(i)].node == b) ib = i;
     }
     if (ia < 0 || ib < 0) {
         if (b) out.insert(b);
         return out;
     }
-    for (int i = std::min(ia, ib); i <= std::max(ia, ib); ++i) out.insert(allRows_[(size_t)i].node);
+    for (int i = std::min(ia, ib); i <= std::max(ia, ib); ++i) out.insert(allRows_[static_cast<size_t>(i)].node);
     return out;
 }
 
@@ -304,7 +305,7 @@ void ExplorerPanel::drawTree(Root& root) {
     if (revealHere)
         if (ImGuiStorage* storage = ImGui::GetStateStorage())
             for (const TreeNode* folder : Workspace::chainTo(*root.tree, reveal.node))
-                if (folder != reveal.node || folder->isFolder()) storage->SetInt((int)ImGui::GetID(folder), 1);
+                if (folder != reveal.node || folder->isFolder()) storage->SetInt(static_cast<int>(ImGui::GetID(folder)), 1);
     const float startY = ImGui::GetCursorPosY();
     walk(root, *root.tree, 0, true);
     if (revealHere) {
@@ -312,7 +313,7 @@ void ExplorerPanel::drawTree(Root& root) {
             if (rows_[i].node == reveal.node) {
                 setSelection({reveal.node});
                 anchorNode_ = reveal.node;
-                const float y = startY + (float)i * ImGui::GetTextLineHeightWithSpacing();
+                const float y = startY + static_cast<float>(i) * ImGui::GetTextLineHeightWithSpacing();
                 ImGui::SetScrollY(std::max(0.f, y - ImGui::GetWindowHeight() * 0.35f));
                 break;
             }
@@ -323,10 +324,10 @@ void ExplorerPanel::drawTree(Root& root) {
     // Virtualized rendering: only the rows in view are submitted, so huge
     // packages don't pay for thousands of hidden tree nodes per frame.
     ImGuiListClipper clipper;
-    clipper.Begin((int)rows_.size());
+    clipper.Begin(static_cast<int>(rows_.size()));
     while (clipper.Step()) {
         for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-            const Row& row = rows_[(size_t)i];
+            const Row& row = rows_[static_cast<size_t>(i)];
             drawRow(*row.root, *row.node, row.depth, row.isRoot);
         }
     }
@@ -375,15 +376,15 @@ void ExplorerPanel::drawJadxProgress() {
     if (total > 0) {
         std::snprintf(label, sizeof label, "Decompiling %d / %d classes - %d s", jadx.processedCount(), total,
                       jadx.elapsedSeconds());
-        ImGui::ProgressBar((float)jadx.processedCount() / (float)total, ImVec2(-FLT_MIN, 0.f), label);
+        ImGui::ProgressBar(static_cast<float>(jadx.processedCount()) / static_cast<float>(total), ImVec2(-FLT_MIN, 0.f), label);
     } else {
         std::snprintf(label, sizeof label, "Decompiling... %d s", jadx.elapsedSeconds());
         // A negative fraction animates an indeterminate progress bar.
-        ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(-FLT_MIN, 0.f), label);
+        ImGui::ProgressBar(-1.0f * static_cast<float>(ImGui::GetTime()), ImVec2(-FLT_MIN, 0.f), label);
     }
-    ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.35f, 1.f), "Warnings: %d", jadx.warningCount());
+    ImGui::TextColored(theme::vec(Col::Warning), "Warnings: %d", jadx.warningCount());
     ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.35f, 1.f), "Errors: %d", jadx.errorCount());
+    ImGui::TextColored(theme::vec(Col::Error), "Errors: %d", jadx.errorCount());
     ImGui::SameLine();
 
     if (ImGui::Button("Cancel")) workspace_.cancelDecompile();
@@ -403,13 +404,13 @@ void ExplorerPanel::drawRow(Root& root, const TreeNode& node, int depth, bool is
     // reproduces exactly where TreeNodeBehavior starts the text.
     const float iconSize = ImGui::GetTextLineHeight();
     const float spaceW = ImGui::CalcTextSize(" ").x;
-    const int padSpaces = (int)((iconSize + ImGui::GetStyle().ItemInnerSpacing.x) / spaceW) + 1;
+    const int padSpaces = static_cast<int>((iconSize + ImGui::GetStyle().ItemInnerSpacing.x) / spaceW) + 1;
     char label[512];
     std::snprintf(label, sizeof label, "%*s%s", padSpaces, "", node.name().c_str());
 
     // Flat rendering: the depth indent is applied directly to the row's
     // cursor instead of nested TreePush/TreePop (which clipper rows can't do).
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (float)depth * ImGui::GetStyle().IndentSpacing);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + static_cast<float>(depth) * ImGui::GetStyle().IndentSpacing);
     const ImVec2 start = ImGui::GetCursorScreenPos();
     ImGui::TreeNodeEx(&node, flags, "%s", label);
 
@@ -560,7 +561,7 @@ void ExplorerPanel::drawExportProgress() {
     const ExportJob& job = workspace_.exportJob();
     if (!job.busy()) return;
     ImGui::Separator();
-    const float frac = job.total() > 0 ? (float)job.done() / (float)job.total() : 0.f;
+    const float frac = job.total() > 0 ? static_cast<float>(job.done()) / static_cast<float>(job.total()) : 0.f;
     char label[256];
     std::snprintf(label, sizeof label, "%s (%d/%d)", job.currentName().c_str(), job.done(), job.total());
     ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0.f), label);

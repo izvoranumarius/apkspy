@@ -519,7 +519,7 @@ int main() {
 
         SymbolIndex idx;
         std::shared_ptr<ContentSource> disk = std::make_shared<DiskSource>();
-        std::vector<SymbolIndex::File> files = {
+        std::vector<SymbolIndex::File> indexFiles = {
             {(src / "com" / "example" / "Foo.java").string(), false},
             {(src / "com" / "example" / "Baz.java").string(), false},
             {(src / "com" / "example" / "Dup.java").string(), false},
@@ -527,7 +527,7 @@ int main() {
             {(src / "com" / "example" / "sub" / "Item.java").string(), false},
             {(src / "com" / "example" / "Outer.java").string(), false},
         };
-        idx.ensureIndex("t", 1, files, disk);
+        idx.ensureIndex("t", 1, indexFiles, disk);
         for (int i = 0; i < 500 && idx.building("t"); ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(!idx.building("t"), "index build finished");
@@ -552,9 +552,9 @@ int main() {
 
         // ensureIndex with the same epoch is a no-op (table kept); a bumped
         // epoch triggers a rebuild that still resolves.
-        idx.ensureIndex("t", 1, files, disk);
+        idx.ensureIndex("t", 1, indexFiles, disk);
         CHECK(idx.resolve("t", "Foo") == fooPath, "same epoch keeps the table");
-        idx.ensureIndex("t", 2, files, disk);
+        idx.ensureIndex("t", 2, indexFiles, disk);
         for (int i = 0; i < 500 && idx.building("t"); ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(idx.resolve("t", "com.example.sub.Util") == (src / "com" / "example" / "sub" / "Util.java").string(),
@@ -676,7 +676,7 @@ int main() {
         CHECK(s.issuer == "ApkSpy Issuer", "issuer CN extracted");
         // Used by the signing tests below via the same helper (declared in this
         // scope, so the helpers stay local to the test).
-        certBuilder = [derSeq, derInt, derOid, derStr, cnName, alg = derSeq(derOid({0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B}))](
+        certBuilder = [derSeq, derInt, cnName, alg = derSeq(derOid({0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B}))](
                           const std::string& subject) mutable -> std::vector<uint8_t> {
             std::vector<uint8_t> tbs2;
             const auto version = derSeq({derInt(2)}, 0xA0);
@@ -1373,8 +1373,8 @@ int main() {
             std::vector<uint8_t> bytes = icoWrap({bmpFrame(n, rgba)});
             std::vector<ico::Image> frames;
             std::string err;
-            const bool ok = ico::decode(bytes, frames, err);
-            CHECK(ok, "32bpp BMP frame decodes");
+            const bool decoded = ico::decode(bytes, frames, err);
+            CHECK(decoded, "32bpp BMP frame decodes");
             CHECK(frames.size() == 1 && frames[0].width == n && frames[0].height == n, "frame keeps its size");
             CHECK(frames[0].rgba[0] == 0 && frames[0].rgba[1] == 0 && frames[0].rgba[2] == 200 && frames[0].rgba[3] == 255,
                   "top-left pixel (row 0)");
@@ -1509,8 +1509,8 @@ int main() {
                 }
             }
             std::vector<uint8_t> idat(128);
-            mz_ulong idatLen = idat.size();
-            CHECK(mz_compress(idat.data(), &idatLen, raw.data(), raw.size()) == MZ_OK, "test PNG payload compresses");
+            mz_ulong idatLen = static_cast<mz_ulong>(idat.size());
+            CHECK(mz_compress(idat.data(), &idatLen, raw.data(), static_cast<mz_ulong>(raw.size())) == MZ_OK, "test PNG payload compresses");
             idat.resize(idatLen);
             std::vector<uint8_t> png{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
             for (uint8_t b : chunk("IHDR", ihdr)) png.push_back(b);
@@ -1564,9 +1564,9 @@ int main() {
                 std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
                 std::vector<ico::Image> frames;
                 std::string err;
-                const bool ok = !bytes.empty() && ico::decode(bytes, frames, err) && !frames.empty();
-                CHECK(ok, "shipped assets/favicon.ico decodes");
-                if (ok) {
+                const bool shippedOk = !bytes.empty() && ico::decode(bytes, frames, err) && !frames.empty();
+                CHECK(shippedOk, "shipped assets/favicon.ico decodes");
+                if (shippedOk) {
                     bool sizesSane = true;
                     for (const ico::Image& f : frames)
                         sizesSane = sizesSane && f.width > 0 && f.height > 0 &&

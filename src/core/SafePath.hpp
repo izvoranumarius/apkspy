@@ -17,8 +17,8 @@ inline bool isReservedDevice(std::string_view stem) {
         if (a.size() != b.size()) return false;
         for (size_t i = 0; i < a.size(); ++i) {
             char ca = a[i], cb = b[i];
-            if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
-            if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+            if (ca >= 'A' && ca <= 'Z') ca = static_cast<char>(ca - 'A' + 'a');
+            if (cb >= 'A' && cb <= 'Z') cb = static_cast<char>(cb - 'A' + 'a');
             if (ca != cb) return false;
         }
         return true;
@@ -42,7 +42,7 @@ inline bool segment(std::string_view name, std::string& out) {
     out.clear();
     if (name.empty()) return false;
     for (char c : name) {
-        unsigned char u = (unsigned char)c;
+        unsigned char u = static_cast<unsigned char>(c);
         if (u < 0x20 || u == 0x7F || c == '\\' || c == ':') out += '_';
         else out += c;
     }

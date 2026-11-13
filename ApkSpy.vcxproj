@@ -209,6 +209,7 @@
     <ClCompile Include="src\analysis\ApkAnalysis.cpp" />
     <ClCompile Include="src\analysis\AnalysisService.cpp" />
     <ClCompile Include="src\app\Theme.cpp" />
+    <ClCompile Include="src\app\ThemePresets.cpp" />
     <ClCompile Include="src\app\WindowFrame.cpp" />
     <ClCompile Include="src\app\main.cpp" />
     <ClCompile Include="src\core\ApkArchive.cpp" />

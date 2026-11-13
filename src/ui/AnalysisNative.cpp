@@ -13,13 +13,11 @@
 
 namespace {
 
-const ImVec4 kDim(0.6f, 0.6f, 0.6f, 1.f);
-const ImVec4 kAccent(0.55f, 0.75f, 0.95f, 1.f);
-const ImVec4 kWarn(0.95f, 0.65f, 0.35f, 1.f);
-const ImVec4 kString(0.6f, 0.85f, 0.5f, 1.f);
-const ImVec4 kJump(0.95f, 0.8f, 0.4f, 1.f);
-const ImVec4 kRet(0.95f, 0.5f, 0.5f, 1.f);
-const ImVec4 kLabel(0.85f, 0.7f, 1.f, 1.f);
+ImVec4 kDim() { return theme::vec(Col::TextMuted); }
+ImVec4 kAccent() { return theme::vec(Col::Info); }
+ImVec4 kWarn() { return theme::vec(Col::Warning); }
+ImVec4 kString() { return theme::vec(Col::SynString); }
+ImVec4 kLabel() { return theme::vec(Col::Purple); }
 
 template <typename T>
 bool ready(std::future<T>& f) {
@@ -28,27 +26,28 @@ bool ready(std::future<T>& f) {
 
 std::string hex(uint64_t v) {
     char b[32];
-    std::snprintf(b, sizeof b, "0x%llx", (unsigned long long)v);
+    std::snprintf(b, sizeof b, "0x%llx", static_cast<unsigned long long>(v));
     return b;
 }
 
-ImVec4 mnemonicColor(const arm64::Insn& in) {
+Col mnemonicToken(const arm64::Insn& in) {
     switch (in.flow) {
     case arm64::Flow::Call:
-    case arm64::Flow::IndirectCall: return kAccent;
+    case arm64::Flow::IndirectCall: return Col::Info;
     case arm64::Flow::Jump:
     case arm64::Flow::CondJump:
-    case arm64::Flow::IndirectJump: return kJump;
+    case arm64::Flow::IndirectJump: return Col::Yellow;
     case arm64::Flow::Return:
-    case arm64::Flow::Trap: return kRet;
-    default: return in.known ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : kDim;
+    case arm64::Flow::Trap: return Col::Red;
+    default: return in.known ? Col::Text : Col::TextMuted;
     }
 }
+ImVec4 mnemonicColor(const arm64::Insn& in) { return theme::vec(mnemonicToken(in)); }
 
 ImVec4 functionColor(const NativeCode::Function& f) {
-    if (f.name.rfind("Java_", 0) == 0 || f.name == "JNI_OnLoad" || f.name == "JNI_OnUnload") return kString;
-    if (f.kind == NativeCode::FunctionKind::Plt) return kDim;
-    if (f.exported) return kAccent;
+    if (f.name.rfind("Java_", 0) == 0 || f.name == "JNI_OnLoad" || f.name == "JNI_OnUnload") return kString();
+    if (f.kind == NativeCode::FunctionKind::Plt) return kDim();
+    if (f.exported) return kAccent();
     return ImGui::GetStyleColorVec4(ImGuiCol_Text);
 }
 
@@ -91,7 +90,7 @@ void AnalysisPanel::ensureNativeCode(Root& apk) {
     if (native_ || nativeLoad_.valid() || !nativeError_.empty() || selectedLib_ < 0 || !elf_) return;
     nativeCancel_ = std::make_shared<std::atomic<bool>>(false);
     AnalysisService* service = &workspace_.analysis();
-    const std::string apkPath = apk.apkPath, entry = libs_[(size_t)selectedLib_].path;
+    const std::string apkPath = apk.apkPath, entry = libs_[static_cast<size_t>(selectedLib_)].path;
     auto cancel = nativeCancel_;
     nativeLoad_ = std::async(std::launch::async, [service, apkPath, entry, cancel] {
         std::string err;
@@ -158,7 +157,7 @@ void AnalysisPanel::drawNativeCode(Root& apk) {
         const bool byAddr = flt.size() > 2 && flt[0] == '0' && (flt[1] == 'x' || flt[1] == 'X') &&
                             (addr = std::strtoull(flt.c_str() + 2, nullptr, 16)) != 0;
         const auto& fns = nc.functions();
-        for (uint32_t i = 0; i < (uint32_t)fns.size(); ++i) {
+        for (uint32_t i = 0; i < static_cast<uint32_t>(fns.size()); ++i) {
             const auto& f = fns[i];
             if (byAddr) {
                 if (addr >= f.addr && addr < f.addr + std::max<uint64_t>(f.size, 4)) funcRows_.push_back(i);
@@ -170,17 +169,17 @@ void AnalysisPanel::drawNativeCode(Root& apk) {
     }
     ImGui::BeginChild("##fns", ImVec2(0, 0));
     ImGuiListClipper clipper;
-    clipper.Begin((int)funcRows_.size());
+    clipper.Begin(static_cast<int>(funcRows_.size()));
     while (clipper.Step())
         for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; ++r) {
-            const auto& f = nc.functions()[funcRows_[(size_t)r]];
+            const auto& f = nc.functions()[funcRows_[static_cast<size_t>(r)]];
             const std::string name = NativeCode::displayName(f);
             ImGui::PushID(r);
             ImGui::PushStyleColor(ImGuiCol_Text, functionColor(f));
             if (ImGui::Selectable(name.c_str(), f.addr == funcAddr_ && sel_ == Selection::Native)) gotoNative(f.addr);
             ImGui::PopStyleColor();
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s\n%s  %llu bytes%s%s", f.name.c_str(), hex(f.addr).c_str(), (unsigned long long)f.size,
+                ImGui::SetTooltip("%s\n%s  %llu bytes%s%s", f.name.c_str(), hex(f.addr).c_str(), static_cast<unsigned long long>(f.size),
                                   f.exported ? "  exported" : "",
                                   f.kind == NativeCode::FunctionKind::Plt ? "  import stub"
                                   : f.kind == NativeCode::FunctionKind::Discovered ? "  (found as a call target)"
@@ -208,7 +207,7 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
         return;
     }
     ImGui::BeginDisabled(nativeBack_.empty());
-    if (ImGui::SmallButton("<") || (!nativeBack_.empty() && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+    if (ui::smallButton("<") || (!nativeBack_.empty() && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
                                     ImGui::IsKeyPressed(ImGuiKey_Backspace) && !ImGui::GetIO().WantTextInput)) {
         const uint64_t back = nativeBack_.back();
         nativeBack_.pop_back();
@@ -227,7 +226,7 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
                            " bytes)  " + nc.elf().name() + "\n";
         for (const auto& x : listing_) {
             char row[48];
-            std::snprintf(row, sizeof row, "%08llx  %-8s ", (unsigned long long)x.insn.addr, x.insn.mnemonic.c_str());
+            std::snprintf(row, sizeof row, "%08llx  %-8s ", static_cast<unsigned long long>(x.insn.addr), x.insn.mnemonic.c_str());
             text += row + x.insn.operands;
             if (!x.targetName.empty()) text += " <" + x.targetName + ">";
             if (!x.comment.empty()) text += "    ; " + x.comment;
@@ -235,16 +234,16 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
         }
         int line = 0;
         for (size_t k = 0; k < listing_.size(); ++k)
-            if (listing_[k].insn.addr == focusAddr_) line = (int)k + 1;
+            if (listing_[k].insn.addr == focusAddr_) line = static_cast<int>(k) + 1;
         std::string file = NativeCode::displayName(*f);
         for (char& c : file)
-            if (!std::isalnum((unsigned char)c) && c != '_' && c != '.' && c != '@') c = '_';
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '.' && c != '@') c = '_';
         if (file.size() > 80) file.resize(80);
         workspace_.openGenerated(libsGroup_, "native/" + nc.elf().name() + "/" + file + "_" + hex(f->addr) + ".s",
                                  file + ".s", std::move(text), line);
     };
     const std::string title = NativeCode::displayName(*f);
-    ui::wrappedColored(kAccent, title + "   " + hex(f->addr) + "  (" + std::to_string(f->size) + " bytes)");
+    ui::wrappedColored(kAccent(), title + "   " + hex(f->addr) + "  (" + std::to_string(f->size) + " bytes)");
     static const char* const kModes[] = {"Listing", "Graph", "Calls"};
     ImGui::PushID("nmode");
     ui::segmented(kModes, 3, nativeMode_);
@@ -265,7 +264,7 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
         scrollToFocus_ = false;
         for (size_t i = 0; i < listing_.size(); ++i)
             if (listing_[i].insn.addr == focusAddr_) {
-                ImGui::SetScrollY(std::max(0.f, (float)i * lh - ImGui::GetWindowHeight() * 0.3f));
+                ImGui::SetScrollY(std::max(0.f, static_cast<float>(i) * lh - ImGui::GetWindowHeight() * 0.3f));
                 break;
             }
     }
@@ -281,10 +280,10 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
             (a.kind == Annotation::Kind::Comment ? commentAt : bookmarkAt)[a.addr] = &a;
     if (ImGui::IsWindowFocused()) nativeShortcuts(nc, listing_);
     ImGuiListClipper clip;
-    clip.Begin((int)listing_.size(), lh);
+    clip.Begin(static_cast<int>(listing_.size()), lh);
     while (clip.Step())
         for (int i = clip.DisplayStart; i < clip.DisplayEnd; ++i) {
-            const NativeCode::Line& l = listing_[(size_t)i];
+            const NativeCode::Line& l = listing_[static_cast<size_t>(i)];
             ImGui::PushID(i);
             const float x0 = ImGui::GetCursorPosX();
             if (ImGui::Selectable("##row", l.insn.addr == focusAddr_, ImGuiSelectableFlags_AllowDoubleClick,
@@ -327,28 +326,28 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
             }
             ImGui::SameLine(x0);
             char addr[24];
-            std::snprintf(addr, sizeof addr, shortAddr ? "%06llx" : "%08llx", (unsigned long long)l.insn.addr);
-            ImGui::TextColored(bookmarkAt.count(l.insn.addr) ? ui::kBookmarkColor : l.label ? kLabel : kDim, "%s", addr);
+            std::snprintf(addr, sizeof addr, shortAddr ? "%06llx" : "%08llx", static_cast<unsigned long long>(l.insn.addr));
+            ImGui::TextColored(bookmarkAt.count(l.insn.addr) ? ui::kBookmarkColor() : l.label ? kLabel() : kDim(), "%s", addr);
             ImGui::SameLine(x0 + addrW);
             ImGui::TextColored(mnemonicColor(l.insn), "%s", l.insn.mnemonic.c_str());
             ImGui::SameLine(x0 + addrW + mnemW);
             ImGui::TextUnformatted(l.insn.operands.c_str());
             if (!l.targetName.empty()) {
                 ImGui::SameLine();
-                ImGui::TextColored(kAccent, "<%s>", l.targetName.c_str());
+                ImGui::TextColored(kAccent(), "<%s>", l.targetName.c_str());
             }
             if (!l.comment.empty()) {
                 ImGui::SameLine();
-                ImGui::TextColored(l.comment.front() == '"' ? kString : kDim, "; %s", l.comment.c_str());
+                ImGui::TextColored(l.comment.front() == '"' ? kString() : kDim(), "; %s", l.comment.c_str());
             }
             if (auto note = commentAt.find(l.insn.addr); note != commentAt.end()) {
                 ImGui::SameLine(0, ImGui::GetFontSize());
-                ImGui::TextColored(ui::kNoteColor, "// %s", ui::noteFirstLine(note->second->text).c_str());
+                ImGui::TextColored(ui::kNoteColor(), "// %s", ui::noteFirstLine(note->second->text).c_str());
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", note->second->text.c_str());
             }
             ImGui::PopID();
         }
-    if (listing_.size() >= 50000) ImGui::TextColored(kWarn, "(listing truncated at 50000 instructions)");
+    if (listing_.size() >= 50000) ImGui::TextColored(kWarn(), "(listing truncated at 50000 instructions)");
     ImGui::EndChild();
     ImGui::PopFont();
 }
@@ -366,7 +365,6 @@ void AnalysisPanel::nativeShortcuts(const NativeCode& nc, const std::vector<Nati
 }
 
 void AnalysisPanel::buildNativeCfg(const NativeCode& nc, const NativeCode::Function& f) {
-    const auto u32 = [](const ImVec4& c) { return ImGui::ColorConvertFloat4ToU32(c); };
     nativeCfg_ = nc.controlFlow(f, 50000);
     const Annotations& notes = workspace_.annotations();
     Annotation location;
@@ -380,27 +378,27 @@ void AnalysisPanel::buildNativeCfg(const NativeCode& nc, const NativeCode::Funct
         const auto& block = nativeCfg_.blocks[b];
         for (size_t i = block.firstLine; i < block.firstLine + block.lineCount; ++i) {
             const NativeCode::Line& l = nativeCfg_.lines[i];
-            if (l.insn.addr == focusAddr_) focusBlock = (int)b;
+            if (l.insn.addr == focusAddr_) focusBlock = static_cast<int>(b);
             char addr[24];
-            std::snprintf(addr, sizeof addr, "%06llx  ", (unsigned long long)l.insn.addr);
+            std::snprintf(addr, sizeof addr, "%06llx  ", static_cast<unsigned long long>(l.insn.addr));
             char mnemonic[24];
             std::snprintf(mnemonic, sizeof mnemonic, "%-7s ", l.insn.mnemonic.c_str());
             location.addr = l.insn.addr;
             GraphView::Line line;
-            line.push_back({addr, u32(notes.at(Annotation::Kind::Bookmark, location) ? ui::kBookmarkColor : l.label ? kLabel : kDim)});
-            line.push_back({mnemonic, u32(mnemonicColor(l.insn))});
-            line.push_back({l.insn.operands, IM_COL32(212, 212, 212, 255)});
-            if (!l.targetName.empty()) line.push_back({" <" + l.targetName + ">", u32(kAccent)});
-            if (!l.comment.empty()) line.push_back({"  ; " + l.comment, u32(l.comment.front() == '"' ? kString : kDim)});
+            line.push_back({addr, notes.at(Annotation::Kind::Bookmark, location) ? ui::kBookmarkToken : l.label ? Col::Purple : Col::TextMuted});
+            line.push_back({mnemonic, mnemonicToken(l.insn)});
+            line.push_back({l.insn.operands, Col::Text});
+            if (!l.targetName.empty()) line.push_back({" <" + l.targetName + ">", Col::Info});
+            if (!l.comment.empty()) line.push_back({"  ; " + l.comment, l.comment.front() == '"' ? Col::SynString : Col::TextMuted});
             if (const Annotation* note = notes.at(Annotation::Kind::Comment, location))
-                line.push_back({"  // " + ui::noteFirstLine(note->text), u32(ui::kNoteColor)});
+                line.push_back({"  // " + ui::noteFirstLine(note->text), ui::kNoteToken});
             blocks[b].lines.push_back(std::move(line));
         }
-        if (b == 0) blocks[b].border = IM_COL32(90, 190, 120, 255);
-        else if (block.exit) blocks[b].border = IM_COL32(200, 120, 120, 255);
+        if (b == 0) blocks[b].border = Col::Green;
+        else if (block.exit) blocks[b].border = Col::Red;
         for (size_t k = 0; k < block.successors.size(); ++k) {
             graphlayout::Edge e;
-            e.from = (int)b;
+            e.from = static_cast<int>(b);
             e.to = block.successors[k];
             e.kind = !block.conditional ? graphlayout::EdgeKind::Jump
                      : k == 0           ? graphlayout::EdgeKind::Taken
@@ -416,20 +414,20 @@ void AnalysisPanel::buildNativeCalls(const NativeCode& nc, const NativeCode::Fun
     constexpr size_t kMaxNeighbours = 40;
     nativeCallNodes_ = {f.addr};
     std::vector<GraphView::Block> blocks(1);
-    blocks[0].lines.push_back({{NativeCode::displayName(f), IM_COL32(255, 255, 255, 255)}});
-    blocks[0].border = IM_COL32(0, 150, 240, 255);
-    blocks[0].fill = IM_COL32(32, 48, 66, 255);
+    blocks[0].lines.push_back({{NativeCode::displayName(f), Col::Text}});
+    blocks[0].border = Col::Accent;
+    blocks[0].fill = Col::RowSelected;
     std::vector<graphlayout::Edge> edges;
     const auto add = [&](const NativeCode::Function* other, bool caller) {
         if (!other) return;
         const auto seen = std::find(nativeCallNodes_.begin(), nativeCallNodes_.end(), other->addr);
-        const int index = (int)(seen - nativeCallNodes_.begin());
+        const int index = static_cast<int>(seen - nativeCallNodes_.begin());
         if (seen == nativeCallNodes_.end()) {
             if (nativeCallNodes_.size() > kMaxNeighbours * 2) return;
             nativeCallNodes_.push_back(other->addr);
             GraphView::Block block;
             const bool import = other->kind == NativeCode::FunctionKind::Plt;
-            block.lines.push_back({{NativeCode::displayName(*other), import ? IM_COL32(150, 150, 150, 255) : IM_COL32(212, 212, 212, 255)}});
+            block.lines.push_back({{NativeCode::displayName(*other), import ? Col::TextMuted : Col::Text}});
             blocks.push_back(std::move(block));
         }
         graphlayout::Edge e;
@@ -459,13 +457,13 @@ void AnalysisPanel::drawNativeGraph(const NativeCode& nc, const NativeCode::Func
         ImGui::TextDisabled("No direct callers or callees found. Calls through function pointers are not visible here.");
     const GraphView::Result r = nativeGraph_.draw("##nativeGraph", Theme::monoFont());
     if (nativeMode_ == 2) {
-        if (r.activated && r.block >= 0 && r.block < (int)nativeCallNodes_.size()) gotoNative(nativeCallNodes_[(size_t)r.block]);
+        if (r.activated && r.block >= 0 && r.block < static_cast<int>(nativeCallNodes_.size())) gotoNative(nativeCallNodes_[static_cast<size_t>(r.block)]);
         return;
     }
     const NativeCode::Line* line = nullptr;
-    if (r.block >= 0 && r.block < (int)nativeCfg_.blocks.size() && r.line >= 0 &&
-        r.line < (int)nativeCfg_.blocks[(size_t)r.block].lineCount)
-        line = &nativeCfg_.lines[nativeCfg_.blocks[(size_t)r.block].firstLine + (size_t)r.line];
+    if (r.block >= 0 && r.block < static_cast<int>(nativeCfg_.blocks.size()) && r.line >= 0 &&
+        r.line < static_cast<int>(nativeCfg_.blocks[static_cast<size_t>(r.block)].lineCount))
+        line = &nativeCfg_.lines[nativeCfg_.blocks[static_cast<size_t>(r.block)].firstLine + static_cast<size_t>(r.line)];
     if (line && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) focusAddr_ = line->insn.addr;
     if (r.activated && line) {
         if (line->insn.hasTarget && line->insn.flow != arm64::Flow::Normal) {
@@ -505,14 +503,14 @@ void AnalysisPanel::drawNativeStrings(Root& apk) {
     ImGui::TableSetupColumn("Used in", ImGuiTableColumnFlags_WidthStretch, 1.5f);
     ImGui::TableHeadersRow();
     ImGuiListClipper clipper;
-    clipper.Begin((int)nstrRows_.size());
+    clipper.Begin(static_cast<int>(nstrRows_.size()));
     while (clipper.Step())
         for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-            const auto& s = nstrRows_[(size_t)i];
+            const auto& s = nstrRows_[static_cast<size_t>(i)];
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::PushID(i);
-            ImGui::PushStyleColor(ImGuiCol_Text, kString);
+            ImGui::PushStyleColor(ImGuiCol_Text, kString());
             const bool open = ImGui::Selectable(s.text.c_str(), false,
                                                 ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick) &&
                               ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);

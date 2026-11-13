@@ -29,7 +29,7 @@ std::string extOf(const std::string& name) {
     size_t dot = name.find_last_of('.');
     if (dot == std::string::npos) return {};
     std::string ext = name.substr(dot);  // includes the dot
-    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+    for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return ext;
 }
 
@@ -49,7 +49,7 @@ bool hiconToRgba(HICON icon, std::vector<uint8_t>& px, int& w, int& h) {
         bi.bmiHeader.biPlanes = 1;
         bi.bmiHeader.biBitCount = 32;
         bi.bmiHeader.biCompression = BI_RGB;
-        px.assign((size_t)w * h * 4, 0);
+        px.assign(static_cast<size_t>(w) * h * 4, 0);
         HDC dc = GetDC(nullptr);
         if (GetDIBits(dc, ii.hbmColor, 0, h, px.data(), &bi, DIB_RGB_COLORS) == h) {
             ok = true;
@@ -61,7 +61,7 @@ bool hiconToRgba(HICON icon, std::vector<uint8_t>& px, int& w, int& h) {
             if (!hasAlpha && ii.hbmMask) {
                 // Legacy 16/24-bit icons keep transparency in the 1bpp mask.
                 const int stride = ((w + 31) / 32) * 4;
-                std::vector<uint8_t> mask((size_t)stride * h, 0);
+                std::vector<uint8_t> mask(static_cast<size_t>(stride) * h, 0);
                 BITMAPINFO mb{};
                 mb.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
                 mb.bmiHeader.biWidth = w;
@@ -72,8 +72,8 @@ bool hiconToRgba(HICON icon, std::vector<uint8_t>& px, int& w, int& h) {
                 if (GetDIBits(dc, ii.hbmMask, 0, h, mask.data(), &mb, DIB_RGB_COLORS) == h)
                     for (int y = 0; y < h; ++y)
                         for (int x = 0; x < w; ++x)
-                            px[((size_t)y * w + x) * 4 + 3] =
-                                (mask[(size_t)y * stride + x / 8] & (0x80 >> (x % 8))) ? 0 : 255;
+                            px[(static_cast<size_t>(y) * w + x) * 4 + 3] =
+                                (mask[static_cast<size_t>(y) * stride + x / 8] & (0x80 >> (x % 8))) ? 0 : 255;
             }
         }
         ReleaseDC(nullptr, dc);
@@ -86,7 +86,7 @@ bool hiconToRgba(HICON icon, std::vector<uint8_t>& px, int& w, int& h) {
 
 ImTextureID ShellIcons::textureFor(const std::string& key, const wchar_t* probeName, unsigned fileAttrs) {
     auto it = cache_.find(key);
-    if (it != cache_.end()) return it->second ? (ImTextureID)(uintptr_t)it->second->id() : 0;
+    if (it != cache_.end()) return it->second ? static_cast<ImTextureID>(it->second->id()) : 0;
 
     SHFILEINFOW sfi{};
     std::unique_ptr<Texture> tex;
@@ -102,7 +102,7 @@ ImTextureID ShellIcons::textureFor(const std::string& key, const wchar_t* probeN
         DestroyIcon(sfi.hIcon);
     }
     cache_[key] = std::move(tex);  // failures are cached too (as null)
-    return cache_[key] ? (ImTextureID)(uintptr_t)cache_[key]->id() : 0;
+    return cache_[key] ? static_cast<ImTextureID>(cache_[key]->id()) : 0;
 }
 
 ImTextureID ShellIcons::iconFor(const TreeNode& node, bool apkRoot) {

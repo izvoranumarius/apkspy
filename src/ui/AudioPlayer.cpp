@@ -37,7 +37,7 @@ struct AudioPlayer::Impl {
     static void callback(ma_device* device, void* out, const void*, ma_uint32 frames) {
         auto* self = static_cast<Impl*>(device->pUserData);
         float* dst = static_cast<float*>(out);
-        const size_t samples = (size_t)frames * (size_t)self->channels;
+        const size_t samples = static_cast<size_t>(frames) * static_cast<size_t>(self->channels);
         if (!self->playing.load()) {
             std::fill(dst, dst + samples, 0.f);
             return;
@@ -49,7 +49,7 @@ struct AudioPlayer::Impl {
         }
         self->cursor.fetch_add(read);
         if (read < frames) {
-            std::fill(dst + read * (size_t)self->channels, dst + samples, 0.f);
+            std::fill(dst + read * static_cast<size_t>(self->channels), dst + samples, 0.f);
             if (self->playing.exchange(false)) sPlaying.fetch_sub(1);  // end of file: back to the start
             std::lock_guard<std::mutex> lock(self->mutex);
             ma_decoder_seek_to_pcm_frame(&self->decoder, 0);
@@ -69,12 +69,12 @@ struct AudioPlayer::Impl {
             if (ma_decoder_read_pcm_frames(&dec, chunk.data(), chunk.size(), &read) != MA_SUCCESS && read == 0) break;
             if (read == 0) break;
             float peak = 0.f;
-            for (ma_uint64 i = 0; i < read; ++i) peak = std::max(peak, std::fabs(chunk[(size_t)i]));
+            for (ma_uint64 i = 0; i < read; ++i) peak = std::max(peak, std::fabs(chunk[static_cast<size_t>(i)]));
             raw.push_back(std::min(peak, 1.f));
         }
         ma_decoder_uninit(&dec);
         if (stopWorker.load() || raw.empty()) return;
-        const size_t buckets = std::min(raw.size(), (size_t)kBuckets);
+        const size_t buckets = std::min(raw.size(), static_cast<size_t>(kBuckets));
         std::vector<float> out(buckets, 0.f);
         for (size_t i = 0; i < raw.size(); ++i) {
             float& b = out[i * buckets / raw.size()];
@@ -104,8 +104,8 @@ bool AudioPlayer::open(const std::vector<uint8_t>& bytes, std::string& error) {
         return false;
     }
     d.decoderOk = true;
-    d.channels = (int)d.decoder.outputChannels;
-    d.sampleRate = (int)d.decoder.outputSampleRate;
+    d.channels = static_cast<int>(d.decoder.outputChannels);
+    d.sampleRate = static_cast<int>(d.decoder.outputSampleRate);
     ma_uint64 frames = 0;
     if (ma_decoder_get_length_in_pcm_frames(&d.decoder, &frames) == MA_SUCCESS) d.totalFrames = frames;
 
@@ -137,7 +137,7 @@ bool AudioPlayer::playing() const { return impl_->playing.load(); }
 
 void AudioPlayer::seek(double seconds) {
     if (!impl_->decoderOk || impl_->sampleRate <= 0) return;
-    uint64_t frame = (uint64_t)std::max(0.0, seconds * impl_->sampleRate);
+    uint64_t frame = static_cast<uint64_t>(std::max(0.0, seconds * impl_->sampleRate));
     if (impl_->totalFrames) frame = std::min(frame, impl_->totalFrames);
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (ma_decoder_seek_to_pcm_frame(&impl_->decoder, frame) == MA_SUCCESS) impl_->cursor.store(frame);
@@ -148,11 +148,11 @@ void AudioPlayer::setVolume(float volume) {
 }
 
 double AudioPlayer::position() const {
-    return impl_->sampleRate > 0 ? (double)impl_->cursor.load() / impl_->sampleRate : 0.0;
+    return impl_->sampleRate > 0 ? static_cast<double>(impl_->cursor.load()) / impl_->sampleRate : 0.0;
 }
 
 double AudioPlayer::duration() const {
-    return impl_->sampleRate > 0 ? (double)impl_->totalFrames / impl_->sampleRate : 0.0;
+    return impl_->sampleRate > 0 ? static_cast<double>(impl_->totalFrames) / impl_->sampleRate : 0.0;
 }
 
 int AudioPlayer::channels() const { return impl_->channels; }

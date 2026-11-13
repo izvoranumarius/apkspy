@@ -6,19 +6,19 @@ namespace {
 
 void appendUtf8(std::string& out, char32_t c) {
     if (c < 0x80) {
-        out.push_back((char)c);
+        out.push_back(static_cast<char>(c));
     } else if (c < 0x800) {
-        out.push_back((char)(0xC0 | (c >> 6)));
-        out.push_back((char)(0x80 | (c & 0x3F)));
+        out.push_back(static_cast<char>(0xC0 | (c >> 6)));
+        out.push_back(static_cast<char>(0x80 | (c & 0x3F)));
     } else if (c < 0x10000) {
-        out.push_back((char)(0xE0 | (c >> 12)));
-        out.push_back((char)(0x80 | ((c >> 6) & 0x3F)));
-        out.push_back((char)(0x80 | (c & 0x3F)));
+        out.push_back(static_cast<char>(0xE0 | (c >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (c & 0x3F)));
     } else {
-        out.push_back((char)(0xF0 | (c >> 18)));
-        out.push_back((char)(0x80 | ((c >> 12) & 0x3F)));
-        out.push_back((char)(0x80 | ((c >> 6) & 0x3F)));
-        out.push_back((char)(0x80 | (c & 0x3F)));
+        out.push_back(static_cast<char>(0xF0 | (c >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((c >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (c & 0x3F)));
     }
 }
 
@@ -26,21 +26,19 @@ void appendUtf8(std::string& out, char32_t c) {
 
 VtScreen::VtScreen(int cols, int rows, size_t scrollback)
     : cols_(std::max(1, cols)), rows_(std::max(1, rows)), maxScrollback_(scrollback) {
-    screen_.assign((size_t)rows_, Line((size_t)cols_));
+    screen_.assign(static_cast<size_t>(rows_), Line(static_cast<size_t>(cols_)));
     bottom_ = rows_ - 1;
 }
 
 uint32_t VtScreen::paletteColor(int i) {
-    static const uint32_t base[16] = {0x0C0C0C, 0xC50F1F, 0x13A10E, 0xC19C00, 0x0037DA, 0x881798, 0x3A96DD, 0xCCCCCC,
-                                      0x767676, 0xE74856, 0x16C60C, 0xF9F1A5, 0x3B78FF, 0xB4009E, 0x61D6D6, 0xF2F2F2};
-    if (i < 16) return base[std::max(0, i)];
+    if (i < 16) return kIndexed | static_cast<uint32_t>(std::max(0, i));  // resolved by the theme
     if (i < 232) {  // 6x6x6 cube
         const int v = i - 16;
         const auto level = [](int x) { return x == 0 ? 0 : 55 + x * 40; };
-        return (uint32_t)(level(v / 36) << 16 | level((v / 6) % 6) << 8 | level(v % 6));
+        return static_cast<uint32_t>(level(v / 36) << 16 | level((v / 6) % 6) << 8 | level(v % 6));
     }
     const int g = 8 + (std::min(i, 255) - 232) * 10;  // grey ramp
-    return (uint32_t)(g << 16 | g << 8 | g);
+    return static_cast<uint32_t>(g << 16 | g << 8 | g);
 }
 
 const VtScreen::Line& VtScreen::line(size_t i) const {
@@ -62,10 +60,10 @@ void VtScreen::resize(int cols, int rows) {
     cols = std::max(1, cols);
     rows = std::max(1, rows);
     if (cols == cols_ && rows == rows_) return;
-    for (auto& l : screen_) l.resize((size_t)cols);
-    for (auto& l : mainScreen_) l.resize((size_t)cols);
+    for (auto& l : screen_) l.resize(static_cast<size_t>(cols));
+    for (auto& l : mainScreen_) l.resize(static_cast<size_t>(cols));
     // Shrinking keeps the rows around the cursor: the top ones go to scrollback.
-    while ((int)screen_.size() > rows) {
+    while (static_cast<int>(screen_.size()) > rows) {
         if (cy_ >= rows) {  // the cursor would fall off: the top row scrolls away
             if (!alt_) scrollback_.push_back(std::move(screen_.front()));
             screen_.erase(screen_.begin());
@@ -74,7 +72,7 @@ void VtScreen::resize(int cols, int rows) {
             screen_.pop_back();  // empty space below the cursor
         }
     }
-    while ((int)screen_.size() < rows) screen_.emplace_back((size_t)cols);
+    while (static_cast<int>(screen_.size()) < rows) screen_.emplace_back(static_cast<size_t>(cols));
     while (scrollback_.size() > maxScrollback_) scrollback_.pop_front();
     cols_ = cols;
     rows_ = rows;
@@ -89,26 +87,26 @@ void VtScreen::resize(int cols, int rows) {
 void VtScreen::clearRow(Line& row, int from, int to) {
     Cell blank;
     blank.bg = pen_.bg;
-    for (int x = std::max(0, from); x < std::min(to, (int)row.size()); ++x) row[(size_t)x] = blank;
+    for (int x = std::max(0, from); x < std::min(to, static_cast<int>(row.size())); ++x) row[static_cast<size_t>(x)] = blank;
 }
 
 void VtScreen::scrollUp(int top, int bottom, int n) {
     for (int k = 0; k < n; ++k) {
         if (top == 0 && !alt_) {
-            scrollback_.push_back(screen_[(size_t)top]);
+            scrollback_.push_back(screen_[static_cast<size_t>(top)]);
             if (scrollback_.size() > maxScrollback_) scrollback_.pop_front();
         }
         screen_.erase(screen_.begin() + top);
-        screen_.insert(screen_.begin() + bottom, Line((size_t)cols_));
-        clearRow(screen_[(size_t)bottom], 0, cols_);
+        screen_.insert(screen_.begin() + bottom, Line(static_cast<size_t>(cols_)));
+        clearRow(screen_[static_cast<size_t>(bottom)], 0, cols_);
     }
 }
 
 void VtScreen::scrollDown(int top, int bottom, int n) {
     for (int k = 0; k < n; ++k) {
         screen_.erase(screen_.begin() + bottom);
-        screen_.insert(screen_.begin() + top, Line((size_t)cols_));
-        clearRow(screen_[(size_t)top], 0, cols_);
+        screen_.insert(screen_.begin() + top, Line(static_cast<size_t>(cols_)));
+        clearRow(screen_[static_cast<size_t>(top)], 0, cols_);
     }
 }
 
@@ -125,7 +123,7 @@ void VtScreen::put(char32_t ch) {
     }
     Cell c = pen_;
     c.ch = ch;
-    screen_[(size_t)cy_][(size_t)cx_] = c;
+    screen_[static_cast<size_t>(cy_)][static_cast<size_t>(cx_)] = c;
     if (cx_ == cols_ - 1) pendingWrap_ = true;
     else ++cx_;
 }
@@ -157,9 +155,9 @@ void VtScreen::sgr() {
         else if (v == 1) pen_.flags |= kBold;
         else if (v == 4) pen_.flags |= kUnderline;
         else if (v == 7) pen_.flags |= kInverse;
-        else if (v == 22) pen_.flags &= (uint8_t)~kBold;
-        else if (v == 24) pen_.flags &= (uint8_t)~kUnderline;
-        else if (v == 27) pen_.flags &= (uint8_t)~kInverse;
+        else if (v == 22) pen_.flags &= static_cast<uint8_t>(~kBold);
+        else if (v == 24) pen_.flags &= static_cast<uint8_t>(~kUnderline);
+        else if (v == 27) pen_.flags &= static_cast<uint8_t>(~kInverse);
         else if (v >= 30 && v <= 37) pen_.fg = paletteColor(v - 30);
         else if (v == 39) pen_.fg = kDefault;
         else if (v >= 40 && v <= 47) pen_.bg = paletteColor(v - 40);
@@ -172,7 +170,7 @@ void VtScreen::sgr() {
                 color = paletteColor(p[i + 2]);
                 i += 2;
             } else if (p[i + 1] == 2 && i + 4 < p.size()) {
-                color = (uint32_t)((p[i + 2] & 255) << 16 | (p[i + 3] & 255) << 8 | (p[i + 4] & 255));
+                color = static_cast<uint32_t>((p[i + 2] & 255) << 16 | (p[i + 3] & 255) << 8 | (p[i + 4] & 255));
                 i += 4;
             }
             (v == 38 ? pen_.fg : pen_.bg) = color;
@@ -197,7 +195,7 @@ void VtScreen::csi(char f) {
                     alt_ = true;
                 } else {
                     screen_ = mainScreen_;
-                    screen_.resize((size_t)rows_, Line((size_t)cols_));
+                    screen_.resize(static_cast<size_t>(rows_), Line(static_cast<size_t>(cols_)));
                     cx_ = std::min(mainX_, cols_ - 1);
                     cy_ = std::min(mainY_, rows_ - 1);
                     alt_ = false;
@@ -222,11 +220,11 @@ void VtScreen::csi(char f) {
     case 'J': {
         const int mode = param(0, 0);
         if (mode == 0) {
-            clearRow(screen_[(size_t)cy_], cx_, cols_);
-            for (int y = cy_ + 1; y < rows_; ++y) clearRow(screen_[(size_t)y], 0, cols_);
+            clearRow(screen_[static_cast<size_t>(cy_)], cx_, cols_);
+            for (int y = cy_ + 1; y < rows_; ++y) clearRow(screen_[static_cast<size_t>(y)], 0, cols_);
         } else if (mode == 1) {
-            clearRow(screen_[(size_t)cy_], 0, cx_ + 1);
-            for (int y = 0; y < cy_; ++y) clearRow(screen_[(size_t)y], 0, cols_);
+            clearRow(screen_[static_cast<size_t>(cy_)], 0, cx_ + 1);
+            for (int y = 0; y < cy_; ++y) clearRow(screen_[static_cast<size_t>(y)], 0, cols_);
         } else {
             for (auto& l : screen_) clearRow(l, 0, cols_);
             if (mode == 3) scrollback_.clear();
@@ -235,24 +233,24 @@ void VtScreen::csi(char f) {
     }
     case 'K': {
         const int mode = param(0, 0);
-        if (mode == 0) clearRow(screen_[(size_t)cy_], cx_, cols_);
-        else if (mode == 1) clearRow(screen_[(size_t)cy_], 0, cx_ + 1);
-        else clearRow(screen_[(size_t)cy_], 0, cols_);
+        if (mode == 0) clearRow(screen_[static_cast<size_t>(cy_)], cx_, cols_);
+        else if (mode == 1) clearRow(screen_[static_cast<size_t>(cy_)], 0, cx_ + 1);
+        else clearRow(screen_[static_cast<size_t>(cy_)], 0, cols_);
         break;
     }
-    case 'X': clearRow(screen_[(size_t)cy_], cx_, cx_ + n); break;
+    case 'X': clearRow(screen_[static_cast<size_t>(cy_)], cx_, cx_ + n); break;
     case 'P': {
-        Line& l = screen_[(size_t)cy_];
+        Line& l = screen_[static_cast<size_t>(cy_)];
         const int k = std::min(n, cols_ - cx_);
         l.erase(l.begin() + cx_, l.begin() + cx_ + k);
-        l.insert(l.end(), (size_t)k, Cell{});
+        l.insert(l.end(), static_cast<size_t>(k), Cell{});
         break;
     }
     case '@': {
-        Line& l = screen_[(size_t)cy_];
+        Line& l = screen_[static_cast<size_t>(cy_)];
         const int k = std::min(n, cols_ - cx_);
-        l.insert(l.begin() + cx_, (size_t)k, Cell{});
-        l.resize((size_t)cols_);
+        l.insert(l.begin() + cx_, static_cast<size_t>(k), Cell{});
+        l.resize(static_cast<size_t>(cols_));
         break;
     }
     case 'L': if (cy_ >= top_ && cy_ <= bottom_) scrollDown(cy_, bottom_, std::min(n, bottom_ - cy_ + 1)); break;
@@ -281,7 +279,7 @@ void VtScreen::csi(char f) {
 
 void VtScreen::feed(std::string_view bytes) {
     for (const char raw : bytes) {
-        const unsigned char b = (unsigned char)raw;
+        const unsigned char b = static_cast<unsigned char>(raw);
         switch (state_) {
         case State::Text: {
             if (utf8Left_ > 0) {
@@ -336,10 +334,10 @@ void VtScreen::feed(std::string_view bytes) {
         case State::Charset: state_ = State::Text; break;
         case State::Csi:
             if (b == '?' || b == '>' || b == '=') privateMode_ = true;
-            else if ((b >= '0' && b <= '9') || b == ';' || b == ':') params_.push_back((char)b);
+            else if ((b >= '0' && b <= '9') || b == ';' || b == ':') params_.push_back(static_cast<char>(b));
             else if (b >= 0x40 && b <= 0x7E) {
                 state_ = State::Text;
-                csi((char)b);
+                csi(static_cast<char>(b));
             } else if (b == 0x1B) {
                 state_ = State::Esc;
             }
@@ -351,7 +349,7 @@ void VtScreen::feed(std::string_view bytes) {
             } else if (b == 0x1B) {
                 state_ = State::OscEsc;
             } else if (osc_.size() < 4096) {
-                osc_.push_back((char)b);
+                osc_.push_back(static_cast<char>(b));
             }
             break;
         case State::OscEsc:  // ESC \ ends an OSC string

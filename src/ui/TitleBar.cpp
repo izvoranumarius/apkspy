@@ -1,18 +1,22 @@
 #include "ui/TitleBar.hpp"
+#include "app/Theme.hpp"
 #include <algorithm>
 #include <cmath>
 
 namespace {
-const ImU32 kBackground = IM_COL32(45, 45, 48, 255);
-const ImU32 kHover = IM_COL32(62, 62, 66, 255);
-const ImU32 kPressed = IM_COL32(84, 84, 88, 255);
-const ImU32 kMenuOpen = IM_COL32(63, 63, 70, 255);
-const ImU32 kCloseHover = IM_COL32(232, 17, 35, 255);
-const ImU32 kClosePressed = IM_COL32(241, 112, 122, 255);
-const ImU32 kGlyph = IM_COL32(225, 225, 225, 255);
-const ImU32 kTitle = IM_COL32(170, 170, 170, 255);
-const ImU32 kAccent = IM_COL32(0, 122, 204, 255);
-const ImU32 kBorder = IM_COL32(63, 63, 70, 255);
+// Theme colours; hover / pressed states are translucent text-coloured
+// overlays so they read on light and dark title bars alike. The close
+// button keeps the standard Windows red.
+ImU32 kBackground() { return theme::u32(Col::TitleBar); }
+ImU32 kHover() { return theme::u32(Col::Text, 0.10f); }
+ImU32 kPressed() { return theme::u32(Col::Text, 0.18f); }
+ImU32 kMenuOpen() { return theme::u32(Col::Text, 0.12f); }
+constexpr ImU32 kCloseHover() { return IM_COL32(232, 17, 35, 255); }
+constexpr ImU32 kClosePressed() { return IM_COL32(241, 112, 122, 255); }
+ImU32 kGlyph() { return theme::u32(Col::Text); }
+ImU32 kTitle() { return theme::u32(Col::TextMuted); }
+ImU32 kAccent() { return theme::u32(Col::Accent); }
+ImU32 kBorder() { return theme::u32(Col::Border); }
 // Reference metrics at 100% (32 px bar); scaled by TitleBar::scale_.
 constexpr float kButtonWidth = 46.f;
 constexpr float kMenuPadding = 11.f;
@@ -35,13 +39,15 @@ void TitleBar::drawIcon(ImDrawList* dl, const Rect& area) const {
         const float side = std::max(iconWidth_, iconHeight_);
         const float scale = std::min(1.f, 16.f * scale_ / side);
         const float w = iconWidth_ * scale, h = iconHeight_ * scale;
-        dl->AddImage(icon_, ImVec2(c.x - w * 0.5f, c.y - h * 0.5f), ImVec2(c.x + w * 0.5f, c.y + h * 0.5f));
+        // The favicon is dark grey; dark themes draw its light variant.
+        const ImTextureID tex = theme::isDark() && iconDark_ != 0 ? iconDark_ : icon_;
+        dl->AddImage(tex, ImVec2(c.x - w * 0.5f, c.y - h * 0.5f), ImVec2(c.x + w * 0.5f, c.y + h * 0.5f));
         return;
     }
     const float r = 8.f * scale_;
-    dl->AddRectFilled(ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), kAccent, 3.f * scale_);
+    dl->AddRectFilled(ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), kAccent(), 3.f * scale_);
     ImVec2 ts = ImGui::CalcTextSize("A");
-    dl->AddText(ImVec2(std::floor(c.x - ts.x * 0.5f), std::floor(c.y - ts.y * 0.5f)), IM_COL32(255, 255, 255, 255), "A");
+    dl->AddText(ImVec2(std::floor(c.x - ts.x * 0.5f), std::floor(c.y - ts.y * 0.5f)), theme::u32(Col::TextOnAccent), "A");
 }
 
 void TitleBar::drawCaptionBackground(ImDrawList* dl, const Rect& area, ImU32 color) const {
@@ -89,7 +95,7 @@ void TitleBar::render() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(kBackground));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(kBackground()));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                    ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing;
     ImGui::Begin("##titlebar", nullptr, flags);
@@ -107,7 +113,7 @@ void TitleBar::render() {
     drawIcon(dl, layout.systemMenu);
 
     int justClosed = -1;
-    if (openMenu_ >= 0 && !ImGui::IsPopupOpen(menus_[(size_t)openMenu_].popupId.c_str())) {
+    if (openMenu_ >= 0 && !ImGui::IsPopupOpen(menus_[static_cast<size_t>(openMenu_)].popupId.c_str())) {
         justClosed = openMenu_;
         openMenu_ = -1;
     }
@@ -124,17 +130,17 @@ void TitleBar::render() {
 
         const bool hovered = windowHovered && ImGui::IsMouseHoveringRect(ImVec2(r.left, r.top), ImVec2(r.right, r.bottom), false);
         const bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-        if (clicked && (int)i != justClosed) {
-            openMenu_ = (int)i;
+        if (clicked && static_cast<int>(i) != justClosed) {
+            openMenu_ = static_cast<int>(i);
             ImGui::OpenPopup(menu.popupId.c_str());
-        } else if (hovered && openMenu_ >= 0 && openMenu_ != (int)i) {
-            openMenu_ = (int)i;
+        } else if (hovered && openMenu_ >= 0 && openMenu_ != static_cast<int>(i)) {
+            openMenu_ = static_cast<int>(i);
             ImGui::OpenPopup(menu.popupId.c_str());
         }
-        if (openMenu_ == (int)i) drawCaptionBackground(dl, r, kMenuOpen);
-        else if (hovered) drawCaptionBackground(dl, r, kHover);
+        if (openMenu_ == static_cast<int>(i)) drawCaptionBackground(dl, r, kMenuOpen());
+        else if (hovered) drawCaptionBackground(dl, r, kHover());
         ImVec2 textSize = ImGui::CalcTextSize(menu.label.c_str());
-        dl->AddText(ImVec2(std::floor(r.left + menuPad), std::floor(top + (height_ - textSize.y) * 0.5f)), kGlyph,
+        dl->AddText(ImVec2(std::floor(r.left + menuPad), std::floor(top + (height_ - textSize.y) * 0.5f)), kGlyph(),
                     menu.label.c_str());
     }
     const float menusEnd = x;
@@ -153,32 +159,32 @@ void TitleBar::render() {
     float titleX = std::floor((origin.x + width - titleSize.x) * 0.5f);
     titleX = std::max(titleX, menusEnd + 16.f * scale_);
     dl->PushClipRect(ImVec2(menusEnd, top), ImVec2(captionStart - 8.f, bottom), true);
-    dl->AddText(ImVec2(titleX, std::floor(top + (height_ - titleSize.y) * 0.5f)), kTitle, title_.c_str());
+    dl->AddText(ImVec2(titleX, std::floor(top + (height_ - titleSize.y) * 0.5f)), kTitle(), title_.c_str());
     dl->PopClipRect();
 
     ImGui::SetCursorScreenPos(ImVec2(minRect.left, minRect.top));
     bool minClicked = ImGui::InvisibleButton("##minimize", ImVec2(buttonW, height_));
     bool minHover = !overMax && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
-    if (ImGui::IsItemActive()) drawCaptionBackground(dl, minRect, kPressed);
-    else if (minHover) drawCaptionBackground(dl, minRect, kHover);
-    drawGlyph(dl, minRect, Glyph::Minimize, kGlyph);
+    if (ImGui::IsItemActive()) drawCaptionBackground(dl, minRect, kPressed());
+    else if (minHover) drawCaptionBackground(dl, minRect, kHover());
+    drawGlyph(dl, minRect, Glyph::Minimize, kGlyph());
 
-    if (frame_.maximizePressed()) drawCaptionBackground(dl, maxRect, kPressed);
-    else if (overMax) drawCaptionBackground(dl, maxRect, kHover);
-    drawGlyph(dl, maxRect, maximized ? Glyph::Restore : Glyph::Maximize, kGlyph);
+    if (frame_.maximizePressed()) drawCaptionBackground(dl, maxRect, kPressed());
+    else if (overMax) drawCaptionBackground(dl, maxRect, kHover());
+    drawGlyph(dl, maxRect, maximized ? Glyph::Restore : Glyph::Maximize, kGlyph());
 
     ImGui::SetCursorScreenPos(ImVec2(closeRect.left, closeRect.top));
     bool closeClicked = ImGui::InvisibleButton("##close", ImVec2(buttonW, height_));
     bool closeHover = !overMax && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
-    if (ImGui::IsItemActive()) drawCaptionBackground(dl, closeRect, kClosePressed);
-    else if (closeHover) drawCaptionBackground(dl, closeRect, kCloseHover);
-    drawGlyph(dl, closeRect, Glyph::Close, closeHover || ImGui::IsItemActive() ? IM_COL32(255, 255, 255, 255) : kGlyph);
+    if (ImGui::IsItemActive()) drawCaptionBackground(dl, closeRect, kClosePressed());
+    else if (closeHover) drawCaptionBackground(dl, closeRect, kCloseHover());
+    drawGlyph(dl, closeRect, Glyph::Close, closeHover || ImGui::IsItemActive() ? IM_COL32(255, 255, 255, 255) : kGlyph());
 
-    dl->AddLine(ImVec2(origin.x, bottom - 1.f), ImVec2(origin.x + width, bottom - 1.f), kBorder);
+    dl->AddLine(ImVec2(origin.x, bottom - 1.f), ImVec2(origin.x + width, bottom - 1.f), kBorder());
 
     if (openMenu_ >= 0) {
-        const Menu& menu = menus_[(size_t)openMenu_];
-        ImGui::SetNextWindowPos(ImVec2(menuRects[(size_t)openMenu_].left, bottom));
+        const Menu& menu = menus_[static_cast<size_t>(openMenu_)];
+        ImGui::SetNextWindowPos(ImVec2(menuRects[static_cast<size_t>(openMenu_)].left, bottom));
         if (ImGui::BeginPopup(menu.popupId.c_str(), ImGuiWindowFlags_NoMove)) {
             menu.contents();
             ImGui::EndPopup();
