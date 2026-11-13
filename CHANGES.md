@@ -1,5 +1,32 @@
 # Changelog
 
+## Themes and settings (v0.4.0-beta.1)
+
+- **Nine themes**: Dark Modern (the default), Light, High Contrast, Solarized
+  Dark and Light, Nord, Dracula, Gruvbox Dark and One Dark. Every colour in the
+  app comes from the theme, so panels, code, graphs, the hex view and the
+  terminal always match; switching applies at once. Text in every theme meets
+  the WCAG contrast guidelines.
+- **Custom colours**: Settings > Appearance lists every colour of the theme,
+  grouped and filterable. Changes preview live, survive a theme switch and
+  can be reset one by one or all at once.
+- **Reorganised settings**: General, Appearance, Editor, Decompiler, Android &
+  Devices, Network Capture, Terminal & Scripts and AI (MCP), with a zoom slider
+  on the Appearance page. Cancel or Esc undoes the preview.
+- **Roomier layout**: more space between items, padded toolbar buttons, tab
+  icons clear of the tab's accent line, and the Bookmarks filter uses the same
+  chips as the other view switches. The title bar icon has a light version for
+  dark themes.
+- Fixed: **code search** over decompiled sources (`search_code` for AI
+  assistants) crashed the app; search results no longer end in a stray
+  carriage return on Windows.
+- Fixed: the **Terminal** shell quit at once when ApkSpy was started from a
+  script or IDE that redirects its output.
+- Fixed: selecting a debugger thread without an attached app now reports an
+  error instead of success.
+- Code quality: no compiler warnings under MSVC /W4 or clang -Wall -Wextra
+  -Wpedantic, and C++-style casts throughout.
+
 ## Workbench: terminal, command palette, icons
 
 Researched against VS Code, JADX, Binary Ninja, Ghidra and IDA.
