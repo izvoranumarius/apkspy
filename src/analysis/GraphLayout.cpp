@@ -56,7 +56,7 @@ void markBackEdges(int n, std::vector<Edge>& edges, const std::vector<std::vecto
 float mean(const std::vector<int>& neighbours, const std::vector<Vertex>& v, bool useOrder, float fallback) {
     if (neighbours.empty()) return fallback;
     float sum = 0;
-    for (int n : neighbours) sum += useOrder ? static_cast<float>(v[static_cast<size_t>(n)].order) : v[static_cast<size_t>(n)].x;
+    for (int const n : neighbours) sum += useOrder ? static_cast<float>(v[static_cast<size_t>(n)].order) : v[static_cast<size_t>(n)].x;
     return sum / static_cast<float>(neighbours.size());
 }
 
@@ -106,7 +106,7 @@ Size layout(std::vector<Node>& nodes, std::vector<Edge>& edges, const Options& o
         if (pending[static_cast<size_t>(i)] == 0) ready.push_back(i);
     for (size_t i = 0; i < ready.size(); ++i) {
         const int u = ready[i];
-        for (int ei : out[static_cast<size_t>(u)]) {
+        for (int const ei : out[static_cast<size_t>(u)]) {
             const Edge& e = edges[static_cast<size_t>(ei)];
             if (!forward(e)) continue;
             nodes[static_cast<size_t>(e.to)].layer = std::max(nodes[static_cast<size_t>(e.to)].layer, nodes[static_cast<size_t>(u)].layer + 1);
@@ -158,7 +158,7 @@ Size layout(std::vector<Node>& nodes, std::vector<Edge>& edges, const Options& o
         const bool downward = sweep % 2 == 0;
         for (int l = downward ? 1 : layers - 2; downward ? l < layers : l >= 0; l += downward ? 1 : -1) {
             auto& row = byLayer[static_cast<size_t>(l)];
-            for (int id : row) {
+            for (int const id : row) {
                 const Vertex& x = v[static_cast<size_t>(id)];
                 weight[static_cast<size_t>(id)] = mean(downward ? x.up : x.down, v, true, static_cast<float>(x.order));
             }
@@ -171,7 +171,7 @@ Size layout(std::vector<Node>& nodes, std::vector<Edge>& edges, const Options& o
     // while keeping the order and the minimum gap.
     for (auto& row : byLayer) {
         float x = 0;
-        for (int id : row) {
+        for (int const id : row) {
             Vertex& a = v[static_cast<size_t>(id)];
             a.x = x + a.width * 0.5f;
             x += a.width + o.gapX;
@@ -187,7 +187,7 @@ Size layout(std::vector<Node>& nodes, std::vector<Edge>& edges, const Options& o
         const bool downward = pass % 2 == 0;
         for (int l = downward ? 0 : layers - 1; downward ? l < layers : l >= 0; l += downward ? 1 : -1) {
             auto& row = byLayer[static_cast<size_t>(l)];
-            for (int id : row) {
+            for (int const id : row) {
                 const Vertex& a = v[static_cast<size_t>(id)];
                 const auto& preferred = downward ? a.up : a.down;
                 wanted[static_cast<size_t>(id)] = mean(preferred.empty() ? (downward ? a.down : a.up) : preferred, v, false, a.x);

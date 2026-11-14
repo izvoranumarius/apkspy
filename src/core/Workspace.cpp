@@ -41,8 +41,8 @@ std::string markerStatus(const fs::path& dir, bool& valid) {
     buf[got] = 0;
     content.assign(buf, got);
     while (!content.empty() && (content.back() == '\n' || content.back() == '\r')) content.pop_back();
-    size_t nl = content.find('\n');
-    std::string first = nl == std::string::npos ? content : content.substr(0, nl);
+    size_t const nl = content.find('\n');
+    std::string const first = nl == std::string::npos ? content : content.substr(0, nl);
     if (first != kOutMarkerMagic) return {};
     valid = true;
     return nl == std::string::npos ? std::string() : content.substr(nl + 1);
@@ -68,7 +68,7 @@ bool removeOutDirIfOwned(const fs::path& dir) {
 // 64-bit FNV-1a; only used to derive a unique directory name.
 uint64_t fnv1a(const std::string& s) {
     uint64_t h = 1469598103934665603ull;
-    for (unsigned char c : s) {
+    for (unsigned char const c : s) {
         h ^= c;
         h *= 1099511628211ull;
     }
@@ -140,14 +140,14 @@ bool Workspace::isOwnedOutDir(const std::string& dir) {
 // marker are never reused or deleted - a numeric suffix is appended instead.
 static std::string deriveOutDir(const std::string& apkPath) {
     std::error_code ec;
-    fs::path apk = pathutil::fromUtf8(apkPath);
+    fs::path const apk = pathutil::fromUtf8(apkPath);
     uint64_t size = fs::file_size(apk, ec);
     if (ec) size = 0;
     uint64_t mtime = 0;
-    fs::file_time_type written = fs::last_write_time(apk, ec);
+    fs::file_time_type const written = fs::last_write_time(apk, ec);
     if (!ec) mtime = static_cast<uint64_t>(written.time_since_epoch().count());
 
-    std::string seed = apkPath + "|" + std::to_string(size) + "|" + std::to_string(mtime);
+    std::string const seed = apkPath + "|" + std::to_string(size) + "|" + std::to_string(mtime);
     char hash[17];
     std::snprintf(hash, sizeof hash, "%012llx", static_cast<unsigned long long>(fnv1a(seed) & 0xFFFFFFFFFFFFull));
 
@@ -157,7 +157,7 @@ static std::string deriveOutDir(const std::string& apkPath) {
     for (char& c : stem)
         if (c == '/' || c == '\\') c = '_';  // defensive; stems have no separators
 
-    fs::path base = fs::temp_directory_path() / "apkspy";
+    fs::path const base = fs::temp_directory_path() / "apkspy";
     fs::path candidate = base / (stem + "_" + hash);
     for (int i = 2; fs::exists(candidate, ec) && i < 64; ++i) {
         bool owned = false;
@@ -170,7 +170,7 @@ static std::string deriveOutDir(const std::string& apkPath) {
 
 bool Workspace::addApk(std::string path, std::string group) {
     path = stripQuotes(std::move(path));
-    std::string normalized = pathutil::normalize(path);
+    std::string const normalized = pathutil::normalize(path);
     if (findApkByPath(normalized)) {
         log("Already in the project: " + normalized);
         return false;
@@ -206,7 +206,7 @@ void Workspace::attachDecompiled(Root& apkRoot, const std::string& outDir) {
     root->outDir = outDir;
     root->source = std::make_shared<DiskSource>();
     bool owned = false;
-    std::string status = markerStatus(pathutil::fromUtf8(outDir), owned);
+    std::string const status = markerStatus(pathutil::fromUtf8(outDir), owned);
     std::error_code ec;
     if (owned && status == "done" && fs::is_directory(pathutil::fromUtf8(sourcesDir(outDir)), ec)) {
         // A previous jadx run finished cleanly and its results still exist -
@@ -268,7 +268,7 @@ bool Workspace::removeApk(Root* apkRoot) {
 }
 
 Root* Workspace::findApkByPath(const std::string& path) const {
-    std::string normalized = pathutil::normalize(path);
+    std::string const normalized = pathutil::normalize(path);
     for (auto& root : roots_)
         if (root->kind == Root::Kind::Apk && root->apkPath == normalized) return root.get();
     return nullptr;
@@ -301,12 +301,12 @@ Root* Workspace::rootByGroup(const std::string& group, Root::Kind kind) const {
 void Workspace::startNextJadx() {
     if (jadx_.state() == JadxRunner::State::Running) return;
     while (!jadxQueue_.empty()) {
-        std::string group = jadxQueue_.front();
+        std::string const group = jadxQueue_.front();
         jadxQueue_.erase(jadxQueue_.begin());
-        Root* apk = rootByGroup(group, Root::Kind::Apk);
-        Root* dec = rootByGroup(group, Root::Kind::Decompiled);
+        Root const* apk = rootByGroup(group, Root::Kind::Apk);
+        Root const* dec = rootByGroup(group, Root::Kind::Decompiled);
         if (!apk || !dec) continue;  // removed from the project meanwhile
-        fs::path outDir = pathutil::fromUtf8(dec->outDir);
+        fs::path const outDir = pathutil::fromUtf8(dec->outDir);
         // Only ever wipe a directory we created ourselves (marker file).
         removeOutDirIfOwned(outDir);
         std::error_code ec;
@@ -371,7 +371,7 @@ void Workspace::update() {
     // thread allowed to read through an APK root's ContentSource.
     if (export_.busy()) {
         export_.pump();
-        std::string err = export_.takeLastError();
+        std::string const err = export_.takeLastError();
         if (!err.empty()) log("Export: " + err);
         if (!export_.busy()) {
             if (export_.state() == ExportJob::State::Cancelled)
@@ -383,13 +383,13 @@ void Workspace::update() {
         }
     }
 
-    JadxRunner::State s = jadx_.state();
+    JadxRunner::State const s = jadx_.state();
     if (s == JadxRunner::State::Running) {
         // While jadx runs, keep merging its output into the Decompiled tree
         // so partially generated results can be browsed right away.
         if (!jadxActiveGroup_.empty()) {
             auto now = std::chrono::steady_clock::now();
-            float elapsed = std::chrono::duration<float>(now - lastTreeRefresh_).count();
+            float const elapsed = std::chrono::duration<float>(now - lastTreeRefresh_).count();
             if (elapsed > 1.5f) {
                 lastTreeRefresh_ = now;
                 refreshDecompiledTree();
@@ -429,13 +429,13 @@ void Workspace::update() {
 }
 
 bool Workspace::takeDecompileSwitch() {
-    bool v = decompileSwitch_;
+    bool const v = decompileSwitch_;
     decompileSwitch_ = false;
     return v;
 }
 
 bool Workspace::takeDecompileFailure() {
-    bool v = decompileFailure_;
+    bool const v = decompileFailure_;
     decompileFailure_ = false;
     return v;
 }
@@ -447,7 +447,7 @@ std::string Workspace::sourcesDir(const std::string& outDir) {
 void Workspace::refreshDecompiledTree(const std::string& group) {
     const std::string& active = group.empty() ? jadxActiveGroup_ : group;
     if (active.empty()) return;
-    Root* dec = rootByGroup(active, Root::Kind::Decompiled);
+    Root const* dec = rootByGroup(active, Root::Kind::Decompiled);
     if (!dec) return;
     std::error_code ec;
     if (!fs::is_directory(pathutil::fromUtf8(sourcesDir(dec->outDir)), ec)) return;
@@ -504,7 +504,7 @@ void Workspace::openNode(Root& root, const TreeNode& node, int line, OpenMode mo
 void Workspace::openByPath(RootKind rootKind, const std::string& group, const std::string& path, OpenMode mode) {
     Root* root = rootByGroup(group, rootKind == RootKind::Decompiled ? Root::Kind::Decompiled : Root::Kind::Apk);
     if (!root || !root->tree) return;
-    TreeNode* node = root->tree->findByPath(path);
+    TreeNode const* node = root->tree->findByPath(path);
     if (!node || node->isFolder()) return;
     openNode(*root, *node, -1, mode);
 }
@@ -578,7 +578,7 @@ void Workspace::collectSymbolFiles(const TreeNode& node, std::vector<SymbolIndex
 }
 
 void Workspace::ensureSymbolIndex(const std::string& group) {
-    Root* dec = rootByGroup(group, Root::Kind::Decompiled);
+    Root const* dec = rootByGroup(group, Root::Kind::Decompiled);
     if (!dec || !dec->tree || isGroupDecompiling(group)) return;  // never walk a live tree
     std::vector<SymbolIndex::File> files;
     collectSymbolFiles(*dec->tree, files);
@@ -592,7 +592,7 @@ bool Workspace::openSymbol(const std::string& group, const std::string& identifi
     if (!dec || !dec->tree) return false;
     const std::string path = symbols_.resolve(group, identifier, hintDir);
     if (path.empty()) return false;
-    TreeNode* node = dec->tree->findByPath(path);
+    TreeNode const* node = dec->tree->findByPath(path);
     if (!node || node->isFolder()) return false;
     navigateTo(*dec, *node, -1, origin);
     return true;
@@ -616,8 +616,8 @@ Document* Workspace::openClassSource(const std::string& group, const std::string
     if (!dec || !dec->tree) return nullptr;
     // Inner classes ("Outer$Inner") live in the outer class's file.
     const std::string outer = javaClass.substr(0, javaClass.find('$'));
-    std::string path = symbols_.resolve(group, outer, {});
-    TreeNode* node = path.empty() ? nullptr : dec->tree->findByPath(path);
+    std::string const path = symbols_.resolve(group, outer, {});
+    TreeNode const* node = path.empty() ? nullptr : dec->tree->findByPath(path);
     if (!node) {
         // The index may still be building: jadx writes sources/<package path>.java.
         std::string rel = outer;
@@ -627,7 +627,7 @@ Document* Workspace::openClassSource(const std::string& group, const std::string
     if (!node || node->isFolder()) return nullptr;
     NavLocation origin;
     const NavLocation* originPtr = nullptr;
-    if (Document* active = activeDocument()) {
+    if (Document const* active = activeDocument()) {
         origin = locationOf(*active);
         originPtr = &origin;
     }
@@ -757,11 +757,11 @@ void Workspace::openGenerated(const std::string& group, const std::string& path,
         bumpVersion();
     }
     auto* memory = static_cast<MemorySource*>(root->source.get());
-    TreeNode* node = root->tree->findByPath(path);
+    TreeNode const* node = root->tree->findByPath(path);
     // Re-generated content: drop the stale tab first (closing it also
     // removes its node), then rebuild node + document from the new text.
     if (node)
-        if (Document* d = findDocument(*node)) {
+        if (Document const* d = findDocument(*node)) {
             closeDocument(d);
             node = root->tree->findByPath(path);
         }
@@ -793,7 +793,7 @@ void Workspace::closeDocument(const Document* doc) {
             documents_.erase(it);
             // Generated listings are derived data: free them with their tab.
             if (generated && node)
-                if (Root* v = rootByGroup(group, Root::Kind::Virtual); v && v->title == group) {
+                if (Root const* v = rootByGroup(group, Root::Kind::Virtual); v && v->title == group) {
                     static_cast<MemorySource*>(v->source.get())->erase(node->path());
                     v->tree->removeChild(node);
                 }

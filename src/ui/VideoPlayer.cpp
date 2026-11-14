@@ -126,7 +126,7 @@ struct VideoPlayer::Impl {
     bool deviceOk = false;
 
     double clock() const {
-        std::lock_guard<std::mutex> lock(clockMutex);
+        std::lock_guard<std::mutex> const lock(clockMutex);
         if (!playing.load()) return clockBase;
         return clockBase + std::chrono::duration<double>(Clock::now() - playStart).count();
     }
@@ -137,7 +137,7 @@ struct VideoPlayer::Impl {
         const size_t want = static_cast<size_t>(frameCount) * static_cast<size_t>(self->channels);
         size_t got = 0;
         if (self->playing.load()) {
-            std::lock_guard<std::mutex> lock(self->audioMutex);
+            std::lock_guard<std::mutex> const lock(self->audioMutex);
             got = std::min(want, self->samples.size());
             std::copy(self->samples.begin(), self->samples.begin() + static_cast<ptrdiff_t>(got), dst);
             self->samples.erase(self->samples.begin(), self->samples.begin() + static_cast<ptrdiff_t>(got));
@@ -196,7 +196,7 @@ struct VideoPlayer::Impl {
             const double target = seekVideo.exchange(-1.0);
             if (target >= 0.0) {
                 seekReader(reader.Get(), target);
-                std::lock_guard<std::mutex> lock(frameMutex);
+                std::lock_guard<std::mutex> const lock(frameMutex);
                 frames.clear();
                 videoEof = false;
             }
@@ -211,12 +211,12 @@ struct VideoPlayer::Impl {
             LONGLONG ts = 0;
             ComPtr<IMFSample> sample;
             if (FAILED(reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0, nullptr, &flags, &ts, &sample))) {
-                std::lock_guard<std::mutex> lock(frameMutex);
+                std::lock_guard<std::mutex> const lock(frameMutex);
                 videoEof = true;
                 continue;
             }
             if (flags & MF_SOURCE_READERF_ENDOFSTREAM) {
-                std::lock_guard<std::mutex> lock(frameMutex);
+                std::lock_guard<std::mutex> const lock(frameMutex);
                 videoEof = true;
             }
             if (!sample) continue;
@@ -242,7 +242,7 @@ struct VideoPlayer::Impl {
                         }
                     }
                     buffer->Unlock();
-                    std::lock_guard<std::mutex> lock(frameMutex);
+                    std::lock_guard<std::mutex> const lock(frameMutex);
                     if (seekVideo.load() < 0.0) frames.push_back(std::move(f));
                 }
             }
@@ -283,7 +283,7 @@ struct VideoPlayer::Impl {
             const double target = seekAudio.exchange(-1.0);
             if (target >= 0.0) {
                 seekReader(reader.Get(), target);
-                std::lock_guard<std::mutex> lock(audioMutex);
+                std::lock_guard<std::mutex> const lock(audioMutex);
                 samples.clear();
                 eof = false;
             }
@@ -309,7 +309,7 @@ struct VideoPlayer::Impl {
                 DWORD len = 0;
                 if (SUCCEEDED(buffer->Lock(&p, nullptr, &len))) {
                     const float* f = reinterpret_cast<const float*>(p);
-                    std::lock_guard<std::mutex> lock(audioMutex);
+                    std::lock_guard<std::mutex> const lock(audioMutex);
                     if (seekAudio.load() < 0.0) samples.insert(samples.end(), f, f + len / sizeof(float));
                     buffer->Unlock();
                 }
@@ -374,7 +374,7 @@ void VideoPlayer::play() {
     Impl& d = *impl_;
     if (!d.opened || d.playing.load()) return;
     if (d.duration > 0.0 && d.clockBase >= d.duration - 0.05) seek(0.0);  // ended: start over
-    std::lock_guard<std::mutex> lock(d.clockMutex);
+    std::lock_guard<std::mutex> const lock(d.clockMutex);
     d.playStart = Clock::now();
     d.playing.store(true);
     sPlaying.fetch_add(1);
@@ -384,7 +384,7 @@ void VideoPlayer::pause() {
     Impl& d = *impl_;
     if (!d.playing.load()) return;
     const double now = d.clock();
-    std::lock_guard<std::mutex> lock(d.clockMutex);
+    std::lock_guard<std::mutex> const lock(d.clockMutex);
     d.clockBase = now;
     d.playing.store(false);
     sPlaying.fetch_sub(1);
@@ -397,19 +397,19 @@ void VideoPlayer::seek(double seconds) {
     if (!d.opened) return;
     seconds = std::clamp(seconds, 0.0, d.duration > 0.0 ? d.duration : seconds);
     {
-        std::lock_guard<std::mutex> lock(d.clockMutex);
+        std::lock_guard<std::mutex> const lock(d.clockMutex);
         d.clockBase = seconds;
         d.playStart = Clock::now();
     }
     d.seekVideo.store(seconds);
     d.seekAudio.store(seconds);
     {
-        std::lock_guard<std::mutex> lock(d.frameMutex);
+        std::lock_guard<std::mutex> const lock(d.frameMutex);
         d.frames.clear();
         d.firstFrame = true;  // show the frame at the new position even while paused
     }
     {
-        std::lock_guard<std::mutex> lock(d.audioMutex);
+        std::lock_guard<std::mutex> const lock(d.audioMutex);
         d.samples.clear();
     }
     d.frameCv.notify_all();
@@ -429,7 +429,7 @@ bool VideoPlayer::takeFrame(std::vector<uint8_t>& rgba) {
     bool got = false;
     bool ended = false;
     {
-        std::lock_guard<std::mutex> lock(d.frameMutex);
+        std::lock_guard<std::mutex> const lock(d.frameMutex);
         // Before playback (or after a seek) show the first decoded frame.
         if (d.firstFrame && !d.frames.empty()) {
             rgba = std::move(d.frames.front().rgba);
@@ -448,7 +448,7 @@ bool VideoPlayer::takeFrame(std::vector<uint8_t>& rgba) {
     // Playback ends with the longer of the two streams.
     if (d.playing.load() && d.duration > 0.0 && now >= d.duration && (ended || !d.video)) {
         pause();
-        std::lock_guard<std::mutex> lock(d.clockMutex);
+        std::lock_guard<std::mutex> const lock(d.clockMutex);
         d.clockBase = d.duration;
     }
     return got;

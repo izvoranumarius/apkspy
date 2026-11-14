@@ -96,7 +96,7 @@ std::string TrafficProxy::Flow::url() const {
 
 bool TrafficProxy::parseHead(const std::string& head, Message& m) {
     m.headers.clear();
-    size_t eol = head.find("\r\n");
+    size_t const eol = head.find("\r\n");
     m.startLine = head.substr(0, eol);
     if (m.startLine.empty()) return false;
     size_t pos = eol == std::string::npos ? head.size() : eol + 2;
@@ -128,7 +128,7 @@ void TrafficProxy::stop() {
     if (acceptThread_.joinable()) acceptThread_.join();
     listener_.close();
     {
-        std::lock_guard<std::mutex> lock(clientsMutex_);
+        std::lock_guard<std::mutex> const lock(clientsMutex_);
         for (auto& w : clients_)
             if (auto c = w.lock()) c->shutdownBoth();
         clients_.clear();
@@ -143,7 +143,7 @@ void TrafficProxy::acceptLoop() {
         if (!client.valid()) continue;
         auto shared = std::make_shared<Socket>(std::move(client));
         {
-            std::lock_guard<std::mutex> lock(clientsMutex_);
+            std::lock_guard<std::mutex> const lock(clientsMutex_);
             clients_.erase(std::remove_if(clients_.begin(), clients_.end(),
                                           [](const std::weak_ptr<Socket>& w) { return w.expired(); }),
                            clients_.end());
@@ -156,7 +156,7 @@ void TrafficProxy::acceptLoop() {
 std::shared_ptr<TrafficProxy::Flow> TrafficProxy::newFlow() {
     auto f = std::make_shared<Flow>();
     f->startedAt = unixNow();
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     f->id = nextId_++;
     flows_.push_back(f);
     while (flows_.size() > kMaxFlows) flows_.pop_front();  // bounded history
@@ -164,12 +164,12 @@ std::shared_ptr<TrafficProxy::Flow> TrafficProxy::newFlow() {
 }
 
 void TrafficProxy::finish(const std::shared_ptr<Flow>& f, std::chrono::steady_clock::time_point t0) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     f->durationMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     f->complete = true;
 }
 
-void TrafficProxy::serve(std::shared_ptr<Socket> client) {
+void TrafficProxy::serve(const std::shared_ptr<Socket>& client) {
     std::string head, rest;
     if (!readHead(*client, head, rest)) return;
     Message req;
@@ -182,14 +182,14 @@ void TrafficProxy::serve(std::shared_ptr<Socket> client) {
     }
     auto flow = newFlow();
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         flow->method = line.substr(0, sp1);
         flow->request = req;
     }
     const std::string target = line.substr(sp1 + 1, sp2 - sp1 - 1);
     if (iequals(flow->method, "CONNECT")) {
         const size_t colon = target.rfind(':');
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         flow->tunnel = true;
         flow->host = target.substr(0, colon);
         flow->port = colon == std::string::npos ? 443 : std::atoi(target.c_str() + colon + 1);
@@ -205,13 +205,13 @@ void TrafficProxy::serve(std::shared_ptr<Socket> client) {
             hostPort = req.header("host");
         }
         const size_t colon = hostPort.rfind(':');
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         flow->host = colon == std::string::npos ? hostPort : hostPort.substr(0, colon);
         flow->port = colon == std::string::npos ? 80 : std::atoi(hostPort.c_str() + colon + 1);
         flow->path = path;
     }
     if (flow->host.empty() || flow->port <= 0 || flow->port > 65535) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         flow->error = "unparsable request target";
         flow->complete = true;
         client->sendAll("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
@@ -228,13 +228,13 @@ void TrafficProxy::serveTunnel(Socket& client, std::shared_ptr<Flow> flow, std::
     std::string host;
     int port;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         host = flow->host;
         port = flow->port;
     }
     if (!upstream.connectHost(host, port, 15000, error)) {
         client.sendAll("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         flow->error = error;
         flow->status = 502;
         flow->complete = true;
@@ -242,7 +242,7 @@ void TrafficProxy::serveTunnel(Socket& client, std::shared_ptr<Flow> flow, std::
     }
     client.sendAll("HTTP/1.1 200 Connection Established\r\n\r\n");
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         flow->status = 200;
     }
     // The first client bytes are the TLS ClientHello: read the server name.
@@ -253,7 +253,7 @@ void TrafficProxy::serveTunnel(Socket& client, std::shared_ptr<Flow> flow, std::
     }
     if (!pending.empty()) {
         const std::string sni = parseSni(reinterpret_cast<const uint8_t*>(pending.data()), pending.size());
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         flow->sni = sni;
         flow->bytesUp += pending.size();
     }
@@ -267,7 +267,7 @@ void TrafficProxy::serveTunnel(Socket& client, std::shared_ptr<Flow> flow, std::
         for (;;) {
             const long n = client.recvSome(buf, sizeof buf);
             if (n <= 0 || !upstream.sendAll(buf, static_cast<size_t>(n))) break;
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             flow->bytesUp += static_cast<uint64_t>(n);
         }
         upstream.shutdownBoth();
@@ -277,7 +277,7 @@ void TrafficProxy::serveTunnel(Socket& client, std::shared_ptr<Flow> flow, std::
     for (;;) {
         const long n = upstream.recvSome(buf, sizeof buf);
         if (n <= 0 || !client.sendAll(buf, static_cast<size_t>(n))) break;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         flow->bytesDown += static_cast<uint64_t>(n);
     }
     client.shutdownBoth();
@@ -286,13 +286,13 @@ void TrafficProxy::serveTunnel(Socket& client, std::shared_ptr<Flow> flow, std::
     finish(flow, t0);
 }
 
-void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::string pending) {
+void TrafficProxy::serveHttp(Socket& client, const std::shared_ptr<Flow>& flow, std::string pending) {
     const auto t0 = std::chrono::steady_clock::now();
     Message req;
     std::string host, path, method;
     int port;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         req = flow->request;
         host = flow->host;
         path = flow->path;
@@ -310,7 +310,7 @@ void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::st
         const unsigned long long want = std::strtoull(cl.c_str(), nullptr, 10);
         if (want > kMaxRequestBody) {
             client.sendAll("HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             flow->status = 413;
             flow->error = "request body too large for the sniffer";
             flow->complete = true;
@@ -321,7 +321,7 @@ void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::st
         if (body.size() > want) body.resize(static_cast<size_t>(want));
     }
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         flow->request.body.clear();
         flow->request.bodySize = 0;
         capture(flow->request, body.data(), body.size());
@@ -333,7 +333,7 @@ void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::st
     if (!upstream.connectHost(host, port, 15000, error)) {
         client.sendAll("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             flow->error = error;
             flow->status = 502;
         }
@@ -356,7 +356,7 @@ void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::st
     out += "Connection: close\r\n\r\n";
     if (!upstream.sendAll(out) || (!body.empty() && !upstream.sendAll(body))) {
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             flow->error = "upstream write failed";
         }
         finish(flow, t0);
@@ -393,7 +393,7 @@ void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::st
                 bodyStart = end + 4;
                 const std::string len = resp.header("content-length");
                 if (!len.empty()) expected = (total - captured.size()) + bodyStart + std::strtoull(len.c_str(), nullptr, 10);
-                std::lock_guard<std::mutex> lock(mutex_);
+                std::lock_guard<std::mutex> const lock(mutex_);
                 flow->response = resp;
                 flow->status = status;
                 capture(flow->response, captured.data() + bodyStart, captured.size() - bodyStart);
@@ -401,11 +401,11 @@ void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::st
             }
             if (captured.size() > kMaxHead && !headDone) break;  // not HTTP
         } else {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             capture(flow->response, buf, static_cast<size_t>(n));
         }
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             flow->bytesDown = total;
         }
         if (total >= expected) break;  // Content-Length satisfied
@@ -416,7 +416,7 @@ void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::st
 
 std::vector<TrafficProxy::Flow> TrafficProxy::flows(uint64_t sinceId, size_t limit) const {
     std::vector<Flow> out;
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     for (const auto& f : flows_) {
         if (f->id <= sinceId) continue;
         Flow copy;  // summary copy: bodies are fetched on demand with flow()
@@ -444,7 +444,7 @@ std::vector<TrafficProxy::Flow> TrafficProxy::flows(uint64_t sinceId, size_t lim
 }
 
 bool TrafficProxy::flow(uint64_t id, Flow& out) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     for (const auto& f : flows_)
         if (f->id == id) {
             out = *f;
@@ -454,19 +454,19 @@ bool TrafficProxy::flow(uint64_t id, Flow& out) const {
 }
 
 uint64_t TrafficProxy::lastId() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     return nextId_ - 1;
 }
 
 void TrafficProxy::clear() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     flows_.clear();
     std::deque<std::shared_ptr<Flow>>().swap(flows_);
 }
 
 std::vector<TrafficProxy::Endpoint> TrafficProxy::endpoints() const {
     std::vector<Endpoint> out;
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     for (const auto& f : flows_) {
         const std::string tmpl = f->tunnel ? std::string() : pathTemplate(f->path);
         const std::string host = f->tunnel && !f->sni.empty() ? f->sni : f->host;
@@ -501,7 +501,7 @@ std::string TrafficProxy::pathTemplate(const std::string& path) {
         const std::string seg = p.substr(pos, slash - pos);
         bool digits = !seg.empty(), hex = seg.size() >= 16, alnumMix = seg.size() >= 24;
         bool hasDigit = false, hasAlpha = false;
-        for (char c : seg) {
+        for (char const c : seg) {
             const unsigned char u = static_cast<unsigned char>(c);
             if (!std::isdigit(u)) digits = false;
             if (!std::isxdigit(u) && c != '-') hex = false;
@@ -588,7 +588,7 @@ std::string TrafficProxy::parseSni(const uint8_t* d, size_t len) {
             const size_t nameLen = static_cast<size_t>(d[p + 3] << 8 | d[p + 4]);
             if (d[p + 2] == 0 && p + 5 + nameLen <= extEnd) {
                 std::string name(reinterpret_cast<const char*>(d) + p + 5, nameLen);
-                for (char c : name)
+                for (char const c : name)
                     if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '-')) return {};
                 return name;
             }
@@ -602,7 +602,7 @@ std::string TrafficProxy::parseSni(const uint8_t* d, size_t len) {
 std::string TrafficProxy::curl(const Flow& f) {
     const auto q = [](const std::string& s) {
         std::string o = "'";
-        for (char c : s) o += c == '\'' ? std::string("'\\''") : std::string(1, c);
+        for (char const c : s) o += c == '\'' ? std::string("'\\''") : std::string(1, c);
         return o + "'";
     };
     std::string out = "curl -X " + f.method + " " + q(f.url());

@@ -16,8 +16,7 @@ public:
     virtual bool read(const TreeNode& node, std::vector<uint8_t>& out) const = 0;
     // Content size without reading it - lets callers skip oversized files
     // before loading them. Returns false when the size is unknown.
-    virtual bool sizeOf(const TreeNode& node, uint64_t& out) const {
-        (void)node;
+    virtual bool sizeOf(const TreeNode& /*node*/, uint64_t& out) const {
         out = 0;
         return false;
     }

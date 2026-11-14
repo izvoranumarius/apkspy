@@ -727,8 +727,7 @@ void EditorPanel::processShortcuts(Document& doc) {
     }
 }
 
-void EditorPanel::openFind(Document& doc, FindState& f) {
-    (void)doc;
+void EditorPanel::openFind(Document& /*doc*/, FindState& f) {
     f.open = true;
     f.focusInput = true;
     // Prefill with the editor selection (single line, captured while it was

@@ -170,7 +170,7 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
             ImGui::PopTextWrapPos();
             ImGui::PopFont();
             if (!s.subject.empty() || !s.issuer.empty()) {
-                std::string who = "subject: " + (s.subject.empty() ? "?" : s.subject) +
+                std::string const who = "subject: " + (s.subject.empty() ? "?" : s.subject) +
                                   "   issuer: " + (s.issuer.empty() ? "?" : s.issuer);
                 ImGui::PushTextWrapPos(0.f);
                 ImGui::TextDisabled("%s", who.c_str());
@@ -190,8 +190,8 @@ void OverviewPanel::openComponent(const std::string& group, const std::string& p
         else if (cls.find('.') == std::string::npos) cls = pkg + "." + cls;
     }
     NavLocation origin;
-    NavLocation* originPtr = nullptr;
-    if (Document* active = workspace_.activeDocument()) {
+    NavLocation const* originPtr = nullptr;
+    if (Document const* active = workspace_.activeDocument()) {
         origin = workspace_.locationOf(*active);
         originPtr = &origin;
     }
@@ -208,8 +208,8 @@ void OverviewPanel::openManifest(const std::string& group) {
     const TreeNode* manifest = apk->tree->findChild("AndroidManifest.xml");
     if (!manifest) return;
     NavLocation origin;
-    NavLocation* originPtr = nullptr;
-    if (Document* active = workspace_.activeDocument()) {
+    NavLocation const* originPtr = nullptr;
+    if (Document const* active = workspace_.activeDocument()) {
         origin = workspace_.locationOf(*active);
         originPtr = &origin;
     }

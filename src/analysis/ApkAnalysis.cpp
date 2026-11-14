@@ -90,9 +90,9 @@ std::vector<TryRange> parseTries(const DexFile& dex, const DexFile::CodeItem& co
 
 double entropy(std::string_view s) {
     int counts[256] = {};
-    for (unsigned char c : s) counts[c]++;
+    for (unsigned char const c : s) counts[c]++;
     double h = 0;
-    for (int c : counts)
+    for (int const c : counts)
         if (c) {
             const double p = static_cast<double>(c) / static_cast<double>(s.size());
             h -= p * std::log2(p);
@@ -208,7 +208,7 @@ bool ApkAnalysis::splitMethodRef(std::string_view ref, std::string& cls, std::st
     const size_t arrow = ref.find("->");
     if (arrow != std::string_view::npos) {
         cls.assign(ref.substr(0, arrow));
-        std::string_view rest = ref.substr(arrow + 2);
+        std::string_view const rest = ref.substr(arrow + 2);
         const size_t paren = rest.find('(');
         if (paren == std::string_view::npos) {
             name.assign(rest);
@@ -281,7 +281,7 @@ std::vector<ApkAnalysis::XrefHit> ApkAnalysis::callersOf(std::string_view cls, s
     std::vector<XrefHit> out;
     const std::string desc = toDescriptor(cls);
     for (uint16_t di = 0; di < static_cast<uint16_t>(dexes_.size()); ++di)
-        for (uint32_t m : dexes_[di]->findMethods(desc, name, proto)) collect(XrefKind::Call, di, m, limit, out);
+        for (uint32_t const m : dexes_[di]->findMethods(desc, name, proto)) collect(XrefKind::Call, di, m, limit, out);
     return out;
 }
 
@@ -290,7 +290,7 @@ std::vector<ApkAnalysis::XrefHit> ApkAnalysis::fieldAccesses(std::string_view cl
     std::vector<XrefHit> out;
     const std::string desc = toDescriptor(cls);
     for (uint16_t di = 0; di < static_cast<uint16_t>(dexes_.size()); ++di)
-        for (uint32_t f : dexes_[di]->findFields(desc, name)) {
+        for (uint32_t const f : dexes_[di]->findFields(desc, name)) {
             collect(XrefKind::FieldRead, di, f, limit, out);
             collect(XrefKind::FieldWrite, di, f, limit, out);
         }
@@ -389,7 +389,7 @@ std::vector<ApkAnalysis::ConstArgCall> ApkAnalysis::constantArguments(const Meth
         if (in.valid && !in.payload && in.hasBranch) joins.insert(static_cast<uint32_t>(static_cast<int64_t>(in.pc) + in.branch));
     }
     for (const TryRange& t : parseTries(dex, code))
-        for (uint32_t h : t.handlers) joins.insert(h);
+        for (uint32_t const h : t.handlers) joins.insert(h);
 
     std::unordered_map<uint32_t, std::string> known;
     for (uint32_t pc = 0; pc < code.insnsSize;) {
@@ -455,7 +455,7 @@ std::vector<ApkAnalysis::BasicBlock> ApkAnalysis::controlFlowGraph(const MethodD
     for (const TryRange& t : tries) {
         leaders.insert(t.start);
         if (t.end < code.insnsSize) leaders.insert(t.end);
-        for (uint32_t h : t.handlers)
+        for (uint32_t const h : t.handlers)
             if (h < code.insnsSize) leaders.insert(h);
     }
     for (uint32_t pc = 0; pc < code.insnsSize;) {
@@ -468,7 +468,7 @@ std::vector<ApkAnalysis::BasicBlock> ApkAnalysis::controlFlowGraph(const MethodD
         if (in.hasBranch && flow != Flow::Normal) {  // fill-array-data's offset is not a branch
             const int64_t t = static_cast<int64_t>(in.pc) + in.branch;
             if (flow == Flow::Switch) {
-                for (uint32_t st : dalvik::switchTargets(code, in.pc, static_cast<uint32_t>(t)))
+                for (uint32_t const st : dalvik::switchTargets(code, in.pc, static_cast<uint32_t>(t)))
                     if (st < code.insnsSize) leaders.insert(st);
             } else if (t >= 0 && t < code.insnsSize) {
                 leaders.insert(static_cast<uint32_t>(t));
@@ -482,7 +482,7 @@ std::vector<ApkAnalysis::BasicBlock> ApkAnalysis::controlFlowGraph(const MethodD
     std::set<uint32_t> starts;
     for (const Insn& in : insns) starts.insert(in.pc);
     std::vector<uint32_t> ordered;
-    for (uint32_t l : leaders)
+    for (uint32_t const l : leaders)
         if (starts.count(l)) ordered.push_back(l);
     std::map<uint32_t, uint32_t> blockAt;
     for (size_t i = 0; i < ordered.size(); ++i) {
@@ -516,14 +516,14 @@ std::vector<ApkAnalysis::BasicBlock> ApkAnalysis::controlFlowGraph(const MethodD
             add(blockOf(next));
         } else if (flow == Flow::Switch) {
             add(blockOf(next));
-            for (uint32_t st : dalvik::switchTargets(code, last->pc, static_cast<uint32_t>(static_cast<int64_t>(last->pc) + last->branch)))
+            for (uint32_t const st : dalvik::switchTargets(code, last->pc, static_cast<uint32_t>(static_cast<int64_t>(last->pc) + last->branch)))
                 add(blockOf(st));
         } else {
             add(blockOf(next));
         }
         for (const TryRange& t : tries) {
             if (b.startPc < t.end && b.endPc > t.start)
-                for (uint32_t h : t.handlers) {
+                for (uint32_t const h : t.handlers) {
                     const int64_t hb = blockOf(h);
                     if (hb >= 0 &&
                         std::find(b.exceptional.begin(), b.exceptional.end(), static_cast<uint32_t>(hb)) == b.exceptional.end())
@@ -553,7 +553,7 @@ std::string ApkAnalysis::cfgToDot(const MethodDef& m, const std::vector<BasicBlo
     }
     const auto esc = [](const std::string& s) {
         std::string o;
-        for (char c : s) {
+        for (char const c : s) {
             if (c == '"' || c == '\\' || c == '{' || c == '}' || c == '<' || c == '>' || c == '|') o += '\\';
             o += c;
         }
@@ -568,8 +568,8 @@ std::string ApkAnalysis::cfgToDot(const MethodDef& m, const std::vector<BasicBlo
         out += "\"];\n";
     }
     for (size_t i = 0; i < blocks.size(); ++i) {
-        for (uint32_t s : blocks[i].successors) out += "  b" + std::to_string(i) + " -> b" + std::to_string(s) + ";\n";
-        for (uint32_t s : blocks[i].exceptional)
+        for (uint32_t const s : blocks[i].successors) out += "  b" + std::to_string(i) + " -> b" + std::to_string(s) + ";\n";
+        for (uint32_t const s : blocks[i].exceptional)
             out += "  b" + std::to_string(i) + " -> b" + std::to_string(s) + " [style=dashed, color=red];\n";
     }
     out += "}\n";
@@ -607,7 +607,7 @@ std::vector<std::string> ApkAnalysis::implementersOf(std::string_view iface, siz
     const std::string desc = toDescriptor(iface);
     for (const ClassEntry& c : classes_) {
         if (out.size() >= limit) break;
-        for (uint32_t t : dexes_[c.dex]->interfaces(classDef(c)))
+        for (uint32_t const t : dexes_[c.dex]->interfaces(classDef(c)))
             if (dexes_[c.dex]->typeDescriptor(t) == desc) {
                 out.push_back(DexFile::descriptorToJava(classDescriptor(c)));
                 break;
@@ -664,7 +664,7 @@ ApkAnalysis::StringCategory ApkAnalysis::classify(std::string_view s) {
     // API-like paths: "/api/v1/users", "/v2/login?x=1".
     if (s.front() == '/' && s.size() >= 4 && std::count(s.begin(), s.end(), '/') >= 2 && s.find(';') == std::string_view::npos) {
         bool clean = true;
-        for (char c : s)
+        for (char const c : s)
             if (!(std::isalnum(static_cast<unsigned char>(c)) || std::string_view("/_-.{}:?=&%").find(c) != std::string_view::npos)) {
                 clean = false;
                 break;
@@ -674,7 +674,7 @@ ApkAnalysis::StringCategory ApkAnalysis::classify(std::string_view s) {
     // Long, dense, high-entropy tokens (API keys, hex secrets).
     if (s.size() >= 32 && s.size() <= 256 && s.find(' ') == std::string_view::npos) {
         bool tokenChars = true;
-        for (char c : s)
+        for (char const c : s)
             if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '+' || c == '/' || c == '=' || c == '_' || c == '-')) {
                 tokenChars = false;
                 break;

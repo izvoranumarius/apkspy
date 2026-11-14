@@ -48,7 +48,7 @@ public:
 
     // Drops everything (project closed).
     void clear() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         tables_.clear();
         queue_.clear();
     }

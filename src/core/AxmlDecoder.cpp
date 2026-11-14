@@ -26,21 +26,21 @@ struct Cursor {
     bool avail(size_t n) const { return ok && pos + n <= size; }
     uint16_t u16() {
         if (!avail(2)) { ok = false; return 0; }
-        uint16_t v = static_cast<uint16_t>(p[pos] | (p[pos + 1] << 8));
+        uint16_t const v = static_cast<uint16_t>(p[pos] | (p[pos + 1] << 8));
         pos += 2;
         return v;
     }
     uint32_t u32() {
         if (!avail(4)) { ok = false; return 0; }
-        uint32_t v = static_cast<uint32_t>(p[pos]) | (static_cast<uint32_t>(p[pos + 1]) << 8) |
+        uint32_t const v = static_cast<uint32_t>(p[pos]) | (static_cast<uint32_t>(p[pos + 1]) << 8) |
                      (static_cast<uint32_t>(p[pos + 2]) << 16) | (static_cast<uint32_t>(p[pos + 3]) << 24);
         pos += 4;
         return v;
     }
     uint32_t peek32(size_t at) {
-        size_t save = pos;
+        size_t const save = pos;
         pos = at;
-        uint32_t v = u32();
+        uint32_t const v = u32();
         pos = save;
         return v;
     }
@@ -68,18 +68,18 @@ bool parseStringPool(const uint8_t* data, size_t size, std::vector<std::string>&
     if (size < 28) return false;
     Cursor c{data, size, 0};
     c.pos = 8;  // stringCount
-    uint32_t stringCount = c.u32();
+    uint32_t const stringCount = c.u32();
     c.u32();  // styleCount
-    uint32_t flags = c.u32();
-    uint32_t stringsStart = c.u32();
+    uint32_t const flags = c.u32();
+    uint32_t const stringsStart = c.u32();
     c.u32();  // stylesStart - offsets array follows at byte 28
     if (!c.ok || stringCount > 100000 || stringsStart > size) return false;
-    bool utf8 = (flags & 0x100) != 0;
+    bool const utf8 = (flags & 0x100) != 0;
 
     for (uint32_t i = 0; i < stringCount; ++i) {
         if (!c.avail(4)) return false;
-        uint32_t offset = c.u32();
-        size_t base = static_cast<size_t>(stringsStart) + offset;
+        uint32_t const offset = c.u32();
+        size_t const base = static_cast<size_t>(stringsStart) + offset;
         if (base >= size) return false;
         if (utf8) {
             // two varints in a row: char length, then byte length (1-2 bytes each)
@@ -87,7 +87,7 @@ bool parseStringPool(const uint8_t* data, size_t size, std::vector<std::string>&
             size_t lens[2];
             for (int k = 0; k < 2; ++k) {
                 if (q >= size) return false;
-                uint8_t b = data[q++];
+                uint8_t const b = data[q++];
                 if (b & 0x80) {
                     if (q >= size) return false;
                     lens[k] = (static_cast<size_t>(b & 0x7F) << 8) | data[q++];
@@ -95,7 +95,7 @@ bool parseStringPool(const uint8_t* data, size_t size, std::vector<std::string>&
                     lens[k] = b;
                 }
             }
-            size_t byteLen = lens[1];
+            size_t const byteLen = lens[1];
             if (q + byteLen > size) return false;
             out.emplace_back(reinterpret_cast<const char*>(data + q), byteLen);
         } else {
@@ -113,9 +113,9 @@ bool parseStringPool(const uint8_t* data, size_t size, std::vector<std::string>&
             std::string s;
             s.reserve(len);
             for (uint32_t j = 0; j < len; ++j) {
-                uint32_t ch = static_cast<uint32_t>(data[p + 2 * j]) | (static_cast<uint32_t>(data[p + 2 * j + 1]) << 8);
+                uint32_t const ch = static_cast<uint32_t>(data[p + 2 * j]) | (static_cast<uint32_t>(data[p + 2 * j + 1]) << 8);
                 if (ch >= 0xD800 && ch <= 0xDBFF && j + 1 < len) {
-                    uint32_t lo = static_cast<uint32_t>(data[p + 2 * (j + 1)]) | (static_cast<uint32_t>(data[p + 2 * (j + 1) + 1]) << 8);
+                    uint32_t const lo = static_cast<uint32_t>(data[p + 2 * (j + 1)]) | (static_cast<uint32_t>(data[p + 2 * (j + 1) + 1]) << 8);
                     if (lo >= 0xDC00 && lo <= 0xDFFF) {
                         appendUtf8(s, 0x10000 + ((ch - 0xD800) << 10) + (lo - 0xDC00));
                         ++j;
@@ -135,7 +135,7 @@ std::string poolString(const std::vector<std::string>& pool, uint32_t index) {
 }
 
 void escape(std::string& out, const std::string& s, bool attribute) {
-    for (char ch : s) {
+    for (char const ch : s) {
         switch (ch) {
         case '&': out += "&amp;"; break;
         case '<': out += "&lt;"; break;
@@ -178,14 +178,14 @@ std::string formatTypedValue(uint8_t type, uint32_t data, const ResourceTable* r
         return buf;
     }
     case 0x05: {  // DIMENSION
-        static const char* kUnits[] = {"px", "dp", "sp", "pt", "in", "mm"};
-        uint32_t unit = data & 0xF;
+        static const char* const kUnits[] = {"px", "dp", "sp", "pt", "in", "mm"};
+        uint32_t const unit = data & 0xF;
         std::snprintf(buf, sizeof buf, "%g%s", complexToFloat(data),
                       unit < 6 ? kUnits[unit] : "");
         return buf;
     }
     case 0x06: {  // FRACTION
-        float v = complexToFloat(data) * 100.f;
+        float const v = complexToFloat(data) * 100.f;
         std::snprintf(buf, sizeof buf, "%g%s", v, (data & 0xF) == 1 ? "%p" : "%");
         return buf;
     }
@@ -222,7 +222,7 @@ bool AxmlDecoder::decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visit
         return false;
     }
     Cursor c{bytes.data(), bytes.size(), 0};
-    uint32_t totalSize = c.peek32(4);
+    uint32_t const totalSize = c.peek32(4);
     if (totalSize > bytes.size()) {
         error = "truncated binary XML";
         return false;
@@ -237,15 +237,15 @@ bool AxmlDecoder::decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visit
     size_t pos = 8;  // skip the RES_XML_TYPE wrapper header
     while (pos + 8 <= totalSize) {
         c.pos = pos;
-        uint16_t type = c.u16();
-        uint16_t headerSize = c.u16();
-        uint32_t chunkSize = c.u32();
+        uint16_t const type = c.u16();
+        uint16_t const headerSize = c.u16();
+        uint32_t const chunkSize = c.u32();
         if (!c.ok || chunkSize < 8 || pos + chunkSize > totalSize) {
             error = "corrupt chunk header";
             return false;
         }
         const uint8_t* data = bytes.data() + pos;
-        size_t size = chunkSize;
+        size_t const size = chunkSize;
 
         switch (type) {
         case kStringPool:
@@ -258,8 +258,8 @@ bool AxmlDecoder::decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visit
         case kStartNamespace: {
             if (size < 24 || headerSize < 16) { error = "short namespace chunk"; return false; }
             c.pos = pos + headerSize;
-            uint32_t prefixIdx = c.u32();
-            uint32_t uriIdx = c.u32();
+            uint32_t const prefixIdx = c.u32();
+            uint32_t const uriIdx = c.u32();
             if (!c.ok) { error = "short namespace chunk"; return false; }
             // Attach xmlns declarations to the element that opens them.
             std::string prefix = poolString(pool, prefixIdx);
@@ -282,38 +282,37 @@ bool AxmlDecoder::decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visit
             // 0x14 = 20), NOT to the chunk - real AXML files store 20.
             const size_t attrExt = pos + headerSize;
             c.pos = attrExt;
-            uint32_t nsElemIdx = c.u32();
-            uint32_t nameIdx = c.u32();
-            uint16_t attributeStart = c.u16();
-            uint16_t attributeSize = c.u16();
-            uint16_t attributeCount = c.u16();
+            [[maybe_unused]] uint32_t const nsElemIdx = c.u32();
+            uint32_t const nameIdx = c.u32();
+            uint16_t const attributeStart = c.u16();
+            uint16_t const attributeSize = c.u16();
+            uint16_t const attributeCount = c.u16();
             if (!c.ok || attributeSize < 20 || attributeStart < 20) {
                 error = "corrupt element";
                 return false;
             }
-            (void)nsElemIdx;
 
             attrs.clear();
             for (const auto& ns : pendingNs)
                 attrs.push_back({"xmlns:" + ns.first, ns.second});
             pendingNs.clear();
 
-            size_t attrBase = attrExt + attributeStart;
+            size_t const attrBase = attrExt + attributeStart;
             for (uint16_t i = 0; i < attributeCount; ++i) {
-                size_t base = attrBase + static_cast<size_t>(i) * attributeSize;
+                size_t const base = attrBase + static_cast<size_t>(i) * attributeSize;
                 if (base + 20 > pos + size) { error = "corrupt attributes"; return false; }
-                uint32_t nsIdx = c.peek32(base);
-                uint32_t attrNameIdx = c.peek32(base + 4);
-                uint32_t rawValue = c.peek32(base + 8);
+                uint32_t const nsIdx = c.peek32(base);
+                uint32_t const attrNameIdx = c.peek32(base + 4);
+                uint32_t const rawValue = c.peek32(base + 8);
                 // typed value: size u16, res0 u8, dataType u8, data u32
-                uint32_t tvHeader = c.peek32(base + 12);
-                uint8_t dataType = static_cast<uint8_t>(tvHeader >> 24);
-                uint32_t typedData = c.peek32(base + 16);
+                uint32_t const tvHeader = c.peek32(base + 12);
+                uint8_t const dataType = static_cast<uint8_t>(tvHeader >> 24);
+                uint32_t const typedData = c.peek32(base + 16);
 
                 std::string name = poolString(pool, attrNameIdx);
                 if (name.empty()) name = "attr" + std::to_string(i);
                 if (nsIdx != kNoIndex) {
-                    std::string uri = poolString(pool, nsIdx);
+                    std::string const uri = poolString(pool, nsIdx);
                     std::string prefix;
                     for (auto it = openNs.rbegin(); it != openNs.rend() && prefix.empty(); ++it)
                         if (it->second == uri) prefix = it->first;
@@ -342,7 +341,7 @@ bool AxmlDecoder::decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visit
             if (size < 24 || headerSize < 16) { error = "short end-element chunk"; return false; }
             // ResXMLTree_endElementExt follows the 16-byte node header.
             c.pos = pos + headerSize + 4;  // skip ns, read name
-            uint32_t nameIdx = c.u32();
+            uint32_t const nameIdx = c.u32();
             if (!c.ok) { error = "short end-element chunk"; return false; }
             visitor.endElement(poolString(pool, nameIdx));
             break;
@@ -350,12 +349,12 @@ bool AxmlDecoder::decodeEvents(const std::vector<uint8_t>& bytes, Visitor& visit
 
         case kCData: {
             if (size < 20 || headerSize < 16) break;
-            uint32_t dataIdx = c.peek32(pos + headerSize);
+            uint32_t const dataIdx = c.peek32(pos + headerSize);
             if (dataIdx == kNoIndex) break;
-            std::string text = poolString(pool, dataIdx);
+            std::string const text = poolString(pool, dataIdx);
             // skip whitespace-only text nodes
             bool printable = false;
-            for (char ch : text)
+            for (char const ch : text)
                 if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') { printable = true; break; }
             if (printable) visitor.text(text);
             break;

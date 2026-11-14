@@ -105,7 +105,7 @@ bool Socket::connectLoopback(int port, int timeoutMs, std::string& error) {
     const int flags = fcntl(fd_, F_GETFL, 0);
     fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
 #endif
-    int rc = ::connect(static_cast<decltype(fd_)>(fd_), reinterpret_cast<sockaddr*>(&addr), sizeof addr);
+    int const rc = ::connect(static_cast<decltype(fd_)>(fd_), reinterpret_cast<sockaddr*>(&addr), sizeof addr);
     bool ok = rc == 0;
     if (!ok) {
 #ifdef _WIN32
@@ -244,7 +244,7 @@ int Socket::localPort() const {
 
 Socket Socket::accept(int timeoutMs) {
     if (fd_ == kInvalid || !waitFor(static_cast<uintptr_t>(fd_), false, timeoutMs)) return Socket();
-    Fd c = static_cast<Fd>(::accept(static_cast<decltype(fd_)>(fd_), nullptr, nullptr));
+    Fd const c = static_cast<Fd>(::accept(static_cast<decltype(fd_)>(fd_), nullptr, nullptr));
     if (c == kInvalid) return Socket();
 #ifdef SO_NOSIGPIPE
     int one = 1;

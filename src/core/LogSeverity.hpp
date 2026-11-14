@@ -36,15 +36,15 @@ inline LogSeverity classify(std::string_view line) {
             return LogSeverity::Error;
     }
     auto isWord = [](char c) {
-        unsigned char u = static_cast<unsigned char>(c);
+        unsigned char const u = static_cast<unsigned char>(c);
         return std::isalnum(u) || c == '_';
     };
-    for (std::string_view word : {"ERROR", "Error", "error"}) {
+    for (std::string_view const word : {"ERROR", "Error", "error"}) {
         size_t pos = 0;
         while ((pos = line.find(word, pos)) != std::string_view::npos) {
-            bool leftOk = pos == 0 || !isWord(line[pos - 1]);
-            size_t after = pos + word.size();
-            bool rightIsWord = after < line.size() && isWord(line[after]);
+            bool const leftOk = pos == 0 || !isWord(line[pos - 1]);
+            size_t const after = pos + word.size();
+            bool const rightIsWord = after < line.size() && isWord(line[after]);
             if (leftOk && !rightIsWord) {
                 // "error:" / "ERROR -" / "error]" style markers count; a bare
                 // "Error" token inside a sentence (e.g. a message) does too,
@@ -54,12 +54,12 @@ inline LogSeverity classify(std::string_view line) {
             pos = after;
         }
     }
-    for (std::string_view word : {"WARN", "Warn", "warning:"}) {
+    for (std::string_view const word : {"WARN", "Warn", "warning:"}) {
         size_t pos = 0;
         while ((pos = line.find(word, pos)) != std::string_view::npos) {
-            bool leftOk = pos == 0 || !isWord(line[pos - 1]);
-            size_t after = pos + word.size();
-            bool rightIsWord = after < line.size() && isWord(line[after]);
+            bool const leftOk = pos == 0 || !isWord(line[pos - 1]);
+            size_t const after = pos + word.size();
+            bool const rightIsWord = after < line.size() && isWord(line[after]);
             if (leftOk && !rightIsWord) return LogSeverity::Warn;
             pos = after;
         }

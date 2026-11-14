@@ -12,7 +12,7 @@ bool dexOrder(const std::string& a, const std::string& b) {
         const std::string mid = s.substr(7, s.size() - 7 - 4);
         if (mid.empty()) return 1;
         int n = 0;
-        for (char c : mid) n = n * 10 + (c - '0');
+        for (char const c : mid) n = n * 10 + (c - '0');
         return n;
     };
     return num(a) < num(b);
@@ -38,13 +38,13 @@ void AnalysisService::stopJob(Job& job) {
 void AnalysisService::start(const std::string& group, const std::string& apkPath, bool force) {
     std::unique_ptr<Job> old;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         auto it = jobs_.find(group);
         if (it != jobs_.end()) {
             Job& j = *it->second;
             State s;
             {
-                std::lock_guard<std::mutex> jl(j.mutex);
+                std::lock_guard<std::mutex> const jl(j.mutex);
                 s = j.state;
             }
             if (!force && j.apkPath == apkPath && (s == State::Running || s == State::Ready)) return;
@@ -55,28 +55,28 @@ void AnalysisService::start(const std::string& group, const std::string& apkPath
     if (old) {
         old->stop = true;
         {
-            std::lock_guard<std::mutex> jl(old->mutex);
+            std::lock_guard<std::mutex> const jl(old->mutex);
             old->result.reset();  // the replaced result is not kept alive
         }
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         retired_.push_back(std::move(old));  // joined in update(): never block here
     }
     auto job = std::make_unique<Job>();
     job->apkPath = apkPath;
     Job* raw = job.get();
     job->worker = std::thread(&AnalysisService::run, raw);
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     jobs_[group] = std::move(job);
 }
 
 void AnalysisService::run(Job* job) {
     const auto setPhase = [&](std::string p) {
-        std::lock_guard<std::mutex> lock(job->mutex);
+        std::lock_guard<std::mutex> const lock(job->mutex);
         job->phase = std::move(p);
     };
     const auto finish = [&](State s, std::string error, std::shared_ptr<const ApkAnalysis> result) {
         {
-            std::lock_guard<std::mutex> lock(job->mutex);
+            std::lock_guard<std::mutex> const lock(job->mutex);
             job->state = s;
             job->error = std::move(error);
             job->result = std::move(result);
@@ -134,20 +134,20 @@ void AnalysisService::run(Job* job) {
 }
 
 void AnalysisService::cancel(const std::string& group) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     auto it = jobs_.find(group);
     if (it != jobs_.end()) it->second->stop = true;
 }
 
 void AnalysisService::purge(const std::string& group) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     auto it = jobs_.find(group);
     if (it == jobs_.end()) return;
     it->second->stop = true;
     {
         // Release the result now (not when the worker is reaped): the DEX
         // data and xref tables go away as soon as no reader holds them.
-        std::lock_guard<std::mutex> jl(it->second->mutex);
+        std::lock_guard<std::mutex> const jl(it->second->mutex);
         it->second->result.reset();
     }
     retired_.push_back(std::move(it->second));
@@ -157,7 +157,7 @@ void AnalysisService::purge(const std::string& group) {
 void AnalysisService::clear() {
     std::vector<std::unique_ptr<Job>> all;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         for (auto& kv : jobs_) all.push_back(std::move(kv.second));
         jobs_.clear();
         for (auto& j : retired_) all.push_back(std::move(j));
@@ -165,14 +165,14 @@ void AnalysisService::clear() {
     }
     for (auto& j : all) j->stop = true;
     for (auto& j : all) stopJob(*j);
-    std::lock_guard<std::mutex> lock(elfMutex_);
+    std::lock_guard<std::mutex> const lock(elfMutex_);
     lastNative_.reset();
 }
 
 void AnalysisService::update() {
     std::vector<std::unique_ptr<Job>> done;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         for (auto it = retired_.begin(); it != retired_.end();) {
             if ((*it)->finished.load()) {
                 done.push_back(std::move(*it));
@@ -189,11 +189,11 @@ void AnalysisService::update() {
 
 AnalysisService::Status AnalysisService::status(const std::string& group) const {
     Status st;
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     auto it = jobs_.find(group);
     if (it == jobs_.end()) return st;
     const Job& j = *it->second;
-    std::lock_guard<std::mutex> jl(j.mutex);
+    std::lock_guard<std::mutex> const jl(j.mutex);
     st.state = j.state;
     st.error = j.error;
     st.phase = j.phase;
@@ -203,16 +203,17 @@ AnalysisService::Status AnalysisService::status(const std::string& group) const 
 }
 
 std::shared_ptr<const ApkAnalysis> AnalysisService::get(const std::string& group) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     auto it = jobs_.find(group);
     if (it == jobs_.end()) return nullptr;
-    std::lock_guard<std::mutex> jl(it->second->mutex);
+    std::lock_guard<std::mutex> const jl(it->second->mutex);
     return it->second->result;
 }
 
 std::vector<std::string> AnalysisService::groups() const {
     std::vector<std::string> out;
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
+    out.reserve(jobs_.size());
     for (const auto& kv : jobs_) out.push_back(kv.first);
     std::sort(out.begin(), out.end());
     return out;
@@ -222,7 +223,7 @@ std::shared_ptr<const ElfFile> AnalysisService::loadElf(const std::string& apkPa
                                                         std::string& error) {
     const std::string key = apkPath + '\n' + entry;
     {
-        std::lock_guard<std::mutex> lock(elfMutex_);
+        std::lock_guard<std::mutex> const lock(elfMutex_);
         auto it = elfCache_.find(key);
         if (it != elfCache_.end())
             if (auto alive = it->second.lock()) return alive;
@@ -239,7 +240,7 @@ std::shared_ptr<const ElfFile> AnalysisService::loadElf(const std::string& apkPa
     }
     std::shared_ptr<const ElfFile> elf = ElfFile::parse(std::move(bytes), entry, error);
     if (!elf) return nullptr;
-    std::lock_guard<std::mutex> lock(elfMutex_);
+    std::lock_guard<std::mutex> const lock(elfMutex_);
     // The cache only holds weak references: a library stays in memory only
     // while some view / tool result still uses it.
     for (auto it = elfCache_.begin(); it != elfCache_.end();)
@@ -252,7 +253,7 @@ std::shared_ptr<const NativeCode> AnalysisService::loadNative(const std::string&
                                                               const std::atomic<bool>* cancel, std::string& error) {
     const std::string key = apkPath + '\n' + entry;
     {
-        std::lock_guard<std::mutex> lock(elfMutex_);
+        std::lock_guard<std::mutex> const lock(elfMutex_);
         auto it = nativeCache_.find(key);
         if (it != nativeCache_.end())
             if (auto alive = it->second.lock()) {
@@ -260,11 +261,11 @@ std::shared_ptr<const NativeCode> AnalysisService::loadNative(const std::string&
                 return alive;
             }
     }
-    std::shared_ptr<const ElfFile> elf = loadElf(apkPath, entry, error);
+    std::shared_ptr<const ElfFile> const elf = loadElf(apkPath, entry, error);
     if (!elf) return nullptr;
     std::shared_ptr<const NativeCode> code = NativeCode::build(elf, cancel, error);
     if (!code) return nullptr;
-    std::lock_guard<std::mutex> lock(elfMutex_);
+    std::lock_guard<std::mutex> const lock(elfMutex_);
     for (auto it = nativeCache_.begin(); it != nativeCache_.end();)
         it = it->second.expired() ? nativeCache_.erase(it) : std::next(it);
     nativeCache_[key] = code;

@@ -43,7 +43,7 @@ struct IconDestroyer {
 using UniqueIcon = std::unique_ptr<std::remove_pointer_t<HICON>, IconDestroyer>;
 
 std::string extOf(const std::string& name) {
-    size_t dot = name.find_last_of('.');
+    size_t const dot = name.find_last_of('.');
     if (dot == std::string::npos) return {};
     std::string ext = name.substr(dot);  // includes the dot
     for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -140,9 +140,7 @@ ImTextureID ShellIcons::iconFor(const TreeNode& node, bool apkRoot) {
 
 #else  // non-Windows: no shell icons, explorer falls back to drawn icons
 
-ImTextureID ShellIcons::iconFor(const TreeNode& node, bool apkRoot) {
-    (void)node;
-    (void)apkRoot;
+ImTextureID ShellIcons::iconFor(const TreeNode& /*node*/, bool /*apkRoot*/) {
     return 0;
 }
 

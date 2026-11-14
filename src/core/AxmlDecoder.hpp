@@ -42,12 +42,9 @@ public:
     // calling thread; default implementations make partial overrides easy.
     struct Visitor {
         virtual ~Visitor() = default;
-        virtual void startElement(const std::string& name, const std::vector<Attr>& attrs) {
-            (void)name;
-            (void)attrs;
-        }
-        virtual void endElement(const std::string& name) { (void)name; }
-        virtual void text(const std::string& text) { (void)text; }
+        virtual void startElement(const std::string& /*name*/, const std::vector<Attr>& /*attrs*/) {}
+        virtual void endElement(const std::string& /*name*/) {}
+        virtual void text(const std::string& /*text*/) {}
     };
 
     // Walks the AXML chunk stream and feeds `visitor`. Same validation and

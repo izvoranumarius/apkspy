@@ -12,7 +12,7 @@
 
 void JobQueue::post(std::function<void()> job) {
     {
-        std::lock_guard<std::mutex> lock(m_);
+        std::lock_guard<std::mutex> const lock(m_);
         if (stopping_) return;
         jobs_.push_back(std::move(job));
         if (!worker_.joinable()) worker_ = std::thread(&JobQueue::loop, this);
@@ -22,7 +22,7 @@ void JobQueue::post(std::function<void()> job) {
 
 void JobQueue::stop() {
     {
-        std::lock_guard<std::mutex> lock(m_);
+        std::lock_guard<std::mutex> const lock(m_);
         stopping_ = true;
         jobs_.clear();
     }
@@ -92,7 +92,7 @@ DebugSession::~DebugSession() {
     jdwp_.setEventHandler(nullptr);
     jdwp_.setDisconnectHandler(nullptr);
     jdwp_.disconnect();
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     if (snap_.localPort) adb_.removeForward(snap_.serial, snap_.localPort);
 }
 
@@ -119,12 +119,12 @@ const char* DebugSession::threadStatusName(int32_t status) {
 }
 
 DebugSession::Snapshot DebugSession::snapshot() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     return snap_;
 }
 
 DebugSession::State DebugSession::state() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     return snap_.state;
 }
 
@@ -138,7 +138,7 @@ bool DebugSession::waitIdle(int timeoutMs) {
 }
 
 void DebugSession::pushEvent(std::string text) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     snap_.events.push_back(std::move(text));
     if (snap_.events.size() > 200) snap_.events.erase(snap_.events.begin(), snap_.events.begin() + 50);
     bump();
@@ -161,10 +161,10 @@ void DebugSession::attach(const std::string& serial, int pid) {
     });
 }
 
-void DebugSession::doAttach(std::string serial, int pid) {
+void DebugSession::doAttach(const std::string& serial, int pid) {
     if (jdwp_.connected()) doDetach(false);
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         snap_.state = State::Attaching;
         snap_.serial = serial;
         snap_.pid = pid;
@@ -177,7 +177,7 @@ void DebugSession::doAttach(std::string serial, int pid) {
     std::string error;
     const int port = adb_.forwardJdwp(serial, pid, error);
     if (port <= 0) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         snap_.state = State::Failed;
         snap_.error = error.empty() ? "adb forward failed" : error;
         bump();
@@ -198,7 +198,7 @@ void DebugSession::doAttach(std::string serial, int pid) {
     });
     if (!jdwp_.connect(port, error)) {
         adb_.removeForward(serial, port);
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         snap_.state = State::Failed;
         snap_.error = error;
         bump();
@@ -207,7 +207,7 @@ void DebugSession::doAttach(std::string serial, int pid) {
     std::string desc, vm;
     jdwp_.version(desc, vm, error);
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         snap_.state = State::Running;
         snap_.localPort = port;
         snap_.vm = vm.empty() ? desc : vm + " - " + desc.substr(0, desc.find('\n'));
@@ -225,7 +225,7 @@ void DebugSession::doDetach(bool keepError) {
     int port = 0;
     bool wasSuspended = false;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         serial = snap_.serial;
         port = snap_.localPort;
         wasSuspended = snap_.state == State::Suspended;
@@ -236,12 +236,12 @@ void DebugSession::doDetach(bool keepError) {
         // connection goes away.
         std::vector<Breakpoint> bps;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             bps = snap_.breakpoints;
         }
         for (const Breakpoint& bp : bps)
-            for (int32_t r : bp.requests) jdwp_.clearRequest(2, r, e);
-        for (int32_t r : classPrepareRequests_) jdwp_.clearRequest(8, r, e);
+            for (int32_t const r : bp.requests) jdwp_.clearRequest(2, r, e);
+        for (int32_t const r : classPrepareRequests_) jdwp_.clearRequest(8, r, e);
         if (wasSuspended) jdwp_.resumeVm(e);
     }
     // disconnect() first: it joins the reader thread (which would otherwise
@@ -252,7 +252,7 @@ void DebugSession::doDetach(bool keepError) {
     classPrepareRequests_.clear();
     stepRequest_ = 0;
     if (port) adb_.removeForward(serial, port);
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     const std::string err = keepError ? snap_.error : std::string();
     const std::vector<Breakpoint> bps = snap_.breakpoints;
     const std::vector<std::string> events = snap_.events;
@@ -273,21 +273,21 @@ void DebugSession::loadThreads() {
     std::vector<Id> ids;
     std::string error;
     if (!jdwp_.allThreads(ids, error)) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         snap_.error = error;
         bump();
         return;
     }
     std::vector<ThreadRow> rows;
     rows.reserve(ids.size());
-    for (Id id : ids) {
+    for (Id const id : ids) {
         ThreadRow r;
         r.id = id;
         jdwp_.threadName(id, r.name, error);
         jdwp_.threadStatus(id, r.status, r.suspend, error);
         rows.push_back(std::move(r));
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     snap_.threads = std::move(rows);
     bump();
 }
@@ -311,7 +311,7 @@ void DebugSession::loadFrames(Id thread) {
             rows.push_back(std::move(r));
         }
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     snap_.currentThread = thread;
     snap_.frames = std::move(rows);
     snap_.selectedFrame = 0;
@@ -323,7 +323,7 @@ void DebugSession::loadLocals() {
     Id thread = 0;
     FrameRow frame;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         if (snap_.frames.empty() || snap_.selectedFrame < 0 || snap_.selectedFrame >= static_cast<int>(snap_.frames.size())) {
             snap_.locals.clear();
             bump();
@@ -365,7 +365,7 @@ void DebugSession::loadLocals() {
     } else {
         locals.push_back({"(locals)", "", "not available: " + error + " (needs a debug build with local variable info)"});
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     snap_.locals = std::move(locals);
     snap_.children.clear();
     bump();
@@ -386,7 +386,7 @@ DebugSession::Local DebugSession::makeLocal(const std::string& name, const std::
 void DebugSession::expand(uint64_t objectId) {
     if (!objectId) return;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         if (snap_.children.count(objectId)) return;
         snap_.children[objectId] = {};  // placeholder: one request per object
     }
@@ -445,7 +445,7 @@ void DebugSession::loadChildren(uint64_t objectId) {
         }
         if (out.empty()) out.push_back({"(no instance fields)", "", ""});
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     snap_.children[objectId] = std::move(out);
     bump();
 }
@@ -504,7 +504,7 @@ void DebugSession::step(int depth) {
     jobs_.post([this, depth] {
         Id thread = 0;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             if (snap_.state == State::Suspended) thread = snap_.currentThread;
         }
         std::string e;
@@ -515,7 +515,7 @@ void DebugSession::step(int depth) {
             if (!jdwp_.setStep(thread, depth, stepRequest_, e)) {
                 pushEvent("step failed: " + e);
             } else if (jdwp_.resumeVm(e)) {
-                std::lock_guard<std::mutex> lock(mutex_);
+                std::lock_guard<std::mutex> const lock(mutex_);
                 snap_.state = State::Running;
                 bump();
             }
@@ -539,7 +539,7 @@ void DebugSession::selectFrame(int index) {
     ++pending_;
     jobs_.post([this, index] {
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             snap_.selectedFrame = index;
             bump();
         }
@@ -551,7 +551,7 @@ void DebugSession::selectFrame(int index) {
 int DebugSession::addBreakpoint(const std::string& cls, const std::string& method, int line) {
     int id = 0;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         Breakpoint bp;
         bp.id = id = nextBreakpointId_++;
         bp.classDescriptor = descriptorOf(cls);
@@ -568,7 +568,7 @@ int DebugSession::addBreakpoint(const std::string& cls, const std::string& metho
 int DebugSession::addExceptionBreakpoint(const std::string& cls, bool caught, bool uncaught) {
     int id = 0;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         Breakpoint bp;
         bp.id = id = nextBreakpointId_++;
         bp.exception = true;
@@ -589,7 +589,7 @@ void DebugSession::removeBreakpoint(int id) {
         std::vector<int32_t> requests;
         uint8_t kind = 2;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             for (auto it = snap_.breakpoints.begin(); it != snap_.breakpoints.end(); ++it)
                 if (it->id == id) {
                     requests = it->requests;
@@ -601,7 +601,7 @@ void DebugSession::removeBreakpoint(int id) {
         }
         std::string e;
         if (jdwp_.connected())
-            for (int32_t r : requests) jdwp_.clearRequest(kind, r, e);
+            for (int32_t const r : requests) jdwp_.clearRequest(kind, r, e);
         --pending_;
     });
 }
@@ -656,7 +656,7 @@ void DebugSession::tryResolveAll() {
     if (!jdwp_.connected()) return;
     std::vector<Breakpoint> work;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         for (const Breakpoint& bp : snap_.breakpoints)
             if (!bp.resolved) work.push_back(bp);
     }
@@ -677,7 +677,7 @@ void DebugSession::tryResolveAll() {
                 bp.status = "class prepare: " + error;
             }
         }
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         for (Breakpoint& live : snap_.breakpoints)
             if (live.id == bp.id) {
                 live.requests = bp.requests;
@@ -694,7 +694,7 @@ void DebugSession::onEvent(const JdwpClient::Event& e) {
     case 1:    // single step
     case 2:    // breakpoint
     case 4: {  // exception
-        std::string where = jdwp_.describe(e.location);
+        std::string const where = jdwp_.describe(e.location);
         std::string description, type, caughtIn;
         if (e.kind == 4) {
             std::string sig;
@@ -704,7 +704,7 @@ void DebugSession::onEvent(const JdwpClient::Event& e) {
         }
         exceptionObject_ = e.kind == 4 ? e.exception : 0;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             snap_.state = State::Suspended;
             snap_.exception = description;
             snap_.exceptionType = type;
@@ -728,13 +728,13 @@ void DebugSession::onEvent(const JdwpClient::Event& e) {
     case 8: {  // class prepare: resolve pending breakpoints of that class
         std::vector<Breakpoint> work;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             for (const Breakpoint& bp : snap_.breakpoints)
                 if (!bp.resolved && bp.classDescriptor == e.signature) work.push_back(bp);
         }
         for (Breakpoint& bp : work) {
             resolveBreakpoint(bp, e.refType);
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             for (Breakpoint& live : snap_.breakpoints)
                 if (live.id == bp.id) {
                     live.requests = bp.requests;
@@ -780,12 +780,12 @@ DeviceService::~DeviceService() {
 }
 
 void DeviceService::setAdbPath(const std::string& path) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     adb_.setPath(path.empty() ? "adb" : path);
 }
 
 std::string DeviceService::adbPath() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     return adb_.path();
 }
 
@@ -793,7 +793,7 @@ void DeviceService::refreshDevices() {
     jobs_.post([this] {
         std::string error;
         std::vector<adb::Device> list = adb_.devices(error);
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         devices_ = std::move(list);
         error_ = error;
         // Keep the selection valid: default to the only/first online device.
@@ -811,17 +811,17 @@ void DeviceService::refreshDevices() {
 }
 
 std::vector<adb::Device> DeviceService::devices() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     return devices_;
 }
 
 std::string DeviceService::lastError() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     return error_;
 }
 
 void DeviceService::select(const std::string& serial) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     if (serial != selected_) {
         selected_ = serial;
         processes_.clear();
@@ -830,7 +830,7 @@ void DeviceService::select(const std::string& serial) {
 }
 
 std::string DeviceService::selected() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     return selected_;
 }
 
@@ -843,7 +843,7 @@ void DeviceService::refreshProcesses() {
         std::vector<int> jdwp = adb_.jdwpPids(serial, 1200, jerr);
         std::sort(list.begin(), list.end(),
                   [](const adb::ProcessInfo& a, const adb::ProcessInfo& b) { return a.name < b.name; });
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         if (serial != selected_) return;  // selection changed meanwhile
         processes_ = std::move(list);
         jdwpPids_ = std::move(jdwp);
@@ -852,12 +852,12 @@ void DeviceService::refreshProcesses() {
 }
 
 std::vector<adb::ProcessInfo> DeviceService::processes() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     return processes_;
 }
 
 std::vector<int> DeviceService::debuggablePids() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     return jdwpPids_;
 }
 
@@ -896,7 +896,7 @@ bool DeviceService::startLogcat(const std::string& serial, std::string& error) {
     }
     stopLogcat();
     logcatSerial_ = serial;
-    std::vector<std::string> argv{adbPath(), "-s", serial, "logcat", "-v", "threadtime", "-T", "2000"};
+    std::vector<std::string> const argv{adbPath(), "-s", serial, "logcat", "-v", "threadtime", "-T", "2000"};
     ChildProcess child = ChildProcess::spawn(argv);
     if (!child.valid()) {
         error = "adb could not be started";
@@ -905,15 +905,15 @@ bool DeviceService::startLogcat(const std::string& serial, std::string& error) {
     logStop_ = false;
     logcatRunning_ = true;
     {
-        std::lock_guard<std::mutex> lock(logHandleMutex_);
+        std::lock_guard<std::mutex> const lock(logHandleMutex_);
         logKill_ = child.killHandle();
     }
     logThread_ = std::thread([this, c = std::move(child)]() mutable {
         c.readAll(
-            [this](std::string line) {
+            [this](const std::string& line) {
                 if (line.empty() || line.rfind("--------- ", 0) == 0) return;
                 LogEntry e = parseLogLine(line);
-                std::lock_guard<std::mutex> lock(logMutex_);
+                std::lock_guard<std::mutex> const lock(logMutex_);
                 e.seq = ++logSeq_;
                 log_.push_back(std::move(e));
                 if (log_.size() > kLogCapacity) log_.pop_front();  // bounded: oldest entries go first
@@ -921,7 +921,7 @@ bool DeviceService::startLogcat(const std::string& serial, std::string& error) {
             4096);
         c.waitForExit();
         {
-            std::lock_guard<std::mutex> lock(logHandleMutex_);
+            std::lock_guard<std::mutex> const lock(logHandleMutex_);
             logKill_ = ChildProcess::Handle{};
         }
         logcatRunning_ = false;
@@ -932,7 +932,7 @@ bool DeviceService::startLogcat(const std::string& serial, std::string& error) {
 void DeviceService::stopLogcat() {
     logStop_ = true;
     {
-        std::lock_guard<std::mutex> lock(logHandleMutex_);
+        std::lock_guard<std::mutex> const lock(logHandleMutex_);
         if (logKill_) ChildProcess::killByHandle(logKill_);
     }
     if (logThread_.joinable()) logThread_.join();
@@ -940,13 +940,13 @@ void DeviceService::stopLogcat() {
 }
 
 void DeviceService::clearLog() {
-    std::lock_guard<std::mutex> lock(logMutex_);
+    std::lock_guard<std::mutex> const lock(logMutex_);
     log_.clear();
     std::deque<LogEntry>().swap(log_);  // give the memory back
 }
 
 uint64_t DeviceService::logHead() const {
-    std::lock_guard<std::mutex> lock(logMutex_);
+    std::lock_guard<std::mutex> const lock(logMutex_);
     return logSeq_;
 }
 
@@ -955,7 +955,7 @@ std::vector<DeviceService::LogEntry> DeviceService::logEntries(uint64_t since, c
     static const std::string kLevels = "VDIWEF";
     const size_t minRank = kLevels.find(filter.minLevel) == std::string::npos ? 0 : kLevels.find(filter.minLevel);
     std::vector<LogEntry> out;
-    std::lock_guard<std::mutex> lock(logMutex_);
+    std::lock_guard<std::mutex> const lock(logMutex_);
     for (auto it = log_.rbegin(); it != log_.rend() && out.size() < maxEntries; ++it) {
         if (it->seq <= since) break;
         const size_t rank = kLevels.find(it->level);
@@ -974,7 +974,7 @@ std::vector<DeviceService::LogEntry> DeviceService::logEntries(uint64_t since, c
 void DeviceService::startMonitor(const std::string& serial, int pid) {
     stopMonitor();
     {
-        std::lock_guard<std::mutex> lock(sampleMutex_);
+        std::lock_guard<std::mutex> const lock(sampleMutex_);
         samples_.clear();
     }
     monitorStop_ = false;
@@ -985,7 +985,7 @@ void DeviceService::startMonitor(const std::string& serial, int pid) {
         adb::ProcStat prev;
         while (!monitorStop_.load()) {
             std::string error;
-            adb::ProcStat st = adb_.procStat(serial, pid, error);
+            adb::ProcStat const st = adb_.procStat(serial, pid, error);
             if (st.ok) {
                 Sample s;
                 s.t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
@@ -994,7 +994,7 @@ void DeviceService::startMonitor(const std::string& serial, int pid) {
                                    static_cast<double>(st.cpuTotalJiffies - prev.cpuTotalJiffies);
                 s.rssKb = st.rssKb;
                 s.threads = st.threads;
-                std::lock_guard<std::mutex> lock(sampleMutex_);
+                std::lock_guard<std::mutex> const lock(sampleMutex_);
                 samples_.push_back(s);
                 if (samples_.size() > kSampleCapacity) samples_.pop_front();
                 prev = st;
@@ -1016,6 +1016,6 @@ void DeviceService::stopMonitor() {
 }
 
 std::vector<DeviceService::Sample> DeviceService::samples() const {
-    std::lock_guard<std::mutex> lock(sampleMutex_);
+    std::lock_guard<std::mutex> const lock(sampleMutex_);
     return std::vector<Sample>(samples_.begin(), samples_.end());
 }

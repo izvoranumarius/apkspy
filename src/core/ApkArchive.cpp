@@ -22,7 +22,7 @@ bool ApkArchive::open(const std::string& path) {
     // Open the file ourselves (UTF-8 -> native wide chars on Windows) and
     // hand miniz the FILE*; mz_zip_reader_init_file would use fopen, which
     // mangles non-ANSI paths on Windows.
-    fs::path native = pathutil::fromUtf8(path);
+    fs::path const native = pathutil::fromUtf8(path);
 #ifdef _WIN32
     const std::wstring wide = native.wstring();
     file_ = _wfopen(wide.c_str(), L"rb");
@@ -54,7 +54,7 @@ void ApkArchive::close() {
 std::unique_ptr<TreeNode> ApkArchive::buildTree() const {
     auto root = std::make_unique<TreeNode>(name_, "", NodeKind::Folder);
     if (!opened_) return root;
-    mz_uint count = mz_zip_reader_get_num_files(&zip_);
+    mz_uint const count = mz_zip_reader_get_num_files(&zip_);
     // Index of each folder's children by name: inserting thousands of zip
     // entries with a linear findChild per path component is O(n^2). Keys
     // are views of the nodes' own names (stable: nodes live on the heap), so
@@ -69,23 +69,23 @@ std::unique_ptr<TreeNode> ApkArchive::buildTree() const {
     mz_zip_archive_file_stat stat{};
     for (mz_uint i = 0; i < count; ++i) {
         if (!mz_zip_reader_file_stat(&zip_, i, &stat)) continue;
-        std::string full(stat.m_filename);
-        bool isDir = stat.m_is_directory != 0;
+        std::string const full(stat.m_filename);
+        bool const isDir = stat.m_is_directory != 0;
         TreeNode* cur = root.get();
         size_t start = 0;
         while (start < full.size()) {
-            size_t slash = full.find('/', start);
-            bool last = slash == std::string::npos;
+            size_t const slash = full.find('/', start);
+            bool const last = slash == std::string::npos;
             std::string part = full.substr(start, last ? std::string::npos : slash - start);
             start = last ? full.size() : slash + 1;
             if (part.empty()) continue;
-            bool folder = !last || isDir;
+            bool const folder = !last || isDir;
             auto& map = childIndex(cur);
             TreeNode* next = nullptr;
             if (auto found = map.find(part); found != map.end()) next = found->second;
             if (!next) {
                 std::string path = folder ? full.substr(0, start) : full;
-                NodeKind kind = folder ? NodeKind::Folder : TreeNode::classify(part);
+                NodeKind const kind = folder ? NodeKind::Folder : TreeNode::classify(part);
                 next = cur->addChild(std::make_unique<TreeNode>(std::move(part), std::move(path), kind));
                 map.emplace(next->name(), next);
             }

@@ -30,7 +30,7 @@ struct Node {
 inline bool read(const uint8_t* data, size_t size, size_t& pos, Node& out) {
     if (!data || pos + 2 > size) return false;
     const uint8_t tag = data[pos++];
-    uint8_t first = data[pos++];
+    uint8_t const first = data[pos++];
     size_t len = 0;
     if (first & 0x80) {
         const int n = first & 0x7F;
@@ -71,15 +71,15 @@ inline const uint8_t kOidCommonName[] = {0x55, 0x04, 0x03};
 inline std::string commonName(const Node& name) {
     size_t rdnPos = 0;
     Node rdn;
-    Children rdns = of(name);
+    Children const rdns = of(name);
     while (rdns.next(rdnPos, rdn)) {
         size_t atvPos = 0;
         Node atv;
-        Children atvs = of(rdn);
+        Children const atvs = of(rdn);
         while (atvs.next(atvPos, atv)) {
             Node oid, value;
             size_t innerPos = 0;
-            Children inner = of(atv);
+            Children const inner = of(atv);
             if (!inner.next(innerPos, oid)) continue;
             if (!inner.next(innerPos, value)) continue;
             if (oidEquals(oid, kOidCommonName, sizeof kOidCommonName))

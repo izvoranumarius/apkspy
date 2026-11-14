@@ -26,15 +26,15 @@ void SearchService::stop() {
     stop_ = false;
     // Drop hits as well: they point into trees that may be gone (e.g. after
     // removing an APK from the project), so stale results must not survive.
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     hits_.clear();
 }
 
-void SearchService::start(const TreeNode* root, const ContentSource* source, std::string query, Mode mode,
+void SearchService::start(const TreeNode* root, const ContentSource* source, const std::string& query, Mode mode,
                           std::string group) {
     stop();
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         hits_.clear();
     }
     truncated_ = false;
@@ -48,7 +48,7 @@ void SearchService::start(const TreeNode* root, const ContentSource* source, std
     worker_ = std::thread(&SearchService::run, this, root, source, std::move(lowered));
 }
 
-void SearchService::run(const TreeNode* root, const ContentSource* source, std::string query) {
+void SearchService::run(const TreeNode* root, const ContentSource* source, const std::string& query) {
     if (mode_ == Mode::Filenames) scanFileNames(*root, query);
     else scan(*root, *source, query);
     std::vector<uint8_t>().swap(readBuffer_);  // give the scan buffer back
@@ -56,10 +56,10 @@ void SearchService::run(const TreeNode* root, const ContentSource* source, std::
 }
 
 bool SearchService::addHit(const TreeNode& node, int line, const char* begin, const char* end) {
-    size_t len = static_cast<size_t>(end - begin);
+    size_t const len = static_cast<size_t>(end - begin);
     std::string text(begin, len > kMaxHitText ? kMaxHitText : len);
     if (len > kMaxHitText) text += "...";
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     if (hits_.size() >= kMaxHits) {
         truncated_ = true;
         stop_ = true;
@@ -83,9 +83,9 @@ bool SearchService::lineMatches(Mode mode, std::string_view line, std::string_vi
     const auto followedBy = [&](char c) {
         size_t p = 0;
         while (true) {
-            size_t rel = tex::ciFind(line.substr(p), query);
+            size_t const rel = tex::ciFind(line.substr(p), query);
             if (rel == std::string_view::npos) return false;
-            size_t atEnd = p + rel + query.size();
+            size_t const atEnd = p + rel + query.size();
             if (atEnd < line.size() && line[atEnd] == c) return true;
             p = p + rel + query.size();
         }
@@ -117,7 +117,7 @@ void SearchService::scan(const TreeNode& node, const ContentSource& source, cons
         for (const auto& c : node.children()) scan(*c, source, query);
         return;
     }
-    NodeKind k = node.kind();
+    NodeKind const k = node.kind();
 
     // Class searches also match source file names (Foo.java declares Foo).
     if (mode_ == Mode::Classes && isCodeFile(k) && tex::ciFind(node.name(), query) != std::string_view::npos) {
@@ -152,7 +152,7 @@ void SearchService::scan(const TreeNode& node, const ContentSource& source, cons
         while (end < total && data[end] != '\n') ++end;
         const char* lineBegin = data + pos;
         const size_t lineLen = end - pos;
-        std::string_view line(lineBegin, lineLen);
+        std::string_view const line(lineBegin, lineLen);
         const bool match = lineMatches(mode_, line, query);
         if (match) {
             const char* b = lineBegin;

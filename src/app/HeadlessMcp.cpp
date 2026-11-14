@@ -46,11 +46,9 @@ const char* kUsage =
 
 }  // namespace
 
-std::vector<std::string> commandLineArgs(int argc, char** argv) {
+std::vector<std::string> commandLineArgs([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
     std::vector<std::string> out;
 #ifdef _WIN32
-    (void)argc;
-    (void)argv;
     int n = 0;
     const UniqueLocal<LPWSTR> wargv(CommandLineToArgvW(GetCommandLineW(), &n));
     if (wargv)
@@ -122,7 +120,7 @@ int runHeadlessMcp(const std::vector<std::string>& args) {
         if (workspace.addApk(path, group)) project.addApk(pathutil::normalize(path), group);
     }
     if (analyze)
-        for (Root* r : workspace.apkRoots()) workspace.startAnalysis(r->title);
+        for (Root const* r : workspace.apkRoots()) workspace.startAnalysis(r->title);
 
     McpHost host(workspace, devices.get(), false);
     std::atomic<bool> stop{false};

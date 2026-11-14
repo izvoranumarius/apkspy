@@ -48,7 +48,7 @@ std::wstring commandLine(const std::vector<std::string>& argv) {
         }
         out += L'"';
         size_t slashes = 0;
-        for (wchar_t c : w) {
+        for (wchar_t const c : w) {
             if (c == L'\\') {
                 ++slashes;
                 continue;
@@ -164,7 +164,7 @@ bool Pty::start(const std::vector<std::string>& argv, const std::string& cwd, co
         char buf[8192];
         DWORD n = 0;
         while (ReadFile(impl_->outRead.get(), buf, sizeof buf, &n, nullptr) && n > 0) {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             pending_.append(buf, n);
             if (pending_.size() > (8u << 20)) pending_.erase(0, pending_.size() - (4u << 20));
         }
@@ -324,7 +324,7 @@ void Pty::stop() {
 #endif
 
 std::string Pty::take() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     std::string out;
     out.swap(pending_);
     return out;

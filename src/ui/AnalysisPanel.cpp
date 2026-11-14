@@ -31,7 +31,7 @@ std::string hexAddr(uint64_t v) {
 }
 
 std::string shortName(std::string_view descriptor) {
-    std::string j = DexFile::descriptorToJava(descriptor);
+    std::string const j = DexFile::descriptorToJava(descriptor);
     const size_t dot = j.rfind('.');
     return dot == std::string::npos ? j : j.substr(dot + 1);
 }
@@ -199,7 +199,7 @@ void AnalysisPanel::drawContents() {
     const AnalysisService::Status st = workspace_.analysis().status(apk.title);
     drawHeader(apk, st);
 
-    std::shared_ptr<const ApkAnalysis> analysis = workspace_.analysis().get(apk.title);
+    std::shared_ptr<const ApkAnalysis> const analysis = workspace_.analysis().get(apk.title);
     if (analysis.get() != cacheOwner_) {
         cacheOwner_ = analysis.get();
         // The bytecode analysis finished or was replaced: a native function on screen does not depend on it.
@@ -546,7 +546,7 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
     methodListing_.clear();
     std::string listing;
     std::vector<int32_t> pcs;
-    dalvik::ListingOptions opt;
+    dalvik::ListingOptions const opt;
     dalvik::disassembleMethod(dex, m.method, opt, listing, &pcs);
     size_t start = 0, li = 0;
     for (size_t i = 0; i <= listing.size(); ++i)
@@ -568,7 +568,7 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
         for (size_t i = 0; i < lines.size(); ++i) {
             const std::string_view l = lines[i];
             const size_t at = l.find(name + "(");
-            if (at == std::string_view::npos || l.find(';') < at || l.find("=") < at) continue;
+            if (at == std::string_view::npos || l.find(';') < at || l.find('=') < at) continue;
             if (at > 0 && (std::isalnum(static_cast<unsigned char>(l[at - 1])) || l[at - 1] == '_' || l[at - 1] == '.')) continue;
             doc->goTo(static_cast<int>(i));
             break;
@@ -707,7 +707,7 @@ void AnalysisPanel::drawQueryResults(const ApkAnalysis& a, Root& apk) {
 // Strings
 // ---------------------------------------------------------------------------
 
-void AnalysisPanel::drawStrings(const ApkAnalysis& a, Root& apk) {
+void AnalysisPanel::drawStrings(const ApkAnalysis& a, Root& /*apk*/) {
     ImGui::SetNextItemWidth(std::min(ui::em(9.f), ImGui::GetContentRegionAvail().x));
     bool refresh = ImGui::Combo("##cat", &stringCategory_, kCategoryNames, IM_ARRAYSIZE(kCategoryNames));
     ui::sameLineIfFits(ui::em(10.f));
@@ -775,7 +775,6 @@ void AnalysisPanel::drawStrings(const ApkAnalysis& a, Root& apk) {
         }
         ImGui::EndTable();
     }
-    (void)apk;
 }
 
 // ---------------------------------------------------------------------------
@@ -803,7 +802,7 @@ void AnalysisPanel::showGraph(const ApkAnalysis& a, const ApkAnalysis::MethodDef
     for (size_t i = 0; i <= listing.size(); ++i)
         if (i == listing.size() || listing[i] == '\n') {
             if (li < pcs.size() && pcs[li] >= 0) {
-                std::string l = listing.substr(start, i - start);
+                std::string const l = listing.substr(start, i - start);
                 const size_t first = l.find_first_not_of(' ');
                 lines.emplace_back(pcs[li], first == std::string::npos ? l : l.substr(first));
             }
@@ -834,7 +833,7 @@ void AnalysisPanel::showGraph(const ApkAnalysis& a, const ApkAnalysis::MethodDef
             e.kind = branch ? (k == 0 ? graphlayout::EdgeKind::Taken : graphlayout::EdgeKind::Fallthrough) : graphlayout::EdgeKind::Jump;
             edges.push_back(std::move(e));
         }
-        for (uint32_t h : block.exceptional) {
+        for (uint32_t const h : block.exceptional) {
             graphlayout::Edge e;
             e.from = static_cast<int>(b);
             e.to = static_cast<int>(h);
@@ -870,7 +869,7 @@ void AnalysisPanel::showCallGraph(const ApkAnalysis& a, const ApkAnalysis::Metho
     std::vector<graphlayout::Edge> edges;
     const auto addNode = [&](const std::string& ref, bool caller) {
         const auto seen = std::find(graphRefs_.begin(), graphRefs_.end(), ref);
-        int index = static_cast<int>(seen - graphRefs_.begin());
+        int const index = static_cast<int>(seen - graphRefs_.begin());
         if (seen == graphRefs_.end()) {
             graphRefs_.push_back(ref);
             GraphView::Block block;
@@ -1472,7 +1471,7 @@ void AnalysisPanel::drawCompare(Root& apk) {
 // ---------------------------------------------------------------------------
 
 void AnalysisPanel::drawResources(Root& apk) {
-    std::shared_ptr<const ResourceTable> table = workspace_.resources(apk.title);
+    std::shared_ptr<const ResourceTable> const table = workspace_.resources(apk.title);
     if (!table) {
         ImGui::TextDisabled("This APK has no readable resources.arsc.");
         return;

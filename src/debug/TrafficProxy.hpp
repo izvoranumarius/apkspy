@@ -109,9 +109,9 @@ public:
 
 private:
     void acceptLoop();
-    void serve(std::shared_ptr<Socket> client);
+    void serve(const std::shared_ptr<Socket>& client);
     void serveTunnel(Socket& client, std::shared_ptr<Flow> flow, std::string pending);
-    void serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::string pending);
+    void serveHttp(Socket& client, const std::shared_ptr<Flow>& flow, std::string pending);
     std::shared_ptr<Flow> newFlow();
     void finish(const std::shared_ptr<Flow>& f, std::chrono::steady_clock::time_point t0);
 

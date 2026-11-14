@@ -250,7 +250,7 @@ void Application::loadSettings() {
         resetAllLayouts_ = true;  // new panels: dock them into the default layouts once
         settings_.set(Settings::kLayoutVersion, kLayoutVersion);
     }
-    int count = settings_.getInt(Settings::kRecentCount, 0);
+    int const count = settings_.getInt(Settings::kRecentCount, 0);
     recents_.clear();
     for (int i = 0; i < count; ++i) {
         std::string path = settings_.getString(Settings::recentKey(i));
@@ -261,7 +261,7 @@ void Application::loadSettings() {
 
 void Application::restoreSession() {
     if (!settings_.getBool(Settings::kRestoreSession, true)) return;
-    std::string last = settings_.getString(Settings::kLastProject, "");
+    std::string const last = settings_.getString(Settings::kLastProject, "");
     if (last.empty()) return;
     std::error_code ec;
     if (!fs::exists(pathutil::fromUtf8(last), ec)) {
@@ -339,7 +339,7 @@ void Application::onDrop(GLFWwindow* window, int count, const char** paths) {
     if (!app->project_.isOpen()) app->project_.reset();
     std::vector<std::string> apks;
     for (int i = 0; i < count; ++i) {
-        std::string ext = tex::asciiLower(fs::path(paths[i]).extension().string());
+        std::string const ext = tex::asciiLower(fs::path(paths[i]).extension().string());
         if (ext == ".apk") apks.push_back(paths[i]);
     }
     if (!apks.empty()) {
@@ -437,7 +437,7 @@ void Application::frame() {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO const& io = ImGui::GetIO();
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) requestAction(PendingAction::OpenProject);
     // VS Code keys: Ctrl+P quick open, Ctrl+Shift+P commands, Ctrl+` terminal.
     if (io.KeyCtrl && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_P, false)) palette_->open(io.KeyShift ? ">" : "");
@@ -473,13 +473,13 @@ void Application::frame() {
     if (workspace_.hasFocusRequest() && pendingPerspective_ < 0 && !perspectives_[static_cast<size_t>(activePerspective_)].shows("Editor"))
         showPanel("Editor");
     drawDockHost();
-    Perspective& perspective = perspectives_[static_cast<size_t>(activePerspective_)];
+    Perspective const& perspective = perspectives_[static_cast<size_t>(activePerspective_)];
     for (auto& panel : panels_) {
         if (perspective.shows(panel->title())) panel->render(perspective.windowName(panel->title()));
     }
     if (!pendingTabs_.empty() && --pendingTabsDelay_ <= 0) {
         for (const std::string& name : pendingTabs_)
-            if (ImGuiWindow* window = ImGui::FindWindowByName(name.c_str()))
+            if (ImGuiWindow const* window = ImGui::FindWindowByName(name.c_str()))
                 if (window->DockNode && window->DockNode->TabBar) window->DockNode->TabBar->NextSelectedTabId = window->TabId;
         ImGui::SetWindowFocus(pendingTabs_.back().c_str());  // listed last: the workspace's main tool
         pendingTabs_.clear();
@@ -507,7 +507,7 @@ void Application::frame() {
         openProject(picked);
     if (projSaveBrowser_.render(), projSaveBrowser_.takeAccepted(picked)) {
         if (saveProjectAs(picked) && pendingAction_ != PendingAction::None) {
-            PendingAction action = pendingAction_;
+            PendingAction const action = pendingAction_;
             pendingAction_ = PendingAction::None;
             performAction(action, pendingOpenPath_);
         }
@@ -555,7 +555,7 @@ bool Application::projectHasUnsavedChanges() const {
     // missing from disk are unresolved: they stay in the project (and in
     // the saved file) and are excluded here, so a missing APK neither
     // flags the project as dirty forever nor gets dropped by a save.
-    std::vector<Root*> apks = workspace_.apkRoots();
+    std::vector<Root*> const apks = workspace_.apkRoots();
     size_t resolved = 0;
     std::error_code ec;
     for (const ProjectApk& apk : project_.apks()) {
@@ -626,7 +626,7 @@ void Application::drawProjectConfirm() {
         ImGui::CloseCurrentPopup();
         if (project_.hasPath()) {
             if (saveProject()) {
-                PendingAction action = pendingAction_;
+                PendingAction const action = pendingAction_;
                 pendingAction_ = PendingAction::None;
                 performAction(action, pendingOpenPath_);
             }
@@ -640,7 +640,7 @@ void Application::drawProjectConfirm() {
     ImGui::SameLine();
     if (ImGui::Button("Don't Save", ImVec2(120, 0))) {
         ImGui::CloseCurrentPopup();
-        PendingAction action = pendingAction_;
+        PendingAction const action = pendingAction_;
         pendingAction_ = PendingAction::None;
         performAction(action, pendingOpenPath_);
     }
@@ -734,7 +734,7 @@ bool Application::openProject(const std::string& path) {
 void Application::addApkPaths(const std::vector<std::string>& paths) {
     if (!project_.isOpen()) project_.reset();
     for (const std::string& path : paths) {
-        std::string group = project_.uniqueGroupName(
+        std::string const group = project_.uniqueGroupName(
             pathutil::toUtf8(fs::path(pathutil::fromUtf8(path)).stem()));
         if (!workspace_.addApk(path, group)) continue;
         project_.addApk(pathutil::normalize(path), group);
@@ -779,7 +779,7 @@ void Application::drawRecentProjects() {
         } else {
             for (const std::string& path : recents_) {
                 std::error_code ec;
-                bool exists = fs::exists(pathutil::fromUtf8(path), ec);
+                bool const exists = fs::exists(pathutil::fromUtf8(path), ec);
                 const std::string label = pathutil::toUtf8(fs::path(pathutil::fromUtf8(path)).filename());
                 if (ImGui::MenuItem(label.c_str(), nullptr, false, exists))
                     requestAction(PendingAction::OpenProject, path);
@@ -871,13 +871,13 @@ void Application::updateTitle() {
 
 void Application::drawWindowBorder() {
     if (!titleBar_ || windowFrame_->maximized()) return;
-    ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImVec2 max(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y);
+    ImGuiViewport const* vp = ImGui::GetMainViewport();
+    ImVec2 const max(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y);
     ImGui::GetForegroundDrawList()->AddRect(vp->Pos, max, theme::u32(Col::Border));
 }
 
 void Application::drawDockHost() {
-    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGuiViewport const* vp = ImGui::GetMainViewport();
     ImVec2 hostPos = vp->WorkPos;
     ImVec2 hostSize = vp->WorkSize;
     if (titleBar_) {
@@ -893,7 +893,7 @@ void Application::drawDockHost() {
     ImGui::SetNextWindowPos(hostPos);
     ImGui::SetNextWindowSize(hostSize);
     ImGui::SetNextWindowViewport(vp->ID);
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+    ImGuiWindowFlags const flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
                              ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBackground |
                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
@@ -986,7 +986,7 @@ void Application::drawStatusBar() {
     if (jadx.state() == JadxRunner::State::Running)
         activity = jadx.totalCount() > 0 ? "Decompiling " + std::to_string(jadx.processedCount()) + " / " + std::to_string(jadx.totalCount())
                                          : "Decompiling...";
-    for (Root* r : workspace_.apkRoots()) {
+    for (Root const* r : workspace_.apkRoots()) {
         const AnalysisService::Status st = workspace_.analysis().status(r->title);
         if (st.state != AnalysisService::State::Running) continue;
         activity += (activity.empty() ? "" : "   ") + std::string("Analyzing ") + std::to_string(st.done) + " / " + std::to_string(st.total);
@@ -1052,7 +1052,7 @@ void Application::drawStatusBar() {
     }
     if (clicked) {
         Perspective& p = perspectives_[static_cast<size_t>(activePerspective_)];
-        ImGuiWindow* output = ImGui::FindWindowByName(p.windowName("Output").c_str());
+        ImGuiWindow const* output = ImGui::FindWindowByName(p.windowName("Output").c_str());
         if (p.shows("Output") && output && GImGui->NavWindow == output) {
             p.visible["Output"] = false;
         } else {
@@ -1076,7 +1076,7 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
     if (p.name == "Analysis") {
         // As in Cutter: navigator | listing / graph over References | Decompiler (Java source as a tab).
         side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.22f, nullptr, &rest);
-        ImGuiID right = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.42f, nullptr, &rest);
+        ImGuiID const right = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.42f, nullptr, &rest);
         bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 0.30f, nullptr, &main);
         dock("Analysis", side);
         dock("Function", main);
@@ -1087,7 +1087,7 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
         select("Function"), select("Decompiler"), select("References");
     } else if (p.name == "Debug") {
         side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.17f, nullptr, &rest);
-        ImGuiID editor = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.30f, nullptr, &rest);
+        ImGuiID const editor = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.30f, nullptr, &rest);
         bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 0.24f, nullptr, &main);
         dock("Devices", side);
         dock("Debugger", main);
@@ -1130,14 +1130,14 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
 std::string Application::projectFolder() const {
     if (project_.isOpen() && !project_.path().empty())
         return pathutil::toUtf8(pathutil::fromUtf8(project_.path()).parent_path());
-    for (Root* r : workspace_.apkRoots())
+    for (Root const* r : workspace_.apkRoots())
         if (!r->apkPath.empty()) return pathutil::toUtf8(pathutil::fromUtf8(r->apkPath).parent_path());
     return {};
 }
 
 void Application::toggleTerminal() {
     Perspective& p = perspectives_[static_cast<size_t>(activePerspective_)];
-    ImGuiWindow* window = ImGui::FindWindowByName(p.windowName("Terminal").c_str());
+    ImGuiWindow const* window = ImGui::FindWindowByName(p.windowName("Terminal").c_str());
     // Focused terminal: hide it (as Ctrl+` does in VS Code); otherwise show and focus it.
     const bool focused = window && GImGui->NavWindow && GImGui->NavWindow->RootWindow == window;
     if (p.shows("Terminal") && focused) {

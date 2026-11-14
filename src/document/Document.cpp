@@ -12,7 +12,7 @@ namespace {
 constexpr size_t kMaxTextSize = 8 * 1024 * 1024;
 
 bool looksLikeText(const std::vector<uint8_t>& bytes) {
-    size_t n = std::min<size_t>(bytes.size(), 4096);
+    size_t const n = std::min<size_t>(bytes.size(), 4096);
     for (size_t i = 0; i < n; ++i)
         if (bytes[i] == 0) return false;
     return true;
@@ -76,8 +76,8 @@ std::atomic<uint64_t> Document::sEditSerial_{1};
 Document::Document(std::string title, const TreeNode* node, std::vector<uint8_t> bytes, RootKind rootKind,
                    const ResourceTable* resources)
     : title_(std::move(title)), node_(node), bytes_(std::move(bytes)), rootKind_(rootKind) {
-    NodeKind kind = node_->kind();
-    bool imageCandidate = kind == NodeKind::Image ||
+    NodeKind const kind = node_->kind();
+    bool const imageCandidate = kind == NodeKind::Image ||
                           (kind == NodeKind::Binary && !ImageDecoder::sniffFormat(bytes_).empty());
     if (imageCandidate) {
         loadImage();
@@ -110,7 +110,7 @@ Document::Document(std::string title, const TreeNode* node, std::vector<uint8_t>
             return;
         }
     }
-    bool binaryKind = kind == NodeKind::Dex || kind == NodeKind::Native;
+    bool const binaryKind = kind == NodeKind::Dex || kind == NodeKind::Native;
 
     // Binary XML inside an APK (AndroidManifest.xml, res/**/*.xml) is compiled
     // AXML - decode it into readable, highlighted text instead of hex.
@@ -128,7 +128,7 @@ Document::Document(std::string title, const TreeNode* node, std::vector<uint8_t>
         note_ = "Could not decode binary XML: " + error;
     }
 
-    bool text = !binaryKind && bytes_.size() <= kMaxTextSize && looksLikeText(bytes_);
+    bool const text = !binaryKind && bytes_.size() <= kMaxTextSize && looksLikeText(bytes_);
     if (!text) return;
     mode_ = Mode::Code;
     if (kind == NodeKind::Java) language_ = Language::Java;

@@ -36,7 +36,7 @@ inline std::string toUtf8(const std::filesystem::path& p) {
 // Absolute + lexically_normal form of a UTF-8 path (never throws).
 inline std::string normalize(const std::string& utf8) {
     std::error_code ec;
-    std::filesystem::path abs = std::filesystem::absolute(fromUtf8(utf8), ec);
+    std::filesystem::path const abs = std::filesystem::absolute(fromUtf8(utf8), ec);
     if (ec) return utf8;
     return toUtf8(abs.lexically_normal());
 }

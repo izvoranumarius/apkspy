@@ -319,7 +319,7 @@ std::vector<NativeCode::Line> NativeCode::disassemble(uint64_t start, uint64_t e
             // point at a string literal.
             const std::string str = l.dataRead ? std::string() : cStringAt(data);
             if (!str.empty()) l.comment = "\"" + str + "\"";
-            else if (std::string sym = symbolize(data); !sym.empty()) l.comment = l.dataRead ? "[" + sym + "]" : sym;
+            else if (std::string const sym = symbolize(data); !sym.empty()) l.comment = l.dataRead ? "[" + sym + "]" : sym;
             else l.comment = l.dataRead ? "[" + hex(data) + "]" : hex(data);
         }
         out.push_back(std::move(l));

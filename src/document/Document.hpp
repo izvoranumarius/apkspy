@@ -126,7 +126,7 @@ public:
         highlight_ = line;
     }
     int takeGoTo() {
-        int l = goTo_;
+        int const l = goTo_;
         goTo_ = -1;
         return l;
     }

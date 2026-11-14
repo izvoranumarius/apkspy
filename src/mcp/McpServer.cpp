@@ -117,7 +117,7 @@ bool McpDispatcher::hasPending() const {
 
 namespace schema {
 
-Json object(std::initializer_list<std::pair<std::string, Json>> props, std::vector<std::string> required) {
+Json object(std::initializer_list<std::pair<std::string, Json>> props, const std::vector<std::string>& required) {
     Json s = Json::obj({{"type", "object"}});
     Json p = Json::object();
     for (const auto& kv : props) p.set(kv.first, kv.second);
@@ -133,7 +133,7 @@ Json object(std::initializer_list<std::pair<std::string, Json>> props, std::vect
 
 Json str(const std::string& description) { return Json::obj({{"type", "string"}, {"description", description}}); }
 
-Json strEnum(const std::string& description, std::vector<std::string> values) {
+Json strEnum(const std::string& description, const std::vector<std::string>& values) {
     Json e = Json::array();
     for (auto& v : values) e.push(Json(v));
     return Json::obj({{"type", "string"}, {"description", description}, {"enum", std::move(e)}});

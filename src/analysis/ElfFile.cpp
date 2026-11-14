@@ -235,7 +235,7 @@ void ElfFile::readDynamic() {
     uint64_t strOff = 0;
     if (!strtabAddr || !vaddrToOffset(strtabAddr, strOff)) return;
     const uint64_t end = strsz ? strOff + strsz : data_->size();
-    for (uint64_t off : neededOffs)
+    for (uint64_t const off : neededOffs)
         if (strOff + off < end) needed_.push_back(cstr(strOff + off, end));
     if (sonameOff != UINT64_MAX && strOff + sonameOff < end) soname_ = cstr(strOff + sonameOff, end);
 }
