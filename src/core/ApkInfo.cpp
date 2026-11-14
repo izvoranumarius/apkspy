@@ -1,7 +1,9 @@
 #include "core/ApkInfo.hpp"
 #include "core/Workspace.hpp"  // Root definition
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -35,6 +37,17 @@ bool isComponentType(const std::string& name) {
            name == "provider";
 }
 
+// android:protectionLevel as decoded ("signature" or a number such as "0x2" / "18").
+std::string protectionLevelName(const std::string& v) {
+    if (v.empty() || !std::isdigit(static_cast<unsigned char>(v[0]))) return v;
+    const unsigned long n = std::strtoul(v.c_str(), nullptr, 0);
+    static const char* const kBase[] = {"normal", "dangerous", "signature", "signatureOrSystem"};
+    std::string out = kBase[n & 0x3];  // base level: the low two bits
+    if (n & 0x10) out += "|privileged";
+    if (n & 0x20) out += "|development";
+    return out;
+}
+
 class ManifestVisitor : public AxmlDecoder::Visitor {
 public:
     explicit ManifestVisitor(ApkInfo& info) : info_(info) {}
@@ -59,16 +72,36 @@ public:
             if (const std::string* v = attrValue(attrs, "android:icon", "icon")) info_.appIcon = *v;
             info_.debuggable = attrBool(attrs, "android:debuggable", "debuggable");
             info_.allowBackup = attrBool(attrs, "android:allowBackup", "allowBackup");
+            info_.allowBackupSet = attrValue(attrs, "android:allowBackup", "allowBackup") != nullptr;
+            info_.testOnly = attrBool(attrs, "android:testOnly", "testOnly");
+            if (const std::string* v = attrValue(attrs, "android:usesCleartextTraffic", "usesCleartextTraffic"))
+                info_.usesCleartextTraffic = *v;
+            if (const std::string* v = attrValue(attrs, "android:networkSecurityConfig", "networkSecurityConfig"))
+                info_.networkSecurityConfig = *v;
+            if (const std::string* v = attrValue(attrs, "android:name", "name")) info_.applicationClass = *v;
+        } else if (name == "permission") {
+            ApkPermissionDecl p;
+            if (const std::string* v = attrValue(attrs, "android:name", "name")) p.name = *v;
+            if (const std::string* v = attrValue(attrs, "android:protectionLevel", "protectionLevel")) p.protectionLevel = protectionLevelName(*v);
+            else p.protectionLevel = "normal";
+            if (!p.name.empty()) info_.declaredPermissions.push_back(std::move(p));
         } else if (isComponentType(name)) {
             ApkComponent c;
             c.type = name;
             if (const std::string* v = attrValue(attrs, "android:name", "name")) c.name = *v;
             c.exported = attrBool(attrs, "android:exported", "exported");
+            c.exportedSet = attrValue(attrs, "android:exported", "exported") != nullptr;
+            if (const std::string* v = attrValue(attrs, "android:permission", "permission")) c.permission = *v;
+            if (const std::string* v = attrValue(attrs, "android:readPermission", "readPermission")) c.readPermission = *v;
+            if (const std::string* v = attrValue(attrs, "android:writePermission", "writePermission")) c.writePermission = *v;
+            if (const std::string* v = attrValue(attrs, "android:authorities", "authorities")) c.authorities = *v;
+            c.grantUriPermissions = attrBool(attrs, "android:grantUriPermissions", "grantUriPermissions");
             info_.components.push_back(std::move(c));
             inFilter_ = false;
             return;
         } else if (name == "intent-filter" && !info_.components.empty()) {
             inFilter_ = true;
+            info_.components.back().hasIntentFilter = true;
             return;
         } else if ((name == "action" || name == "category") && inFilter_) {
             if (const std::string* v = attrValue(attrs, "android:name", "name")) {

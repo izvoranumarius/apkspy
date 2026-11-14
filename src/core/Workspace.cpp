@@ -716,6 +716,33 @@ bool Workspace::diffSide(const std::string& group, ApkDiff::Side& out) {
     return true;
 }
 
+bool Workspace::securityInput(const std::string& group, security::Input& out) {
+    Root* apk = rootByGroup(group, Root::Kind::Apk);
+    if (!apk || apk->title != group) return false;
+    auto* archive = dynamic_cast<ApkArchive*>(apk->source.get());
+    if (!archive) return false;
+    out.apkPath = apk->apkPath;
+    out.entries = archive->entries();
+    out.resources = resources(group);
+    out.info = ApkInfo::extract(*apk);
+    out.analysis = analysis_.get(group);
+    // android:networkSecurityConfig="@xml/name": the file the resource points to, decoded.
+    const std::string& ref = out.info.networkSecurityConfig;
+    if (!ref.empty()) {
+        std::string path;
+        if (out.resources)
+            if (const uint32_t id = out.resources->find(ref)) path = out.resources->value(id);
+        if (path.empty() || path.rfind("res/", 0) != 0) path = "res/xml/" + ref.substr(ref.find('/') + 1) + ".xml";
+        std::vector<uint8_t> bytes;
+        std::string text, error;
+        if (archive->readEntry(path, bytes, 1024 * 1024) && AxmlDecoder::decode(bytes, text, error, out.resources.get())) {
+            out.networkSecurityConfig = std::move(text);
+            out.networkSecurityConfigPath = path;
+        }
+    }
+    return true;
+}
+
 std::shared_ptr<const ResourceTable> Workspace::resources(const std::string& group) {
     Root* apk = rootByGroup(group, Root::Kind::Apk);
     if (!apk || (!group.empty() && apk->title != group)) return nullptr;

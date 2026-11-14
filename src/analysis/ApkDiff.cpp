@@ -134,14 +134,10 @@ std::string joined(const std::vector<std::string>& v) {
     return out;
 }
 
-// Reads small text entries (META-INF/*.version) through a private archive.
-std::vector<std::pair<std::string, std::string>> versionFiles(ApkArchive* arch, const std::vector<ApkArchive::Entry>& entries) {
-    std::vector<std::pair<std::string, std::string>> out;
-    if (!arch) return out;
-    std::vector<uint8_t> bytes;
-    for (const ApkArchive::Entry& e : entries)
-        if (libcatalog::isVersionFile(e.path) && e.size < 256 && arch->readEntry(e.path, bytes, 256))
-            out.emplace_back(e.path, std::string(bytes.begin(), bytes.end()));
+std::vector<std::string> entryPaths(const std::vector<ApkArchive::Entry>& entries) {
+    std::vector<std::string> out;
+    out.reserve(entries.size());
+    for (const ApkArchive::Entry& e : entries) out.push_back(e.path);
     return out;
 }
 
@@ -350,8 +346,9 @@ ApkDiff ApkDiff::compare(const Side& sa, const Side& sb, const Options& opt, con
         }
         d.natives.push_back(std::move(n));
     }
-    const auto filesA = versionFiles(openA ? &archA : nullptr, sa.entries);
-    const auto filesB = versionFiles(openB ? &archB : nullptr, sb.entries);
+    const std::vector<std::string> pathsA = entryPaths(sa.entries), pathsB = entryPaths(sb.entries);
+    const auto filesA = libcatalog::readVersionFiles(sa.apkPath, pathsA);
+    const auto filesB = libcatalog::readVersionFiles(sb.apkPath, pathsB);
     if (stopped()) return d;
 
     // Code ---------------------------------------------------------------------------
@@ -435,8 +432,8 @@ ApkDiff ApkDiff::compare(const Side& sa, const Side& sb, const Options& opt, con
 
     // Bundled libraries -----------------------------------------------------------
     {
-        const auto la = libcatalog::detect(anA && anB ? anA : nullptr, filesA);
-        const auto lb = libcatalog::detect(anA && anB ? anB : nullptr, filesB);
+        const auto la = libcatalog::detect(anA && anB ? anA : nullptr, filesA, pathsA);
+        const auto lb = libcatalog::detect(anA && anB ? anB : nullptr, filesB, pathsB);
         const auto key = [](const libcatalog::Detection& x) { return x.lib ? std::string(x.lib->id) : x.maven; };
         const auto name = [](const libcatalog::Detection& x) { return x.lib ? std::string(x.lib->name) : x.maven; };
         std::map<std::string, const libcatalog::Detection*> ma, mb;

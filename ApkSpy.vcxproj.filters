@@ -192,6 +192,21 @@
     <ClInclude Include="src\analysis\ApkDiff.hpp">
       <Filter>Header Files\analysis</Filter>
     </ClInclude>
+    <ClInclude Include="src\ui\DependenciesPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\Dependencies.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\VulnDb.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\SecurityPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\SecurityScanner.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
     <ClInclude Include="src\analysis\SourceMap.hpp">
       <Filter>Header Files\analysis</Filter>
     </ClInclude>
@@ -462,6 +477,21 @@
       <Filter>Source Files\mcp</Filter>
     </ClCompile>
     <ClCompile Include="src\analysis\ApkDiff.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\DependenciesPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\Dependencies.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\VulnDb.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\SecurityPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\SecurityScanner.cpp">
       <Filter>Source Files\analysis</Filter>
     </ClCompile>
     <ClCompile Include="src\analysis\SourceMap.cpp">

@@ -113,6 +113,12 @@ void BehaviorPanel::startBuild(Root& apk, const std::shared_ptr<const ApkAnalysi
     behavior::Input input;
     input.packageName = info.packageName;
     input.components = info.components;
+    if (!info.applicationClass.empty()) {  // Application.onCreate runs before any component
+        ApkComponent app;
+        app.type = "application";
+        app.name = info.applicationClass;
+        input.components.insert(input.components.begin(), app);
+    }
     input.declaredPermissions = info.permissions;
     input.targetSdk = std::atoi(info.targetSdk.c_str());
     if (!info.ok) error_ = "The manifest could not be decoded: no components to start from.";

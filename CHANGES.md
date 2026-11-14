@@ -1,5 +1,26 @@
 # Changelog
 
+## Security workspace
+
+- **Security** scanner: hardcoded secrets (code, resources, bundled files,
+  key stores), manifest and network security configuration, exported
+  components, cryptography, TLS validation, WebView settings, file modes,
+  SQL, logging, command execution and dynamic code loading. Every finding
+  has a severity, a confidence, masked evidence, its location (opens the
+  Java at the instruction's line, the manifest element or the file), CWE and
+  MASVS. Library code is labelled and can be hidden. Export to Markdown or JSON.
+- **Dependencies**: bundled libraries and frameworks by package, META-INF
+  version files and native libraries, with version, category, license and
+  share of the code, as a table, a graph or by license. Known
+  vulnerabilities of the detected versions come from a built-in database
+  that **Update** refreshes from OSV.dev through the configured Python.
+- The library catalogue grew to about 140 SDKs (ad networks, analytics,
+  Adobe AIR, Play Core...), which also sharpens the behavior graph and the
+  diff's library section; the manifest now records `usesCleartextTraffic`,
+  the network security config, explicit exports and component permissions,
+  and the behavior graph starts at the `Application` class too.
+- MCP: `security_scan` and `dependencies`.
+
 ## Behavior graph, version diff, Java <-> smali
 
 - **Behavior** panel (Analysis workspace): what the app does, from the

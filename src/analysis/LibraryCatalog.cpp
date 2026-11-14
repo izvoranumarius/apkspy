@@ -3,6 +3,7 @@
 #include <cctype>
 #include <map>
 #include "analysis/ApkAnalysis.hpp"
+#include "core/ApkArchive.hpp"
 
 namespace libcatalog {
 namespace {
@@ -16,6 +17,7 @@ std::vector<Library> makeTable() {
         {"kotlinx-coroutines", "Kotlin Coroutines", "Language", "Apache-2.0", "https://github.com/Kotlin/kotlinx.coroutines", {"Lkotlinx/coroutines/"}, "org.jetbrains.kotlinx:kotlinx-coroutines-core"},
         {"kotlinx-serialization", "Kotlin Serialization", "Serialization", "Apache-2.0", "https://github.com/Kotlin/kotlinx.serialization", {"Lkotlinx/serialization/"}, "org.jetbrains.kotlinx:kotlinx-serialization-core"},
         {"jetbrains-annotations", "JetBrains Annotations", "Language", "Apache-2.0", "https://github.com/JetBrains/java-annotations", {"Lorg/jetbrains/annotations/", "Lorg/intellij/lang/annotations/"}, "org.jetbrains:annotations"},
+        {"libcxx", "LLVM libc++ (NDK C++ runtime)", "Runtime", "Apache-2.0 WITH LLVM-exception", "https://developer.android.com/ndk/guides/cpp-support", {}, "", {"libc++_shared.so"}},
         {"desugar-jdk-libs", "Core Library Desugaring", "Language", "GPL-2.0-with-classpath-exception", "https://github.com/google/desugar_jdk_libs", {"Lj$/"}, "com.android.tools:desugar_jdk_libs"},
 
         // Android
@@ -38,9 +40,10 @@ std::vector<Library> makeTable() {
         {"play-services-maps", "Google Maps SDK", "Location", "Proprietary", "https://developers.google.com/maps/documentation/android-sdk", {"Lcom/google/android/gms/maps/"}, "com.google.android.gms:play-services-maps"},
         {"play-services-auth", "Google Sign-In", "Auth", "Proprietary", "https://developers.google.com/identity/sign-in/android", {"Lcom/google/android/gms/auth/"}, "com.google.android.gms:play-services-auth"},
         {"firebase", "Firebase", "Google", "Apache-2.0", "https://firebase.google.com", {"Lcom/google/firebase/"}, "com.google.firebase:firebase-common"},
+        {"datatransport", "Google Data Transport", "Google", "Apache-2.0", "https://github.com/firebase/firebase-android-sdk", {"Lcom/google/android/datatransport/"}, "com.google.android.datatransport:transport-runtime"},
         {"firebase-messaging", "Firebase Cloud Messaging", "Push", "Apache-2.0", "https://firebase.google.com/docs/cloud-messaging", {"Lcom/google/firebase/messaging/", "Lcom/google/firebase/iid/"}, "com.google.firebase:firebase-messaging"},
         {"firebase-analytics", "Firebase Analytics", "Analytics", "Proprietary", "https://firebase.google.com/docs/analytics", {"Lcom/google/firebase/analytics/", "Lcom/google/android/gms/measurement/"}, "com.google.firebase:firebase-analytics"},
-        {"firebase-crashlytics", "Firebase Crashlytics", "Crash reporting", "Apache-2.0", "https://firebase.google.com/docs/crashlytics", {"Lcom/google/firebase/crashlytics/"}, "com.google.firebase:firebase-crashlytics"},
+        {"firebase-crashlytics", "Firebase Crashlytics", "Crash reporting", "Apache-2.0", "https://firebase.google.com/docs/crashlytics", {"Lcom/google/firebase/crashlytics/"}, "com.google.firebase:firebase-crashlytics", {"libcrashlytics.so", "libcrashlytics-common.so"}},
         {"firebase-firestore", "Cloud Firestore", "Storage", "Apache-2.0", "https://firebase.google.com/docs/firestore", {"Lcom/google/firebase/firestore/"}, "com.google.firebase:firebase-firestore"},
         {"firebase-database", "Firebase Realtime Database", "Storage", "Apache-2.0", "https://firebase.google.com/docs/database", {"Lcom/google/firebase/database/"}, "com.google.firebase:firebase-database"},
         {"firebase-auth", "Firebase Authentication", "Auth", "Proprietary", "https://firebase.google.com/docs/auth", {"Lcom/google/firebase/auth/"}, "com.google.firebase:firebase-auth"},
@@ -97,32 +100,32 @@ std::vector<Library> makeTable() {
         {"snakeyaml", "SnakeYAML", "Serialization", "Apache-2.0", "https://bitbucket.org/snakeyaml/snakeyaml", {"Lorg/yaml/snakeyaml/"}, "org.yaml:snakeyaml"},
 
         // Storage and crypto
-        {"sqlcipher", "SQLCipher", "Storage", "BSD-3-Clause", "https://www.zetetic.net/sqlcipher", {"Lnet/sqlcipher/", "Lnet/zetetic/"}, "net.zetetic:android-database-sqlcipher"},
-        {"realm", "Realm", "Storage", "Apache-2.0", "https://github.com/realm/realm-java", {"Lio/realm/"}, "io.realm:realm-android-library"},
-        {"mmkv", "MMKV", "Storage", "BSD-3-Clause", "https://github.com/Tencent/MMKV", {"Lcom/tencent/mmkv/"}, "com.tencent:mmkv"},
+        {"sqlcipher", "SQLCipher", "Storage", "BSD-3-Clause", "https://www.zetetic.net/sqlcipher", {"Lnet/sqlcipher/", "Lnet/zetetic/"}, "net.zetetic:android-database-sqlcipher", {"libsqlcipher.so"}},
+        {"realm", "Realm", "Storage", "Apache-2.0", "https://github.com/realm/realm-java", {"Lio/realm/"}, "io.realm:realm-android-library", {"librealm-jni.so"}},
+        {"mmkv", "MMKV", "Storage", "BSD-3-Clause", "https://github.com/Tencent/MMKV", {"Lcom/tencent/mmkv/"}, "com.tencent:mmkv", {"libmmkv.so"}},
         {"greendao", "greenDAO", "Storage", "Apache-2.0", "https://greenrobot.org/greendao", {"Lorg/greenrobot/greendao/"}, "org.greenrobot:greendao"},
         {"bouncycastle", "Bouncy Castle", "Security", "MIT", "https://www.bouncycastle.org", {"Lorg/bouncycastle/"}, "org.bouncycastle:bcprov-jdk15on"},
         {"spongycastle", "Spongy Castle", "Security", "MIT", "https://rtyley.github.io/spongycastle", {"Lorg/spongycastle/"}, "com.madgag.spongycastle:prov"},
-        {"conscrypt", "Conscrypt", "Security", "Apache-2.0", "https://github.com/google/conscrypt", {"Lorg/conscrypt/"}, "org.conscrypt:conscrypt-android"},
+        {"conscrypt", "Conscrypt", "Security", "Apache-2.0", "https://github.com/google/conscrypt", {"Lorg/conscrypt/"}, "org.conscrypt:conscrypt-android", {"libconscrypt_jni.so"}},
 
         // Images and UI
         {"glide", "Glide", "Images", "BSD-2-Clause", "https://github.com/bumptech/glide", {"Lcom/bumptech/glide/"}, "com.github.bumptech.glide:glide"},
         {"coil", "Coil", "Images", "Apache-2.0", "https://coil-kt.github.io/coil", {"Lcoil/"}, "io.coil-kt:coil"},
-        {"fresco", "Fresco", "Images", "MIT", "https://frescolib.org", {"Lcom/facebook/fresco/", "Lcom/facebook/imagepipeline/", "Lcom/facebook/drawee/"}, "com.facebook.fresco:fresco"},
+        {"fresco", "Fresco", "Images", "MIT", "https://frescolib.org", {"Lcom/facebook/fresco/", "Lcom/facebook/imagepipeline/", "Lcom/facebook/drawee/"}, "com.facebook.fresco:fresco", {"libimagepipeline.so", "libnative-imagetranscoder.so"}},
         {"lottie", "Lottie", "UI", "Apache-2.0", "https://airbnb.io/lottie", {"Lcom/airbnb/lottie/"}, "com.airbnb.android:lottie"},
 
         // Cross-platform frameworks
-        {"flutter", "Flutter", "Framework", "BSD-3-Clause", "https://flutter.dev", {"Lio/flutter/"}, "io.flutter:flutter_embedding_release"},
-        {"react-native", "React Native", "Framework", "MIT", "https://reactnative.dev", {"Lcom/facebook/react/"}, "com.facebook.react:react-native"},
-        {"hermes", "Hermes", "Framework", "MIT", "https://hermesengine.dev", {"Lcom/facebook/hermes/"}, "com.facebook.react:hermes-android"},
-        {"xamarin", "Xamarin / .NET for Android", "Framework", "MIT", "https://dotnet.microsoft.com/apps/xamarin", {"Lmono/android/", "Lmono/"}, ""},
-        {"unity", "Unity", "Framework", "Proprietary", "https://unity.com", {"Lcom/unity3d/player/"}, ""},
+        {"flutter", "Flutter", "Framework", "BSD-3-Clause", "https://flutter.dev", {"Lio/flutter/"}, "io.flutter:flutter_embedding_release", {"libflutter.so", "libapp.so"}},
+        {"react-native", "React Native", "Framework", "MIT", "https://reactnative.dev", {"Lcom/facebook/react/"}, "com.facebook.react:react-native", {"libreactnativejni.so", "libjscexecutor.so", "libjsc.so"}},
+        {"hermes", "Hermes", "Framework", "MIT", "https://hermesengine.dev", {"Lcom/facebook/hermes/"}, "com.facebook.react:hermes-android", {"libhermes.so", "libhermes-executor-release.so"}},
+        {"xamarin", "Xamarin / .NET for Android", "Framework", "MIT", "https://dotnet.microsoft.com/apps/xamarin", {"Lmono/android/", "Lmono/"}, "", {"libmonodroid.so", "libmonosgen-2.0.so", "libxamarin-app.so"}},
+        {"unity", "Unity", "Framework", "Proprietary", "https://unity.com", {"Lcom/unity3d/player/"}, "", {"libunity.so", "libil2cpp.so"}},
         {"cordova", "Apache Cordova", "Framework", "Apache-2.0", "https://cordova.apache.org", {"Lorg/apache/cordova/"}, "org.apache.cordova:framework"},
         {"capacitor", "Capacitor", "Framework", "MIT", "https://capacitorjs.com", {"Lcom/getcapacitor/"}, "com.capacitorjs:core"},
 
         // Social, analytics, ads, payments
         {"facebook-sdk", "Facebook SDK", "Social", "Proprietary", "https://developers.facebook.com/docs/android", {"Lcom/facebook/"}, "com.facebook.android:facebook-android-sdk"},
-        {"sentry", "Sentry", "Crash reporting", "MIT", "https://sentry.io", {"Lio/sentry/"}, "io.sentry:sentry-android"},
+        {"sentry", "Sentry", "Crash reporting", "MIT", "https://sentry.io", {"Lio/sentry/"}, "io.sentry:sentry-android", {"libsentry.so", "libsentry-android.so"}},
         {"appsflyer", "AppsFlyer", "Analytics", "Proprietary", "https://www.appsflyer.com", {"Lcom/appsflyer/"}, "com.appsflyer:af-android-sdk"},
         {"adjust", "Adjust", "Analytics", "MIT", "https://www.adjust.com", {"Lcom/adjust/sdk/"}, "com.adjust.sdk:adjust-android"},
         {"branch", "Branch", "Analytics", "MIT", "https://branch.io", {"Lio/branch/"}, "io.branch.sdk.android:library"},
@@ -137,6 +140,27 @@ std::vector<Library> makeTable() {
         {"mopub", "MoPub", "Ads", "Proprietary", "https://github.com/mopub/mopub-android-sdk", {"Lcom/mopub/"}, "com.mopub:mopub-sdk"},
         {"chartboost", "Chartboost", "Ads", "Proprietary", "https://www.chartboost.com", {"Lcom/chartboost/"}, "com.chartboost:chartboost-sdk"},
         {"vungle", "Vungle", "Ads", "Proprietary", "https://vungle.com", {"Lcom/vungle/"}, "com.vungle:publisher-sdk-android"},
+        {"adcolony", "AdColony", "Ads", "Proprietary", "https://www.adcolony.com", {"Lcom/adcolony/"}, "com.adcolony:sdk"},
+        {"amazon-ads", "Amazon Mobile Ads", "Ads", "Proprietary", "https://developer.amazon.com/apps-and-games/mobile-ads", {"Lcom/amazon/device/ads/"}, "com.amazon.android:mobile-ads"},
+        {"amazon-iap", "Amazon In-App Purchasing", "Payments", "Proprietary", "https://developer.amazon.com/docs/in-app-purchasing/iap-overview.html", {"Lcom/amazon/device/iap/", "Lcom/amazon/inapp/"}, "com.amazon.device:amazon-appstore-sdk"},
+        {"tapjoy", "Tapjoy", "Ads", "Proprietary", "https://www.tapjoy.com", {"Lcom/tapjoy/"}, "com.tapjoy:tapjoy-android-sdk"},
+        {"inmobi", "InMobi", "Ads", "Proprietary", "https://www.inmobi.com", {"Lcom/inmobi/"}, "com.inmobi.monetization:inmobi-ads"},
+        {"startio", "Start.io", "Ads", "Proprietary", "https://www.start.io", {"Lcom/startapp/"}, "com.startapp:inapp-sdk"},
+        {"pangle", "Pangle", "Ads", "Proprietary", "https://www.pangleglobal.com", {"Lcom/bytedance/sdk/openadsdk/"}, "com.pangle.global:ads-sdk"},
+        {"mintegral", "Mintegral", "Ads", "Proprietary", "https://www.mintegral.com", {"Lcom/mbridge/msdk/"}, "com.mbridge.msdk.oversea:mbridge_android_sdk"},
+        {"fyber", "Digital Turbine / Fyber", "Ads", "Proprietary", "https://www.digitalturbine.com", {"Lcom/fyber/"}, "com.fyber:marketplace-sdk"},
+        {"google-ads-legacy", "Google Ads (legacy)", "Ads", "Proprietary", "https://developers.google.com/admob", {"Lcom/google/ads/"}, "com.google.ads.mediation"},
+        {"play-core", "Google Play Core", "Google", "Proprietary", "https://developer.android.com/guide/playcore", {"Lcom/google/android/play/core/"}, "com.google.android.play:core"},
+        {"huawei-hms", "Huawei Mobile Services", "Google", "Proprietary", "https://developer.huawei.com/consumer/en/hms", {"Lcom/huawei/hms/"}, "com.huawei.hms:base"},
+        {"yandex-metrica", "AppMetrica", "Analytics", "Proprietary", "https://appmetrica.io", {"Lcom/yandex/metrica/"}, "com.yandex.android:mobmetricalib"},
+        {"singular", "Singular", "Analytics", "Proprietary", "https://www.singular.net", {"Lcom/singular/sdk/"}, "com.singular.sdk:singular_sdk"},
+        {"kochava", "Kochava", "Analytics", "Proprietary", "https://www.kochava.com", {"Lcom/kochava/"}, "com.kochava.base:tracker"},
+        {"gameanalytics", "GameAnalytics", "Analytics", "", "https://gameanalytics.com", {"Lcom/gameanalytics/"}, "com.gameanalytics.sdk:gameanalytics-android"},
+        {"fabric", "Fabric / Crashlytics (legacy)", "Crash reporting", "Proprietary", "https://firebase.google.com/docs/crashlytics", {"Lio/fabric/", "Lcom/crashlytics/"}, "com.crashlytics.sdk.android:crashlytics"},
+        {"bugsnag", "Bugsnag", "Crash reporting", "MIT", "https://www.bugsnag.com", {"Lcom/bugsnag/"}, "com.bugsnag:bugsnag-android", {"libbugsnag-ndk.so"}},
+        {"newrelic", "New Relic", "Analytics", "Proprietary", "https://newrelic.com", {"Lcom/newrelic/"}, "com.newrelic.agent.android:android-agent"},
+        {"bolts", "Bolts", "Utilities", "BSD-3-Clause", "https://github.com/BoltsFramework/Bolts-Android", {"Lbolts/"}, "com.parse.bolts:bolts-android"},
+        {"adobe-air", "Adobe AIR", "Framework", "Proprietary", "https://airsdk.harman.com", {"Lcom/adobe/air/", "Lair/com/adobe/", "Lcom/adobe/fre/"}, "", {"libCore.so"}},
         {"stripe", "Stripe", "Payments", "MIT", "https://stripe.com/docs/mobile/android", {"Lcom/stripe/android/"}, "com.stripe:stripe-android"},
         {"paypal", "PayPal", "Payments", "Proprietary", "https://developer.paypal.com", {"Lcom/paypal/"}, "com.paypal.android:paypal-android-sdk"},
     };
@@ -195,16 +219,50 @@ std::string trimVersion(std::string_view v) {
 
 }  // namespace
 
+namespace {
+bool isPomProperties(std::string_view p) {
+    // META-INF/maven/<group>/<artifact>/pom.properties
+    if (p.substr(0, 15) != "META-INF/maven/" || p.size() < 30 || p.substr(p.size() - 15) != "/pom.properties") return false;
+    const std::string_view mid = p.substr(15, p.size() - 30);
+    return std::count(mid.begin(), mid.end(), '/') == 1;
+}
+}  // namespace
+
 bool isVersionFile(std::string_view p) {
+    if (isPomProperties(p)) return true;
     return p.size() > 17 && p.substr(0, 9) == "META-INF/" && p.find('/', 9) == std::string_view::npos &&
            p.substr(p.size() - 8) == ".version";
 }
 
-std::vector<Detection> detect(const ApkAnalysis* a, const std::vector<std::pair<std::string, std::string>>& versionFiles) {
+std::vector<std::pair<std::string, std::string>> readVersionFiles(const std::string& apkPath, const std::vector<std::string>& entryPaths) {
+    std::vector<std::pair<std::string, std::string>> out;
+    ApkArchive arch;
+    if (apkPath.empty() || !arch.open(apkPath)) return out;
+    std::vector<uint8_t> bytes;
+    for (const std::string& p : entryPaths)
+        if (isVersionFile(p) && arch.readEntry(p, bytes, 16 * 1024)) out.emplace_back(p, std::string(bytes.begin(), bytes.end()));
+    return out;
+}
+
+const Library* forNativeLibrary(std::string_view fileName) {
+    const size_t slash = fileName.find_last_of('/');
+    if (slash != std::string_view::npos) fileName = fileName.substr(slash + 1);
+    for (const Library& lib : all())
+        for (const char* n : lib.natives)
+            if (fileName == n) return &lib;
+    return nullptr;
+}
+
+std::vector<Detection> detect(const ApkAnalysis* a, const std::vector<std::pair<std::string, std::string>>& versionFiles,
+                              const std::vector<std::string>& nativeEntries) {
     std::map<const Library*, size_t> counts;
     if (a)
         for (const ApkAnalysis::ClassEntry& c : a->classes())
             if (const Library* lib = forClass(a->classDescriptor(c))) ++counts[lib];
+    std::map<const Library*, std::vector<std::string>> natives;
+    for (const std::string& e : nativeEntries)
+        if (const Library* lib = forNativeLibrary(e)) natives[lib].push_back(e);
+    for (const auto& [lib, files] : natives) counts.emplace(lib, 0);
 
     std::vector<Detection> out;
     std::map<std::string, size_t> byMaven;  // normalized coordinates -> index in out
@@ -213,14 +271,31 @@ std::vector<Detection> detect(const ApkAnalysis* a, const std::vector<std::pair<
         d.lib = lib;
         d.maven = lib->maven;
         d.classes = n;
+        if (auto it = natives.find(lib); it != natives.end()) d.nativeLibs = it->second;
         if (lib->maven[0]) byMaven[normalizeCoord(lib->maven)] = out.size();
         out.push_back(std::move(d));
     }
     for (const auto& [path, contents] : versionFiles) {
         if (!isVersionFile(path)) continue;
-        const std::string stem = path.substr(9, path.size() - 9 - 8);  // "androidx.core_core"
+        std::string stem, version;
+        if (isPomProperties(path)) {
+            // groupId / artifactId / version lines; the path names the coordinates too.
+            const std::string_view mid = std::string_view(path).substr(15, path.size() - 30);
+            const size_t slash = mid.find('/');
+            stem = std::string(mid.substr(0, slash)) + "_" + std::string(mid.substr(slash + 1));
+            for (size_t s = 0; s < contents.size();) {
+                size_t e = contents.find('\n', s);
+                if (e == std::string::npos) e = contents.size();
+                const std::string_view line(contents.data() + s, e - s);
+                if (line.substr(0, 8) == "version=") version = trimVersion(line.substr(8));
+                s = e + 1;
+            }
+            if (version.empty()) continue;
+        } else {
+            stem = path.substr(9, path.size() - 9 - 8);  // "androidx.core_core"
+            version = trimVersion(contents);
+        }
         const std::string key = normalizeCoord(stem);
-        const std::string version = trimVersion(contents);
         // A catalogued library, by full coordinates or by artifact name alone.
         const Library* match = nullptr;
         for (const Library& lib : all()) {
@@ -235,22 +310,27 @@ std::vector<Detection> detect(const ApkAnalysis* a, const std::vector<std::pair<
         if (match) {
             auto it = byMaven.find(normalizeCoord(match->maven));
             if (it != byMaven.end()) {
-                if (out[it->second].version.empty()) out[it->second].version = version;
+                if (out[it->second].version.empty()) out[it->second].version = version, out[it->second].versionSource = path;
                 continue;
             }
             Detection d;
             d.lib = match;
             d.maven = match->maven;
             d.version = version;
+            d.versionSource = path;
             byMaven[normalizeCoord(match->maven)] = out.size();
             out.push_back(std::move(d));
             continue;
         }
         // Not in the catalog: still a dependency, named by its coordinates.
-        Detection d;
         const size_t underscore = stem.find('_');
-        d.maven = underscore == std::string::npos ? stem : stem.substr(0, underscore) + ":" + stem.substr(underscore + 1);
+        const std::string maven = underscore == std::string::npos ? stem : stem.substr(0, underscore) + ":" + stem.substr(underscore + 1);
+        if (byMaven.count(normalizeCoord(maven))) continue;  // .version and pom.properties of one artifact
+        Detection d;
+        d.maven = maven;
         d.version = version;
+        d.versionSource = path;
+        byMaven[normalizeCoord(maven)] = out.size();
         out.push_back(std::move(d));
     }
     std::sort(out.begin(), out.end(), [](const Detection& x, const Detection& y) {

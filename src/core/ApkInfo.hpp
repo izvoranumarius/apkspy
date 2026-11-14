@@ -14,8 +14,20 @@ struct ApkComponent {
     std::string type;                   // activity / service / receiver / provider / activity-alias
     std::string name;                   // android:name as written in the manifest
     bool exported = false;              // android:exported
+    bool exportedSet = false;           // the attribute is present (else the platform default applies)
     std::vector<std::string> actions;    // intent-filter actions
     std::vector<std::string> categories; // intent-filter categories
+    bool hasIntentFilter = false;
+    std::string permission;              // android:permission
+    std::string readPermission, writePermission;  // providers
+    std::string authorities;             // providers
+    bool grantUriPermissions = false;    // providers
+};
+
+// A <permission> the app declares.
+struct ApkPermissionDecl {
+    std::string name;
+    std::string protectionLevel;  // "normal", "dangerous", "signature", "signatureOrSystem" (+ flags)
 };
 
 struct ApkSigningInfo {
@@ -37,6 +49,12 @@ struct ApkInfo {
     std::string appLabelRef;  // "@string/app_name" when appLabel was resolved from resources.arsc
     bool debuggable = false;
     bool allowBackup = false;
+    bool allowBackupSet = false;          // attribute present (the platform default is true)
+    bool testOnly = false;
+    std::string usesCleartextTraffic;     // "true", "false" or "" (not set)
+    std::string networkSecurityConfig;    // "@xml/network_security_config" or ""
+    std::string applicationClass;         // <application android:name>, "" when none
+    std::vector<ApkPermissionDecl> declaredPermissions;
     std::vector<std::string> permissions;  // uses-permission android:name values
     std::vector<ApkComponent> components;
     std::vector<ApkSigningInfo> signatures;

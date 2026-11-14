@@ -14,6 +14,8 @@
 #include "ui/AnalysisPanel.hpp"
 #include "ui/BehaviorPanel.hpp"
 #include "ui/DiffPanel.hpp"
+#include "ui/SecurityPanel.hpp"
+#include "ui/DependenciesPanel.hpp"
 #include "ui/DevicePanels.hpp"
 #include "ui/EditorPanel.hpp"
 #include "ui/ExplorerPanel.hpp"
@@ -71,7 +73,7 @@ std::vector<ProjectApk> collectApks(const Workspace& workspace, const Project& p
 
 namespace {
 // Version of the default dock layout (see Settings::kLayoutVersion).
-constexpr int kLayoutVersion = 16;
+constexpr int kLayoutVersion = 18;
 }  // namespace
 
 Application::Application()
@@ -100,6 +102,8 @@ Application::Application()
     panels_.push_back(std::make_unique<DecompilerPanel>(workspace_, *analysisPanel_));
     panels_.push_back(std::make_unique<BehaviorPanel>(workspace_, show));
     panels_.push_back(std::make_unique<DiffPanel>(workspace_, show));
+    panels_.push_back(std::make_unique<SecurityPanel>(workspace_, show));
+    panels_.push_back(std::make_unique<DependenciesPanel>(workspace_, settings_));
     panels_.push_back(std::make_unique<DevicesPanel>(workspace_, devices_, show));
     auto debugger = std::make_unique<DebuggerPanel>(workspace_, devices_);
     debuggerPanel_ = debugger.get();
@@ -940,6 +944,8 @@ void Application::initPerspectives() {
         {"Debug", "Attach to a process: threads, stack, locals and logs", "Debugger", {"Devices", "Debugger", "Editor", "Logcat", "Terminal"}, {}},
         {"Network", "Capture the app's traffic and map its API", "Traffic", {"Traffic", "Logcat", "Terminal"}, {}},
         {"Scripts", "Automate ApkSpy with Python", "Script", {"Script", "Output", "Terminal"}, {}},
+        // Last, so the Ctrl+1.. shortcuts of the existing workspaces stay where they were.
+        {"Security", "Find vulnerabilities, secrets and risky dependencies", "Security", {"Security", "Dependencies", "Editor", "Output"}, {}},
     };
     std::vector<std::string> titles;
     for (const auto& panel : panels_) titles.push_back(panel->title());
@@ -1091,6 +1097,15 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
         dock("References", bottom);
         dock("Bookmarks", bottom);
         select("Function"), select("Decompiler"), select("References");
+    } else if (p.name == "Security") {
+        // Findings in the centre, the code they point to on the right.
+        ImGuiID const right = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Right, 0.40f, nullptr, &rest);
+        bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 0.22f, nullptr, &main);
+        dock("Security", main);
+        dock("Dependencies", main);
+        dock("Editor", right);
+        dock("Output", bottom);
+        select("Security");
     } else if (p.name == "Debug") {
         side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.17f, nullptr, &rest);
         ImGuiID const editor = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.30f, nullptr, &rest);

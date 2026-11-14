@@ -39,7 +39,10 @@ progress + cancellation), `dex_info`, `list_classes`, `get_class`,
 (built-in Java-like decompiler), `xrefs`, `call_graph`,
 `control_flow_graph` (JSON or DOT), `class_hierarchy`, `search_strings`,
 `find_endpoints`, `behavior_graph` (what each component reaches: permissions,
-endpoints, storage, native code, with call paths), `list_resources`,
+endpoints, storage, native code, with call paths), `security_scan` (findings
+with severity, confidence, evidence, location, CWE and MASVS),
+`dependencies` (bundled libraries with versions, licenses and known
+vulnerabilities), `list_resources`,
 `resolve_resource`, `list_native_libs`,
 `inspect_native_lib`, `native_functions`, `disassemble_native`,
 `decompile_native` (built-in C-like decompiler; both list the variables

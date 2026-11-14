@@ -22,6 +22,8 @@ struct Library {
     // Maven coordinates ("com.squareup.okhttp3:okhttp") used to match
     // META-INF/*.version files and vulnerability records; "" when none.
     const char* maven;
+    // Native libraries that identify it (lib/<abi>/libflutter.so).
+    std::vector<const char*> natives = {};
 };
 
 // Every library in the table (stable order).
@@ -39,14 +41,24 @@ struct Detection {
     const Library* lib = nullptr;  // nullptr: known only from a version file
     std::string maven;             // coordinates ("group:artifact") when known
     size_t classes = 0;            // bundled classes attributed to it
-    std::string version;           // from META-INF/<group>_<artifact>.version, "" when unknown
+    std::string version;           // from META-INF version files, "" when unknown
+    std::string versionSource;     // the file the version came from
+    std::vector<std::string> nativeLibs;  // lib/<abi>/*.so entries attributed to it
 };
 
-// META-INF/*.version entries worth reading (Gradle writes one per AndroidX /
-// Kotlin / Firebase artifact; each holds the version string).
+// Entries that carry library versions: META-INF/<group>_<artifact>.version
+// (Gradle writes one per AndroidX / Kotlin / Firebase artifact) and
+// META-INF/maven/<group>/<artifact>/pom.properties (plain Maven jars).
 bool isVersionFile(std::string_view entryPath);
-// Libraries in `a` (nullptr = versions only), by class prefix and by version
-// file. `versionFiles` holds (entry path, file contents). Sorted by name.
-std::vector<Detection> detect(const ApkAnalysis* a, const std::vector<std::pair<std::string, std::string>>& versionFiles);
+// Reads those entries through a private archive (any thread).
+std::vector<std::pair<std::string, std::string>> readVersionFiles(const std::string& apkPath,
+                                                                  const std::vector<std::string>& entryPaths);
+// The library a native library file name belongs to ("libflutter.so"), or nullptr.
+const Library* forNativeLibrary(std::string_view fileName);
+// Libraries in `a` (nullptr = versions only), by class prefix, by version
+// file and by native library. `versionFiles` holds (entry path, contents);
+// `nativeEntries` the lib/<abi>/*.so paths. Sorted by name.
+std::vector<Detection> detect(const ApkAnalysis* a, const std::vector<std::pair<std::string, std::string>>& versionFiles,
+                              const std::vector<std::string>& nativeEntries = {});
 
 }  // namespace libcatalog

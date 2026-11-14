@@ -6,6 +6,7 @@
 #include <vector>
 #include "analysis/AnalysisService.hpp"
 #include "analysis/ApkDiff.hpp"
+#include "analysis/SecurityScanner.hpp"
 #include "core/Annotations.hpp"
 #include "core/ApkArchive.hpp"
 #include "core/ResourceTable.hpp"
@@ -169,6 +170,8 @@ public:
     // owning thread (archive listing, manifest, resources, analysis if ready).
     // False when the group is not an APK archive.
     bool diffSide(const std::string& group, ApkDiff::Side& out);
+    // Same for the security scanner (adds the decoded network security config).
+    bool securityInput(const std::string& group, security::Input& out);
     // Generated documents (M6): shows `text` as a read-only tab of the
     // group's virtual root (created on demand) at `path` ("smali/Lfoo;.smali"),
     // replacing the content when the path is reopened, and jumps to `line`

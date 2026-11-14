@@ -85,6 +85,9 @@
     <ClCompile Include="..\src\analysis\AnalysisService.cpp" />
     <ClCompile Include="..\src\analysis\ApkAnalysis.cpp" />
     <ClCompile Include="..\src\analysis\ApkDiff.cpp" />
+    <ClCompile Include="..\src\analysis\Dependencies.cpp" />
+    <ClCompile Include="..\src\analysis\VulnDb.cpp" />
+    <ClCompile Include="..\src\analysis\SecurityScanner.cpp" />
     <ClCompile Include="..\src\analysis\SourceMap.cpp" />
     <ClCompile Include="..\src\analysis\BehaviorGraph.cpp" />
     <ClCompile Include="..\src\analysis\LibraryCatalog.cpp" />

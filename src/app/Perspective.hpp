@@ -33,7 +33,7 @@ struct Perspective {
             {"Explorer", icons::FOLDER}, {"Overview", icons::INFO}, {"Editor", icons::FILE},
             {"Search", icons::SEARCH}, {"Bookmarks", icons::BOOKMARK}, {"Output", icons::PAGE},
             {"Analysis", icons::ANALYSIS}, {"Function", icons::CODE}, {"References", icons::LINK}, {"Decompiler", icons::FILE},
-            {"Behavior", icons::CHART}, {"Diff", icons::HISTORY},
+            {"Behavior", icons::CHART}, {"Diff", icons::HISTORY}, {"Security", icons::SHIELD}, {"Dependencies", icons::PACKAGE},
             {"Devices", icons::PHONE}, {"Debugger", icons::BUG}, {"Logcat", icons::LIST},
             {"Traffic", icons::GLOBE}, {"Script", icons::EDIT}, {"Terminal", icons::TERMINAL},
         };
@@ -47,6 +47,7 @@ struct Perspective {
         if (workspace == "Debug") return icons::BUG;
         if (workspace == "Network") return icons::GLOBE;
         if (workspace == "Scripts") return icons::CODE;
+        if (workspace == "Security") return icons::SHIELD;
         return nullptr;
     }
     std::string dockName() const { return "Dock/" + name; }

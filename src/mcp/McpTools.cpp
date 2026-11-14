@@ -11,6 +11,7 @@
 #include "analysis/BehaviorGraph.hpp"
 #include "analysis/Dalvik.hpp"
 #include "analysis/Decompiler.hpp"
+#include "analysis/Dependencies.hpp"
 #include "analysis/SourceMap.hpp"
 #include "core/ApkInfo.hpp"
 #include "core/AxmlDecoder.hpp"
@@ -1302,6 +1303,12 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                         const ApkInfo info = ApkInfo::extract(*apk);
                         if (!info.ok) return McpToolResult::error("the manifest could not be decoded");
                         behavior::Input input{info.packageName, info.components, info.permissions, std::atoi(info.targetSdk.c_str())};
+                        if (!info.applicationClass.empty()) {  // Application.onCreate runs before any component
+                            ApkComponent app;
+                            app.type = "application";
+                            app.name = info.applicationClass;
+                            input.components.insert(input.components.begin(), app);
+                        }
                         return McpToolOutcome::later([a, args, input = std::move(input)](McpToolContext&) {
                             const behavior::Graph g = behavior::build(*a, input);
                             const std::string filter = argStr(args, "component");
@@ -1349,6 +1356,112 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                                                 {"capabilities", std::move(capabilities)},
                                                                 {"methods_walked", static_cast<unsigned long long>(g.methodsVisited)},
                                                                 {"truncated", g.truncated}}));
+                        });
+                    }});
+
+    server.addTool({"security_scan", "Security scan",
+                    "Static security review: hardcoded secrets (code, resources, bundled files, key stores), manifest "
+                    "and network security configuration, exported components, cryptography, TLS validation, WebView "
+                    "settings, file modes, SQL, logging, command execution and dynamic code loading. Each finding has a "
+                    "severity, a confidence, evidence, a location (method + pc, manifest element, resource or file), "
+                    "CWE and OWASP MASVS category. Bytecode rules need run_analysis first.",
+                    schema::object({{"apk", apkArg()},
+                                    {"min_severity", strEnum("Lowest severity to report (default low)", {"info", "low", "medium", "high", "critical"})},
+                                    {"include_libraries", boolean("Include findings in bundled third-party libraries (default true)")},
+                                    {"category", str("Only this category: Secrets, Manifest, Components, Cryptography, Network, WebView, Storage, Code")},
+                                    {"limit", integer("Max findings (default 200)", 1, 5000)}}),
+                    true, false,
+                    [&ws](const Json& args, McpToolContext&) -> McpToolOutcome {
+                        std::string err;
+                        Root* apk = resolveApk(ws, args, err);
+                        if (!apk) return McpToolResult::error(err);
+                        security::Input in;
+                        if (!ws.securityInput(apk->title, in)) return McpToolResult::error("not an APK archive");
+                        return McpToolOutcome::later([in = std::move(in), args](McpToolContext& ctx) {
+                            const security::Report r = security::scan(in, ctx.cancel);
+                            static const std::vector<std::string> kLevels = {"info", "low", "medium", "high", "critical"};
+                            const auto levelIt = std::find(kLevels.begin(), kLevels.end(), argStr(args, "min_severity", "low"));
+                            const int minLevel = levelIt == kLevels.end() ? 1 : static_cast<int>(levelIt - kLevels.begin());
+                            const bool libraries = argBool(args, "include_libraries", true);
+                            const std::string category = argStr(args, "category");
+                            const size_t limit = static_cast<size_t>(argInt(args, "limit", 200));
+                            Json list = Json::array();
+                            std::map<std::string, int> counts;
+                            for (const security::Finding& f : r.findings) {
+                                const security::Rule* ru = security::rule(f.rule);
+                                if (static_cast<int>(f.severity) < minLevel || (!libraries && !f.library.empty())) continue;
+                                if (!category.empty() && (!ru || category != ru->category)) continue;
+                                ++counts[security::severityName(f.severity)];
+                                if (list.size() >= limit) continue;
+                                Json loc = Json::obj({{"ref", f.location.ref}});
+                                const char* kinds[] = {"none", "method", "class", "manifest", "resource", "file"};
+                                loc.set("kind", kinds[static_cast<int>(f.location.kind)]);
+                                if (f.location.kind == security::Location::Kind::Method) loc.set("pc", static_cast<long long>(f.location.pc));
+                                if (f.location.line >= 0) loc.set("line", f.location.line + 1);
+                                Json j = Json::obj({{"rule", f.rule}, {"title", f.title}, {"severity", security::severityName(f.severity)},
+                                                    {"confidence", f.confidence}, {"evidence", json::sanitizeUtf8(f.evidence)},
+                                                    {"location", std::move(loc)}});
+                                if (ru) {
+                                    j.set("category", ru->category);
+                                    j.set("cwe", ru->cwe);
+                                    j.set("masvs", ru->masvs);
+                                    j.set("recommendation", ru->recommendation);
+                                }
+                                if (!f.library.empty()) j.set("library", f.library);
+                                list.push(std::move(j));
+                            }
+                            Json summary = Json::object();
+                            for (const auto& [k, v] : counts) summary.set(k, v);
+                            return McpToolResult::ok(Json::obj({{"summary", std::move(summary)}, {"findings", std::move(list)},
+                                                                {"bytecode_scanned", r.bytecodeScanned},
+                                                                {"methods_scanned", static_cast<unsigned long long>(r.methodsScanned)}}));
+                        });
+                    }});
+
+    server.addTool({"dependencies", "Dependencies",
+                    "Third-party libraries and frameworks bundled in the APK (by package, META-INF version files and "
+                    "native libraries) with version, license, share of the code and known vulnerabilities of that "
+                    "version (OSV / GitHub advisories; the panel's Update refreshes the data). Class counts need run_analysis.",
+                    schema::object({{"apk", apkArg()}, {"vulnerable_only", boolean("Only libraries with known vulnerabilities")}}), true, false,
+                    [&ws](const Json& args, McpToolContext&) -> McpToolOutcome {
+                        std::string err;
+                        Root* apk = resolveApk(ws, args, err);
+                        if (!apk) return McpToolResult::error(err);
+                        auto* archive = dynamic_cast<ApkArchive*>(apk->source.get());
+                        if (!archive) return McpToolResult::error("not an APK archive");
+                        std::vector<std::string> paths;
+                        for (const auto& e : archive->entries()) paths.push_back(e.path);
+                        auto analysis = ws.analysis().get(apk->title);
+                        return McpToolOutcome::later([analysis, apkPath = apk->apkPath, paths = std::move(paths), args](McpToolContext&) {
+                            std::string note;
+                            const vulndb::Database db = vulndb::loadPreferred(&note);
+                            const deps::Report r = deps::analyze(analysis.get(), apkPath, paths, db, note);
+                            const bool vulnerableOnly = argBool(args, "vulnerable_only", false);
+                            Json list = Json::array();
+                            for (const deps::Dependency& d : r.dependencies) {
+                                if (vulnerableOnly && d.vulnerabilities.empty()) continue;
+                                Json j = Json::obj({{"name", d.name}, {"category", d.category}, {"license", d.license.empty() ? "unknown" : d.license},
+                                                    {"classes", static_cast<unsigned long long>(d.classes)}});
+                                if (!d.maven.empty()) j.set("maven", d.maven);
+                                if (!d.version.empty()) j.set("version", d.version);
+                                if (!d.nativeLibs.empty()) {
+                                    Json n = Json::array();
+                                    for (const auto& s : d.nativeLibs) n.push(s);
+                                    j.set("native_libraries", std::move(n));
+                                }
+                                Json vulns = Json::array();
+                                for (const auto& v : d.vulnerabilities)
+                                    vulns.push(Json::obj({{"id", v.id}, {"severity", v.severity}, {"summary", v.summary}, {"url", v.url}}));
+                                if (vulns.size()) j.set("vulnerabilities", std::move(vulns));
+                                if (d.advisoriesAnyVersion) j.set("advisories_if_version_unknown", static_cast<unsigned long long>(d.advisoriesAnyVersion));
+                                list.push(std::move(j));
+                            }
+                            Json unidentified = Json::array();
+                            for (const auto& n : r.unidentifiedNative) unidentified.push(n);
+                            return McpToolResult::ok(Json::obj({{"libraries", std::move(list)}, {"unidentified_native", std::move(unidentified)},
+                                                                {"total_classes", static_cast<unsigned long long>(r.totalClasses)},
+                                                                {"library_classes", static_cast<unsigned long long>(r.libraryClasses)},
+                                                                {"vulnerability_data", r.databaseNote}}));
                         });
                     }});
 

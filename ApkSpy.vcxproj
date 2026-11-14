@@ -116,6 +116,11 @@
     <ClInclude Include="src\mcp\McpTransports.hpp" />
     <ClInclude Include="src\mcp\McpTools.hpp" />
     <ClInclude Include="src\analysis\ApkDiff.hpp" />
+    <ClInclude Include="src\ui\DependenciesPanel.hpp" />
+    <ClInclude Include="src\analysis\Dependencies.hpp" />
+    <ClInclude Include="src\analysis\VulnDb.hpp" />
+    <ClInclude Include="src\ui\SecurityPanel.hpp" />
+    <ClInclude Include="src\analysis\SecurityScanner.hpp" />
     <ClInclude Include="src\analysis\SourceMap.hpp" />
     <ClInclude Include="src\core\TextDiff.hpp" />
     <ClInclude Include="src\ui\DiffPanel.hpp" />
@@ -208,6 +213,11 @@
     <ClCompile Include="src\mcp\McpTransports.cpp" />
     <ClCompile Include="src\mcp\McpTools.cpp" />
     <ClCompile Include="src\analysis\ApkDiff.cpp" />
+    <ClCompile Include="src\ui\DependenciesPanel.cpp" />
+    <ClCompile Include="src\analysis\Dependencies.cpp" />
+    <ClCompile Include="src\analysis\VulnDb.cpp" />
+    <ClCompile Include="src\ui\SecurityPanel.cpp" />
+    <ClCompile Include="src\analysis\SecurityScanner.cpp" />
     <ClCompile Include="src\analysis\SourceMap.cpp" />
     <ClCompile Include="src\ui\DiffPanel.cpp" />
     <ClCompile Include="src\ui\BehaviorPanel.cpp" />

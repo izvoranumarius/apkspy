@@ -43,7 +43,7 @@ C_SRC := $(wildcard $(LIB)/miniz/*.c) $(wildcard $(LIB)/libwebp/src/dec/*.c) \
 UI_SRC := src/app/Application.cpp src/app/Theme.cpp src/app/ThemePresets.cpp src/app/WindowFrame.cpp src/app/main.cpp \
           src/ui/EditorPanel.cpp src/ui/ExplorerPanel.cpp src/ui/OutputPanel.cpp src/ui/SearchPanel.cpp \
           src/ui/SettingsDialog.cpp src/ui/TitleBar.cpp src/ui/FileBrowser.cpp src/ui/ImageViewer.cpp \
-          src/ui/OverviewPanel.cpp src/ui/AnalysisPanel.cpp src/ui/AnalysisNative.cpp src/ui/AnalysisDecompiler.cpp src/ui/BehaviorPanel.cpp src/ui/DiffPanel.cpp src/ui/BookmarksPanel.cpp src/ui/GraphView.cpp src/ui/ScriptPanel.cpp src/ui/DevicePanels.cpp src/ui/McpSettings.cpp src/ui/TrafficPanel.cpp \
+          src/ui/OverviewPanel.cpp src/ui/AnalysisPanel.cpp src/ui/AnalysisNative.cpp src/ui/AnalysisDecompiler.cpp src/ui/BehaviorPanel.cpp src/ui/DiffPanel.cpp src/ui/SecurityPanel.cpp src/ui/DependenciesPanel.cpp src/ui/BookmarksPanel.cpp src/ui/GraphView.cpp src/ui/ScriptPanel.cpp src/ui/DevicePanels.cpp src/ui/McpSettings.cpp src/ui/TrafficPanel.cpp \
           src/ui/ShellIcons.cpp src/ui/HexView.cpp src/ui/AudioPlayer.cpp src/ui/AudioCodecs.cpp src/ui/VideoPlayer.cpp src/ui/MediaViews.cpp src/ui/TerminalPanel.cpp src/ui/CommandPalette.cpp src/core/Pty.cpp src/image/Texture.cpp src/image/ImageDecoder.cpp src/app/HeadlessMcp.cpp
 CORE_SRC := $(filter-out $(UI_SRC),$(APP_SRC))
 

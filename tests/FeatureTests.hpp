@@ -6,6 +6,9 @@
 #include "TestDex.hpp"
 #include "analysis/ApkDiff.hpp"
 #include "analysis/BehaviorGraph.hpp"
+#include "analysis/Dependencies.hpp"
+#include "analysis/SecurityScanner.hpp"
+#include "analysis/VulnDb.hpp"
 #include "analysis/SourceMap.hpp"
 #include "core/TextDiff.hpp"
 #include "analysis/Jni.hpp"
@@ -445,4 +448,207 @@ static void testSourceMap() {
     }
     const auto lambda = a->findMethodDefs("Lcom/app/Demo;", "lambda$go$0");
     CHECK(!lambda.empty() && sourcemap::bytecodeToJava(*a, file, lambda.front(), 0) == 27, "lambda instruction -> lambda body line");
+}
+
+namespace fixtures {
+
+// An app with one instance of most issues the scanner knows.
+inline std::shared_ptr<ApkAnalysis> insecureApp() {
+    TestDex d;
+    d.addClass("Lcom/app/Crypto;");
+    d.addMethod("Lcom/app/Crypto;", "enc", "()V", 0x9,
+                {T::constString(0, "AES/ECB/PKCS5Padding"), T::invokeStatic("Ljavax/crypto/Cipher;->getInstance(Ljava/lang/String;)Ljavax/crypto/Cipher;", {0}),
+                 T::constString(1, "MD5"), T::invokeStatic("Ljava/security/MessageDigest;->getInstance(Ljava/lang/String;)Ljava/security/MessageDigest;", {1}),
+                 T::constString(2, "s3cr3tk3y1234567"), T::invokeVirtual("Ljava/lang/String;->getBytes()[B", {2}),
+                 T::newInstance(3, "Ljavax/crypto/spec/SecretKeySpec;"),
+                 T::invokeDirect("Ljavax/crypto/spec/SecretKeySpec;-><init>([BLjava/lang/String;)V", {3, 4, 5}), T::returnVoid()});
+    d.addClass("Lcom/app/Web;");
+    d.addMethod("Lcom/app/Web;", "setup", "(Landroid/webkit/WebView;Landroid/webkit/WebSettings;)V", 0x9,
+                {T::const4(1, 1), T::invokeVirtual("Landroid/webkit/WebSettings;->setJavaScriptEnabled(Z)V", {7, 1}),
+                 T::invokeVirtual("Landroid/webkit/WebSettings;->setAllowUniversalAccessFromFileURLs(Z)V", {7, 1}),
+                 T::invokeVirtual("Landroid/webkit/WebView;->addJavascriptInterface(Ljava/lang/Object;Ljava/lang/String;)V", {6, 0, 2}),
+                 T::invokeStatic("Landroid/webkit/WebView;->setWebContentsDebuggingEnabled(Z)V", {1}), T::returnVoid()});
+    d.addClass("Lcom/app/Trust;", "Ljava/lang/Object;", {"Ljavax/net/ssl/X509TrustManager;"});
+    d.addMethod("Lcom/app/Trust;", "checkServerTrusted", "([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V", 0x1, {T::returnVoid()});
+    d.addClass("Lcom/app/Verifier;", "Ljava/lang/Object;", {"Ljavax/net/ssl/HostnameVerifier;"});
+    d.addMethod("Lcom/app/Verifier;", "verify", "(Ljava/lang/String;Ljavax/net/ssl/SSLSession;)Z", 0x1,
+                {T::const4(0, 1), T::raw({0x000f})});  // return v0
+    d.addClass("Lcom/app/Main;", "Landroid/app/Activity;");
+    d.addMethod("Lcom/app/Main;", "keys", "()V", 0x1,
+                {T::constString(0, "AKIAIOSFODNN7EXAMPLE"), T::constString(1, "user password is wrong"),
+                 T::invokeStatic("Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I", {0, 1}),
+                 T::constString(2, "http://tracker.example.org/collect"),
+                 T::constString(3, "prefs"), T::const4(4, 1),
+                 T::invokeVirtual("Lcom/app/Main;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;", {6, 3, 4}),
+                 T::returnVoid()});
+    d.addClass("Lokhttp3/internal/Legacy;");
+    d.addMethod("Lokhttp3/internal/Legacy;", "old", "()V", 0x9,
+                {T::constString(0, "DES"), T::invokeStatic("Ljavax/crypto/Cipher;->getInstance(Ljava/lang/String;)Ljavax/crypto/Cipher;", {0}),
+                 T::returnVoid()});
+    return analyse(d);
+}
+
+}  // namespace fixtures
+
+static void testSecurityScanner() {
+    std::printf("== security scanner ==\n");
+    using security::Severity;
+    security::SecretMatch m;
+    CHECK(security::findSecret("key=AKIAIOSFODNN7EXAMPLE;", m) && m.kind == "AWS access key ID" && m.token == "AKIAIOSFODNN7EXAMPLE", "AWS key");
+    CHECK(security::findSecret("AIzaSyA-1234567890abcdefghijklmnopqrstu", m) && m.kind == "Google API key", "Google API key");
+    CHECK(security::findSecret("-----BEGIN RSA PRIVATE KEY-----\nMIIE", m) && m.kind == "private key" && m.severity == Severity::Critical,
+          "PEM private key");
+    CHECK(security::findSecret("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", m) &&
+              m.kind == "JSON Web Token",
+          "JWT");
+    CHECK(!security::findSecret("AKIA123 hello world", m) && !security::findSecret("https://example.com/api/v1", m) &&
+              !security::findSecret("xAKIAIOSFODNN7EXAMPLE", m),
+          "no false positives on short or embedded tokens");
+
+    auto a = fixtures::insecureApp();
+    CHECK(a != nullptr, "security fixture analysed");
+    if (!a) return;
+    security::Input in;
+    in.analysis = a;
+    in.info.ok = true;
+    in.info.packageName = "com.app";
+    in.info.debuggable = true;
+    in.info.usesCleartextTraffic = "true";
+    in.info.targetSdk = "33";
+    in.info.minSdk = "21";
+    ApkComponent launcher;
+    launcher.type = "activity";
+    launcher.name = ".Main";
+    launcher.exported = launcher.exportedSet = launcher.hasIntentFilter = true;
+    launcher.categories = {"android.intent.category.LAUNCHER"};
+    ApkComponent svc;
+    svc.type = "service";
+    svc.name = ".SyncService";
+    svc.exported = svc.exportedSet = true;
+    ApkComponent provider;
+    provider.type = "provider";
+    provider.name = ".Files";
+    provider.exported = provider.exportedSet = provider.grantUriPermissions = true;
+    ApkComponent boot;
+    boot.type = "receiver";
+    boot.name = ".Boot";
+    boot.exported = boot.exportedSet = true;
+    boot.actions = {"android.intent.action.BOOT_COMPLETED"};
+    ApkComponent guarded = svc;
+    guarded.name = ".Guarded";
+    guarded.permission = "android.permission.BIND_JOB_SERVICE";
+    in.info.components = {launcher, svc, provider, boot, guarded};
+    in.networkSecurityConfig =
+        "<network-security-config>\n  <base-config cleartextTrafficPermitted=\"true\">\n    <trust-anchors>\n"
+        "      <certificates src=\"system\"/>\n      <certificates src=\"user\"/>\n    </trust-anchors>\n  </base-config>\n"
+        "  <domain-config cleartextTrafficPermitted=\"true\">\n    <domain includeSubdomains=\"true\">legacy.example.com</domain>\n"
+        "  </domain-config>\n  <debug-overrides>\n    <trust-anchors><certificates src=\"user\"/></trust-anchors>\n  </debug-overrides>\n"
+        "</network-security-config>\n";
+    in.networkSecurityConfigPath = "res/xml/network_security_config.xml";
+    const security::Report r = security::scan(in);
+    const auto count = [&](const char* rule) {
+        return std::count_if(r.findings.begin(), r.findings.end(), [&](const security::Finding& f) { return f.rule == rule; });
+    };
+    const auto find = [&](const char* rule) -> const security::Finding* {
+        for (const auto& f : r.findings)
+            if (f.rule == rule) return &f;
+        return nullptr;
+    };
+    CHECK(r.bytecodeScanned && r.methodsScanned >= 6, "bytecode scanned");
+    CHECK(count("manifest-debuggable") == 1 && count("manifest-cleartext") == 1, "debuggable and cleartext manifest flags");
+    CHECK(count("manifest-allow-backup") == 1 && find("manifest-allow-backup")->severity == Severity::Low, "allowBackup unset is the default true");
+    CHECK(count("component-exported") == 3, "exported service, provider and boot receiver; launcher and guarded service skipped");
+    for (const auto& f : r.findings)
+        if (f.rule == "component-exported" && f.location.ref == ".Files") CHECK(f.severity == Severity::High, "exported provider is high");
+        else if (f.rule == "component-exported" && f.location.ref == ".Boot") CHECK(f.severity == Severity::Low, "system-broadcast receiver is low");
+    CHECK(count("provider-grant-uri") == 1, "grantUriPermissions");
+    CHECK(count("nsc-cleartext") == 2 && count("nsc-user-certs") == 1, "network config: base + domain cleartext, user CAs outside debug-overrides only");
+    const auto* ecb = find("crypto-ecb");
+    CHECK(ecb && ecb->location.kind == security::Location::Kind::Method && ecb->location.ref == "Lcom/app/Crypto;->enc()V" &&
+              ecb->location.pc == 2 && ecb->library.empty(),
+          "ECB cipher located at its call");
+    CHECK(count("crypto-weak-hash") == 1 && count("crypto-hardcoded-key") == 1, "MD5 and a key from a constant string");
+    const auto* des = find("crypto-weak-cipher");
+    CHECK(des && des->library == "OkHttp", "finding in library code names the library");
+    CHECK(count("tls-trust-all") == 1 && find("tls-trust-all")->severity == Severity::Critical, "empty checkServerTrusted");
+    CHECK(count("tls-hostname-all") == 1, "verify() returning true");
+    CHECK(count("webview-js-enabled") == 1 && count("webview-file-access") == 1 && count("webview-js-interface") == 1 &&
+              count("webview-debugging") == 1,
+          "WebView settings");
+    CHECK(count("storage-world-readable") == 1, "MODE_WORLD_READABLE through the Activity receiver");
+    CHECK(count("log-sensitive") == 1, "password in a log message");
+    const auto* aws = find("secret-api-key");
+    CHECK(aws && aws->title == "Hardcoded AWS access key ID" && aws->location.ref == "Lcom/app/Main;->keys()V" &&
+              aws->evidence.find("AKIAIOSF") != std::string::npos && aws->evidence.find("AKIAIOSFODNN7EXAMPLE") == std::string::npos,
+          "AWS key located and masked");
+    CHECK(count("cleartext-url") == 1 && find("cleartext-url")->evidence.find("tracker.example.org") != std::string::npos, "cleartext URL by host");
+    bool sorted = true;
+    for (size_t i = 1; i < r.findings.size(); ++i) sorted = sorted && r.findings[i - 1].severity >= r.findings[i].severity;
+    CHECK(sorted && r.findings.front().severity == Severity::Critical, "most severe first");
+    const std::string md = security::toMarkdown(r, in.info), json = security::toJson(r, in.info);
+    CHECK(md.find("## [Critical]") != std::string::npos && md.find("CWE-295") != std::string::npos, "markdown report");
+    CHECK(json.find("\"rule\": \"crypto-ecb\"") != std::string::npos && json.find("\"pc\": 2") != std::string::npos, "json report");
+}
+
+static void testDependencies() {
+    std::printf("== dependencies / vulnerability database ==\n");
+    using vulndb::compareVersions;
+    CHECK(compareVersions("2.0-beta9", "2.0") < 0 && compareVersions("2.0", "2.0.1") < 0 && compareVersions("1.0", "1.0.0") == 0,
+          "versions: qualifiers before releases, trailing zeros ignored");
+    CHECK(compareVersions("1.0-rc1", "1.0.1") < 0 && compareVersions("1.0-sp1", "1.0") > 0 && compareVersions("2.15.0", "2.2") > 0,
+          "versions: rc, service packs, numeric parts");
+    CHECK(compareVersions("2.12.6.1", "2.12.6") > 0 && compareVersions("1.0-alpha", "1.0-beta") < 0, "versions: four parts, alpha < beta");
+    CHECK(vulndb::inRange("2.8.5", {"0", "2.8.9", ""}) && !vulndb::inRange("2.8.9", {"0", "2.8.9", ""}) &&
+              vulndb::inRange("1.2.17", {"1.2", "", "1.2.17"}) && !vulndb::inRange("1.1", {"1.2", "", "1.2.17"}),
+          "OSV ranges: introduced <= v < fixed, last_affected inclusive");
+    const vulndb::Database db = vulndb::Database::builtin();
+    CHECK(db.all().size() >= 20, "built-in database loads");
+    CHECK(db.affecting("com.google.code.gson:gson", "2.8.6").size() == 1 && db.affecting("com.google.code.gson:gson", "2.10.1").empty(),
+          "gson 2.8.6 vulnerable, 2.10.1 not");
+    CHECK(db.affecting("org.apache.logging.log4j:log4j-core", "2.14.1").size() == 2 &&
+              db.affecting("org.apache.logging.log4j:log4j-core", "2.12.2").empty(),
+          "Log4Shell ranges include the 2.12.2 backport");
+    vulndb::Database extra;
+    std::string err;
+    CHECK(extra.loadText(R"({"format":"apkspy-vulndb-1","updated":"2026-01-01","vulnerabilities":[)"
+                         R"({"id":"CVE-2022-25647","package":"com.google.code.gson:gson","severity":"Low","summary":"changed","ranges":[{"introduced":"0","fixed":"2.8.9"}]},)"
+                         R"({"id":"GHSA-test","package":"com.example:lib","severity":"High","summary":"x","ranges":[{"introduced":"1.0"}]}]})",
+                         err),
+          "database file parses");
+    vulndb::Database merged = db;
+    merged.merge(extra);
+    CHECK(merged.all().size() == db.all().size() + 1 && merged.affecting("com.google.code.gson:gson", "2.8.0")[0]->severity == "Low" &&
+              merged.affecting("com.example:lib", "3.0").size() == 1,
+          "merge replaces by id + package and adds new advisories");
+    vulndb::Database bad;
+    CHECK(!bad.loadText("{\"format\":\"other\"}", err) && !err.empty(), "foreign files are refused");
+    std::string roundTrip = db.toJson();
+    vulndb::Database again;
+    CHECK(again.loadText(roundTrip, err) && again.all().size() == db.all().size(), "database round-trips through JSON");
+
+    CHECK(libcatalog::isVersionFile("META-INF/maven/com.google.code.gson/gson/pom.properties") &&
+              !libcatalog::isVersionFile("META-INF/maven/a/b/c/pom.properties"),
+          "pom.properties are version files");
+    const auto* flutter = libcatalog::forNativeLibrary("lib/arm64-v8a/libflutter.so");
+    CHECK(flutter && std::string(flutter->id) == "flutter" && !libcatalog::forNativeLibrary("lib/x86/libfoo.so"), "native library fingerprints");
+    const auto found = libcatalog::detect(nullptr, {{"META-INF/maven/com.google.code.gson/gson/pom.properties", "#x\nversion=2.8.6\ngroupId=com.google.code.gson\n"}},
+                                          {"lib/arm64-v8a/libflutter.so", "lib/arm64-v8a/libapp.so", "lib/arm64-v8a/libmystery.so"});
+    const auto gson = std::find_if(found.begin(), found.end(), [](const libcatalog::Detection& x) { return x.lib && std::string(x.lib->id) == "gson"; });
+    CHECK(gson != found.end() && gson->version == "2.8.6" && gson->versionSource.find("pom.properties") != std::string::npos, "version from pom.properties");
+    const auto fl = std::find_if(found.begin(), found.end(), [](const libcatalog::Detection& x) { return x.lib && std::string(x.lib->id) == "flutter"; });
+    CHECK(fl != found.end() && fl->nativeLibs.size() == 2 && fl->classes == 0, "Flutter detected from its native libraries alone");
+    CHECK(deps::licenseKind("Apache-2.0") == deps::LicenseKind::Permissive && deps::licenseKind("GPL-3.0") == deps::LicenseKind::Copyleft &&
+              deps::licenseKind("GPL-2.0-with-classpath-exception") == deps::LicenseKind::WeakCopyleft &&
+              deps::licenseKind("Proprietary") == deps::LicenseKind::Proprietary && deps::licenseKind("") == deps::LicenseKind::Unknown,
+          "license kinds");
+    // analyze(): the behavior fixture bundles OkHttp; no archive, so no versions.
+    auto app = fixtures::behaviorApp();
+    if (app) {
+        const deps::Report r = deps::analyze(app.get(), "", {"lib/arm64-v8a/libmystery.so"}, db);
+        const auto ok = std::find_if(r.dependencies.begin(), r.dependencies.end(), [](const deps::Dependency& d) { return d.id == "okhttp3"; });
+        CHECK(ok != r.dependencies.end() && ok->classes == 1 && ok->prefixes == std::vector<std::string>{"okhttp3."} && ok->version.empty(),
+              "OkHttp found by package, version unknown");
+        CHECK(r.unidentifiedNative == std::vector<std::string>{"libmystery.so"} && r.totalClasses == 7 && r.libraryClasses == 1,
+              "unidentified native libraries and code share");
+    }
 }
