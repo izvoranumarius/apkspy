@@ -207,6 +207,7 @@ void AnalysisPanel::drawContents() {
     }
     current_ = analysis;
     currentGroup_ = apk.title;
+    if (analysis) syncFromEditor(*analysis);
     if (methodRequested && analysis && methodReq.view == "class") {
         // A class (descriptor or Java name): its source in the Editor.
         const ApkAnalysis::ClassEntry* entry = analysis->findClass(methodReq.method);
@@ -541,6 +542,7 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
     sel_ = Selection::Method;
     selMethod_ = m;
     selClass_ = UINT32_MAX;
+    syncPcs_.clear();
     if (const auto* entry = a.findClass(DexFile::descriptorToJava(cls))) {
         for (uint32_t i = 0; i < static_cast<uint32_t>(a.classes().size()); ++i)
             if (a.classes()[i].dex == entry->dex && a.classes()[i].def == entry->def) {
@@ -572,11 +574,15 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
     const std::string javaClass = DexFile::descriptorToJava(cls);
     const auto mode = keep ? Workspace::OpenMode::Permanent : Workspace::OpenMode::Preview;
     if (Document* doc = workspace_.openClassSource(group, javaClass, mode)) {
-        // Jump to the declaration: the first line naming the method with a parameter list.
+        // Jump to the declaration: the parsed method with the same parameter types
+        // (overloads included); failing that, the first line naming it with a parameter list.
+        const int decl = javaFile(*doc)->findMethod(javaClass, dex.methodName(idx),
+                                                    sourcemap::paramSimpleTypes(dex.protoDescriptor(dex.methodProto(idx))));
         std::string name(dex.methodName(idx));
         if (name == "<init>" || name == "<clinit>") name = shortName(cls);
         const auto& lines = doc->lines();
-        for (size_t i = 0; i < lines.size(); ++i) {
+        if (decl >= 0) doc->goTo(decl);
+        for (size_t i = 0; decl < 0 && i < lines.size(); ++i) {
             const std::string_view l = lines[i];
             const size_t at = l.find(name + "(");
             if (at == std::string_view::npos || l.find(';') < at || l.find('=') < at) continue;
@@ -594,6 +600,74 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
         openMethod(a, m, group);  // the smali listing in the Editor
         if (showPanel_) showPanel_("Editor");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Java <-> smali synchronisation
+// ---------------------------------------------------------------------------
+
+const sourcemap::JavaFile* AnalysisPanel::javaFile(const Document& doc) {
+    if (!javaFile_ || javaDoc_ != &doc || javaRevision_ != doc.textRevision() || javaLines_ != doc.lineCount()) {
+        std::vector<std::string_view> lines;
+        lines.reserve(doc.lineCount());
+        for (size_t i = 0; i < doc.lineCount(); ++i) lines.push_back(doc.line(i));
+        javaFile_ = std::make_unique<sourcemap::JavaFile>(lines);
+        javaDoc_ = &doc;
+        javaRevision_ = doc.textRevision();
+        javaLines_ = doc.lineCount();
+    }
+    return javaFile_.get();
+}
+
+static bool isJavaSource(const Document& doc) {
+    const std::string& t = doc.title();
+    return doc.rootKind() == RootKind::Decompiled && t.size() > 5 && t.compare(t.size() - 5, 5, ".java") == 0;
+}
+
+void AnalysisPanel::syncFromEditor(const ApkAnalysis& a) {
+    const Workspace::EditorCursor& cur = workspace_.editorCursor();
+    if (cur.serial == cursorSerial_) return;
+    cursorSerial_ = cur.serial;
+    if (!syncJava_ || !cur.doc) return;
+    // The click may be on a document closed since: only use one that is still open.
+    const Document* doc = nullptr;
+    for (const auto& d : workspace_.documents())
+        if (d.get() == cur.doc) doc = d.get();
+    if (!doc || !isJavaSource(*doc) || doc->rootGroup() != currentGroup_) return;
+    sourcemap::Target t;
+    if (!sourcemap::javaToBytecode(a, *javaFile(*doc), cur.line, t)) return;
+    const bool same = sel_ == Selection::Method && selMethod_.dex == t.method.dex && selMethod_.method.methodIdx == t.method.method.methodIdx;
+    if (!same) selectMethod(a, t.method, currentGroup_, false);  // the editor stays where the user is
+    syncPcs_ = t.pcs;
+    syncExact_ = t.exact;
+    if (!t.pcs.empty()) {
+        listingPc_ = static_cast<int32_t>(t.pcs.front());
+        listingScroll_ = true;
+    }
+}
+
+Document* AnalysisPanel::openJavaFor(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m) const {
+    const DexFile& dex = *a.dexes()[m.dex];
+    std::string rel = DexFile::descriptorToJava(dex.typeDescriptor(dex.methodClass(m.method.methodIdx)));
+    rel = rel.substr(0, rel.find('$'));  // inner classes live in the outer class's file
+    std::replace(rel.begin(), rel.end(), '.', '/');
+    rel = "/" + rel + ".java";
+    for (const auto& d : workspace_.documents()) {
+        if (!isJavaSource(*d) || d->rootGroup() != currentGroup_ || !d->node()) continue;
+        std::string path = d->node()->path();
+        std::replace(path.begin(), path.end(), '\\', '/');
+        if (path.size() >= rel.size() && path.compare(path.size() - rel.size(), rel.size(), rel) == 0) return d.get();
+    }
+    return nullptr;
+}
+
+void AnalysisPanel::syncToJava(const ApkAnalysis& a, uint32_t pc) {
+    if (!syncJava_ || sel_ != Selection::Method) return;
+    // Only a Java file already open moves: an instruction click never opens tabs.
+    Document* doc = openJavaFor(a, selMethod_);
+    if (!doc) return;
+    const int line = sourcemap::bytecodeToJava(a, *javaFile(*doc), selMethod_, pc);
+    if (line >= 0) doc->goTo(line);
 }
 
 void AnalysisPanel::openClass(const ApkAnalysis& a, const ApkAnalysis::ClassEntry& c, const std::string& group) {
@@ -975,6 +1049,17 @@ void AnalysisPanel::drawMethodView(const ApkAnalysis& a, Root& apk) {
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
         ImGui::IsKeyPressed(ImGuiKey_Space, false))
         functionMode_ = functionMode_ == 0 ? 1 : 0;
+    if (functionMode_ == 0) {
+        ImGui::SameLine(0.f, ui::em(1.f));
+        ImGui::Checkbox("Java sync", &syncJava_);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Click a line of jadx's Java (Editor) to select its method and highlight its instructions here;\n"
+                              "click an instruction to move the highlight in the open Java file.");
+        if (!syncPcs_.empty()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled(syncExact_ ? "%zu instructions (debug lines)" : "%zu instructions (matched by calls)", syncPcs_.size());
+        }
+    }
     if (functionMode_ != 0) {
         if (functionMode_ == 2) ImGui::SameLine(), ImGui::TextDisabled("callers left, callees right");
         // Build the graph the mode asks for when it is not the one on screen.
@@ -1013,8 +1098,13 @@ void AnalysisPanel::drawMethodListing(const ApkAnalysis& a, Root& apk) {
             ImGui::PushID(i);
             const ImVec2 pos = ImGui::GetCursorScreenPos();
             const bool focus = l.pc >= 0 && l.pc == listingPc_;
+            // Instructions of the Java line clicked in the editor.
+            if (l.pc >= 0 && std::find(syncPcs_.begin(), syncPcs_.end(), static_cast<uint32_t>(l.pc)) != syncPcs_.end())
+                ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + ImGui::GetContentRegionAvail().x, pos.y + ImGui::GetTextLineHeight()),
+                                                          theme::u32(Col::FindMatch, 0.55f));
             if (ImGui::Selectable("##l", focus, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0, ImGui::GetTextLineHeight()))) {
                 listingPc_ = l.pc;
+                if (l.pc >= 0) syncToJava(a, static_cast<uint32_t>(l.pc));
                 // Double-click a call: go to the called method when the APK defines it.
                 const size_t arrow = l.text.find("->");
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && arrow != std::string::npos) {

@@ -1628,6 +1628,7 @@ int main(int argc, char** argv) {
     testMcpToolsEndToEnd();
     testBehaviorGraph();
     testApkDiff();
+    testSourceMap();
     std::printf("\n%d passed, %d failed\n", passes, failures);
     return failures ? 1 : 0;
 }

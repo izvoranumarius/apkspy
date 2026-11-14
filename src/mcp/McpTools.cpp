@@ -11,6 +11,7 @@
 #include "analysis/BehaviorGraph.hpp"
 #include "analysis/Dalvik.hpp"
 #include "analysis/Decompiler.hpp"
+#include "analysis/SourceMap.hpp"
 #include "core/ApkInfo.hpp"
 #include "core/AxmlDecoder.hpp"
 #include "core/Paths.hpp"
@@ -783,6 +784,94 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             Json j = renderContent(bytes, start, maxLines);
                             j.set("path", shown);
                             return McpToolResult::ok(std::move(j));
+                        });
+                    }});
+
+    server.addTool({"map_java_smali", "Map Java <-> smali",
+                    "Maps between jadx's Java source and the bytecode. With `line`: the method a Java line of `class` "
+                    "belongs to and its smali instructions. With `method` and `pc`: the Java line of an instruction. "
+                    "Exact when jadx ran with --add-debug-lines; otherwise lines and instructions are matched by the "
+                    "calls, object creations, strings and fields they share. Needs run_analysis and jadx output.",
+                    schema::object({{"apk", apkArg()},
+                                    {"class", str("Class of the Java file (com.example.Foo), for `line`")},
+                                    {"line", integer("1-based Java line", 1, 100000000)},
+                                    {"method", str("Method for `pc`, e.g. Lcom/a/B;->name(I)V")},
+                                    {"pc", integer("Instruction offset (code units) in `method`", 0, 100000000)}}),
+                    true, false, [&ws](const Json& args, McpToolContext&) -> McpToolOutcome {
+                        std::string err;
+                        Root* apk = resolveApk(ws, args, err);
+                        if (!apk) return McpToolResult::error(err);
+                        auto a = requireAnalysis(ws, *apk, err);
+                        if (!a) return McpToolResult::error(err);
+                        Root const* dec = rootFor(ws, *apk, "decompiled", err);
+                        if (!dec) return McpToolResult::error(err);
+                        const bool fromJava = args.has("line");
+                        ApkAnalysis::MethodDef method{};
+                        std::string cls = argStr(args, "class");
+                        if (!fromJava) {
+                            if (!args.has("pc") || !args.has("method")) return McpToolResult::error("give class + line, or method + pc");
+                            std::string mc, name, proto;
+                            const std::string sig = argStr(args, "method");
+                            std::vector<ApkAnalysis::MethodDef> defs;
+                            if (ApkAnalysis::splitMethodRef(sig, mc, name, proto)) defs = a->findMethodDefs(mc, name, proto);
+                            if (defs.empty()) return McpToolResult::error("no bytecode for " + sig);
+                            method = defs.front();
+                            cls = DexFile::descriptorToJava(mc);
+                        }
+                        if (!cls.empty() && cls.front() == 'L' && cls.back() == ';') cls = DexFile::descriptorToJava(cls);
+                        const std::string outer = cls.substr(0, cls.find('$'));
+                        std::string const disk = ws.symbols().resolve(apk->title, outer);
+                        const TreeNode* node = disk.empty() ? findNode(*dec, javaToRelSourcePath(outer)) : dec->tree->findByPath(disk);
+                        if (!node || node->isFolder()) return McpToolResult::error("no decompiled source for " + outer);
+                        const std::string path = node->path();
+                        const int64_t line = argInt(args, "line", 1), pc = argInt(args, "pc", 0);
+                        return McpToolOutcome::later([a, path, fromJava, line, pc, method](McpToolContext&) {
+                            std::vector<uint8_t> bytes;
+                            if (!DiskSource::readFile(path, bytes)) return McpToolResult::error("read failed");
+                            const std::string text(bytes.begin(), bytes.end());
+                            std::vector<std::string_view> lines;
+                            for (size_t s = 0; s <= text.size();) {
+                                size_t e = text.find('\n', s);
+                                if (e == std::string::npos) e = text.size();
+                                std::string_view l(text.data() + s, e - s);
+                                if (!l.empty() && l.back() == '\r') l.remove_suffix(1);
+                                lines.push_back(l);
+                                s = e + 1;
+                            }
+                            const sourcemap::JavaFile file(lines);
+                            if (!fromJava) {
+                                const int l = sourcemap::bytecodeToJava(*a, file, method, static_cast<uint32_t>(pc));
+                                if (l < 0) return McpToolResult::error("no Java line found for that instruction");
+                                return McpToolResult::ok(Json::obj({{"line", l + 1}, {"text", json::sanitizeUtf8(std::string(file.line(l)))}}));
+                            }
+                            sourcemap::Target t;
+                            if (line < 1 || line > static_cast<int64_t>(lines.size()) ||
+                                !sourcemap::javaToBytecode(*a, file, static_cast<int>(line - 1), t))
+                                return McpToolResult::error("that line is not inside a method with bytecode");
+                            // The smali text of each mapped instruction.
+                            std::string listing;
+                            std::vector<int32_t> pcs;
+                            dalvik::disassembleMethod(*a->dexes()[t.method.dex], t.method.method, dalvik::ListingOptions{}, listing, &pcs);
+                            std::vector<std::string> listingLines;
+                            for (size_t s = 0; s <= listing.size();) {
+                                size_t e = listing.find('\n', s);
+                                if (e == std::string::npos) e = listing.size();
+                                listingLines.push_back(listing.substr(s, e - s));
+                                s = e + 1;
+                            }
+                            Json insns = Json::array();
+                            for (uint32_t p : t.pcs)
+                                for (size_t k = 0; k < pcs.size() && k < listingLines.size(); ++k) {
+                                    // The instruction itself, not a .line directive or label at the same pc.
+                                    const size_t first = listingLines[k].find_first_not_of(' ');
+                                    if (pcs[k] != static_cast<int32_t>(p) || first == std::string::npos || listingLines[k][first] == '.' ||
+                                        listingLines[k][first] == ':')
+                                        continue;
+                                    insns.push(Json::obj({{"pc", static_cast<long long>(p)}, {"smali", json::sanitizeUtf8(listingLines[k])}}));
+                                    break;
+                                }
+                            return McpToolResult::ok(Json::obj({{"method", a->methodSignature(t.method)}, {"exact", t.exact},
+                                                                {"instructions", std::move(insns)}}));
                         });
                     }});
 

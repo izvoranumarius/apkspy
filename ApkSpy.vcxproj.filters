@@ -192,6 +192,9 @@
     <ClInclude Include="src\analysis\ApkDiff.hpp">
       <Filter>Header Files\analysis</Filter>
     </ClInclude>
+    <ClInclude Include="src\analysis\SourceMap.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
     <ClInclude Include="src\core\TextDiff.hpp">
       <Filter>Header Files\core</Filter>
     </ClInclude>
@@ -459,6 +462,9 @@
       <Filter>Source Files\mcp</Filter>
     </ClCompile>
     <ClCompile Include="src\analysis\ApkDiff.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\SourceMap.cpp">
       <Filter>Source Files\analysis</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\DiffPanel.cpp">

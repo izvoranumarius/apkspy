@@ -11,6 +11,7 @@
 #include "analysis/Decompiler.hpp"
 #include "analysis/ElfFile.hpp"
 #include "analysis/NativeCode.hpp"
+#include "analysis/SourceMap.hpp"
 #include "core/ResourceTable.hpp"
 #include "ui/AnnotationUi.hpp"
 #include "ui/GraphView.hpp"
@@ -242,6 +243,22 @@ private:
     std::vector<ResourceTable::Item> resItems_;
     std::string resKey_;
     const ResourceTable* resOwner_ = nullptr;
+
+    // Java <-> smali synchronisation (analysis/SourceMap): a click on a line of
+    // jadx's Java selects its method and highlights its instructions; a click on
+    // an instruction moves the highlight in the open Java file.
+    void syncFromEditor(const ApkAnalysis& a);
+    void syncToJava(const ApkAnalysis& a, uint32_t pc);
+    const sourcemap::JavaFile* javaFile(const Document& doc);
+    Document* openJavaFor(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m) const;  // already open, or nullptr
+    bool syncJava_ = true;
+    uint64_t cursorSerial_ = 0;
+    std::vector<uint32_t> syncPcs_;  // instructions of the clicked Java line
+    bool syncExact_ = false;         // from debug line numbers
+    const Document* javaDoc_ = nullptr;
+    uint32_t javaRevision_ = 0;
+    size_t javaLines_ = 0;
+    std::unique_ptr<sourcemap::JavaFile> javaFile_;
 };
 
 // The selected method or native function: listing, control-flow graph, call graph.

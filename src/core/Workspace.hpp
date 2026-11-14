@@ -245,6 +245,20 @@ public:
         methodViewPending_ = false;
         return true;
     }
+    // The line last clicked in the editor (plain UI state, owner thread):
+    // the Analysis workspace maps it to bytecode. `serial` changes per click.
+    struct EditorCursor {
+        const Document* doc = nullptr;
+        int line = -1;
+        uint64_t serial = 0;
+    };
+    void setEditorCursor(const Document* doc, int line) {
+        cursor_.doc = doc;
+        cursor_.line = line;
+        ++cursor_.serial;
+    }
+    const EditorCursor& editorCursor() const { return cursor_; }
+
     // Same for the Diff panel: compare two APK groups, optionally showing one changed method side by side.
     struct DiffViewRequest {
         std::string groupA, groupB, method;
@@ -316,6 +330,7 @@ private:
     bool methodViewPending_ = false;
     DiffViewRequest diffView_;
     bool diffViewPending_ = false;
+    EditorCursor cursor_;
     bool nativeViewPending_ = false;
     Document* activeDocument_ = nullptr;  // visible tab, set by the editor panel
     bool decompileSwitch_ = false;

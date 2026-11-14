@@ -441,6 +441,7 @@ void EditorPanel::drawCode(Document& doc) {
                 if (right || (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyCtrl)) {
                     lineDoc_ = &doc;
                     line_ = i;
+                    workspace_.setEditorCursor(&doc, i);  // Java <-> smali sync follows it
                 }
                 if (right) ImGui::OpenPopup("##lineMenu");
             }

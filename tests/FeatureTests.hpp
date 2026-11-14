@@ -6,6 +6,7 @@
 #include "TestDex.hpp"
 #include "analysis/ApkDiff.hpp"
 #include "analysis/BehaviorGraph.hpp"
+#include "analysis/SourceMap.hpp"
 #include "core/TextDiff.hpp"
 #include "analysis/Jni.hpp"
 #include "analysis/LibraryCatalog.hpp"
@@ -323,4 +324,125 @@ static void testApkDiff() {
     const auto other = std::find_if(found.begin(), found.end(), [](const libcatalog::Detection& x) { return !x.lib; });
     CHECK(other != found.end() && other->maven == "androidx.lifecycle:lifecycle-runtime" && other->version == "2.6.2",
           "uncatalogued artifact kept by its coordinates");
+}
+
+namespace fixtures {
+
+// jadx-style source of com.app.Demo (line numbers matter: see the checks).
+inline const char* kDemoJava =
+    "package com.app;\n"                                        // 0
+    "\n"                                                        // 1
+    "import android.util.Log;\n"                                // 2
+    "\n"                                                        // 3
+    "public class Demo {\n"                                     // 4
+    "    @Override\n"                                           // 5
+    "    public void run(String name) {\n"                      // 6
+    "        Log.d(\"tag\", \"start\");\n"                      // 7
+    "        helper(name);\n"                                   // 8
+    "        if (name.equals(new String())) {\n"                // 9
+    "            save();\n"                                     // 10
+    "        }\n"                                               // 11
+    "        Log.d(\"tag\", \"end\");\n"                        // 12
+    "    }\n"                                                   // 13
+    "\n"                                                        // 14
+    "    private void helper(String s) {\n"                     // 15
+    "        Runnable r = new Runnable() {\n"                   // 16
+    "            @Override\n"                                   // 17
+    "            public void run() {\n"                         // 18
+    "                System.loadLibrary(\"x\");\n"              // 19
+    "            }\n"                                           // 20
+    "        };\n"                                              // 21
+    "        r.run();\n"                                        // 22
+    "    }\n"                                                   // 23
+    "\n"                                                        // 24
+    "    public void go() {\n"                                  // 25
+    "        post(() -> {\n"                                    // 26
+    "            save();\n"                                     // 27
+    "        });\n"                                             // 28
+    "    }\n"                                                   // 29
+    "\n"                                                        // 30
+    "    void save() {\n"                                       // 31
+    "    }\n"                                                   // 32
+    "\n"                                                        // 33
+    "    void post(Runnable r) {\n"                             // 34
+    "    }\n"                                                   // 35
+    "}\n";                                                      // 36
+
+inline std::shared_ptr<ApkAnalysis> demoApp() {
+    TestDex d;
+    d.addClass("Lcom/app/Demo;");
+    d.addClass("Lcom/app/Demo$1;", "Ljava/lang/Object;", {"Ljava/lang/Runnable;"});
+    const std::string logD = "Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I";
+    d.addMethod("Lcom/app/Demo;", "run", "(Ljava/lang/String;)V", 0x1,
+                {T::constString(0, "tag"), T::constString(1, "start"), T::invokeStatic(logD, {0, 1}),             // pcs 0, 2, 4
+                 T::invokeDirect("Lcom/app/Demo;->helper(Ljava/lang/String;)V", {6, 7}),                         // 7
+                 T::newInstance(0, "Ljava/lang/String;"), T::invokeDirect("Ljava/lang/String;-><init>()V", {0}),  // 10, 12
+                 T::invokeVirtual("Ljava/lang/String;->equals(Ljava/lang/Object;)Z", {7, 0}),                   // 15
+                 T::invokeDirect("Lcom/app/Demo;->save()V", {6}),                                                // 18
+                 T::constString(0, "tag"), T::constString(1, "end"), T::invokeStatic(logD, {0, 1}),               // 21, 23, 25
+                 T::returnVoid()});
+    d.addMethod("Lcom/app/Demo;", "helper", "(Ljava/lang/String;)V", 0x2,
+                {T::newInstance(0, "Lcom/app/Demo$1;"), T::invokeDirect("Lcom/app/Demo$1;-><init>(Lcom/app/Demo;)V", {0, 6}),
+                 T::invokeVirtual("Ljava/lang/Runnable;->run()V", {0}), T::returnVoid()});
+    d.addMethod("Lcom/app/Demo;", "go", "()V", 0x1,
+                {T::invokeDirect("Lcom/app/Demo;->post(Ljava/lang/Runnable;)V", {6, 0}), T::returnVoid()});
+    d.addMethod("Lcom/app/Demo;", "lambda$go$0", "()V", 0x1002,
+                {T::invokeDirect("Lcom/app/Demo;->save()V", {6}), T::returnVoid()});
+    d.addMethod("Lcom/app/Demo;", "save", "()V", 0x0, {});
+    d.addMethod("Lcom/app/Demo;", "post", "(Ljava/lang/Runnable;)V", 0x0, {});
+    d.addMethod("Lcom/app/Demo$1;", "<init>", "(Lcom/app/Demo;)V", 0x10000, {});
+    d.addMethod("Lcom/app/Demo$1;", "run", "()V", 0x1,
+                {T::constString(0, "x"), T::invokeStatic("Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V", {0}), T::returnVoid()});
+    return analyse(d);
+}
+
+}  // namespace fixtures
+
+static void testSourceMap() {
+    std::printf("== java <-> smali source map ==\n");
+    const std::vector<std::string_view> lines = textdiff::splitLines(fixtures::kDemoJava);
+    const sourcemap::JavaFile file(lines);
+    CHECK(file.packageName() == "com.app", "package name");
+    const auto& ms = file.methods();
+    const auto has = [&](const char* cls, const char* name, int decl) {
+        return std::any_of(ms.begin(), ms.end(), [&](const sourcemap::JavaMethod& m) { return m.cls == cls && m.name == name && m.declLine == decl; });
+    };
+    CHECK(ms.size() == 6, "six method bodies parsed");
+    CHECK(has("com.app.Demo", "run", 5) && has("com.app.Demo", "helper", 15) && has("com.app.Demo$1", "run", 17) &&
+              has("com.app.Demo", "go", 25),
+          "methods with their classes (annotation starts the declaration)");
+    const sourcemap::JavaMethod* inner = file.methodAt(19);
+    CHECK(inner && inner->cls == "com.app.Demo$1" && inner->name == "run", "anonymous class numbered like javac");
+    CHECK(file.methodAt(10) && file.methodAt(10)->name == "run" && file.methodAt(10)->cls == "com.app.Demo",
+          "a block after `new String()` is not an anonymous class");
+    CHECK(!ms.empty() && ms[0].params == std::vector<std::string>{"String"}, "parameter types");
+    CHECK(sourcemap::paramSimpleTypes("(Ljava/lang/String;[ILcom/a/B$C;)V") == std::vector<std::string>({"String", "int[]", "C"}),
+          "bytecode parameter names");
+    CHECK(file.lambdaRanges().size() == 1 && file.lambdaRanges()[0].first == 26, "lambda body range");
+    const std::vector<std::string_view> dbg = {"    /* 42 */ foo();", "    bar();"};
+    const sourcemap::JavaFile withDebug(dbg);
+    CHECK(withDebug.hasDebugLines() && withDebug.debugLine(0) == 42 && withDebug.debugLine(1) == -1, "jadx debug line comments");
+
+    auto a = fixtures::demoApp();
+    CHECK(a != nullptr, "source map fixture analysed");
+    if (!a) return;
+    sourcemap::Target t;
+    CHECK(sourcemap::javaToBytecode(*a, file, 12, t) && t.pcs == std::vector<uint32_t>({21, 23, 25}),
+          "second Log.d line -> the second call and its constants (not the first)");
+    CHECK(sourcemap::javaToBytecode(*a, file, 7, t) && t.pcs == std::vector<uint32_t>({0, 2, 4}), "first Log.d line -> first call");
+    CHECK(sourcemap::javaToBytecode(*a, file, 9, t) && t.pcs == std::vector<uint32_t>({10, 12, 15}),
+          "condition line -> new String() and equals()");
+    CHECK(sourcemap::javaToBytecode(*a, file, 19, t) && a->methodSignature(t.method) == "Lcom/app/Demo$1;->run()V" && t.pcs.size() == 2,
+          "line in the anonymous class -> Demo$1.run()");
+    CHECK(sourcemap::javaToBytecode(*a, file, 27, t) && a->methodSignature(t.method) == "Lcom/app/Demo;->lambda$go$0()V" &&
+              t.pcs == std::vector<uint32_t>({0}),
+          "line in a lambda -> its synthetic method");
+    const auto run = a->findMethodDefs("Lcom/app/Demo;", "run");
+    if (!run.empty()) {
+        CHECK(sourcemap::bytecodeToJava(*a, file, run.front(), 7) == 8, "helper() invoke -> its Java line");
+        CHECK(sourcemap::bytecodeToJava(*a, file, run.front(), 21) == 12, "setup constant -> the statement it feeds");
+        CHECK(sourcemap::bytecodeToJava(*a, file, run.front(), 18) == 10, "save() inside the if block");
+    }
+    const auto lambda = a->findMethodDefs("Lcom/app/Demo;", "lambda$go$0");
+    CHECK(!lambda.empty() && sourcemap::bytecodeToJava(*a, file, lambda.front(), 0) == 27, "lambda instruction -> lambda body line");
 }
