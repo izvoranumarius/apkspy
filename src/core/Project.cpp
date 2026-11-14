@@ -148,7 +148,7 @@ bool Project::load(const std::string& path) {
         const std::string k = "note." + std::to_string(i) + ".";
         Annotation a;
         const int kind = in.getInt(k + "kind", 0), target = in.getInt(k + "target", 0), root = in.getInt(k + "root", 0);
-        if (kind < 0 || kind > 1 || target < 0 || target > 1) continue;
+        if (kind < 0 || kind > 4 || target < 0 || target > 2) continue;
         if (root != static_cast<int>(RootKind::Apk) && root != static_cast<int>(RootKind::Decompiled)) continue;
         a.kind = static_cast<Annotation::Kind>(kind);
         a.target = static_cast<Annotation::Target>(target);

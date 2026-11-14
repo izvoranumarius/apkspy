@@ -60,8 +60,8 @@ to `Ctrl+5`), and the title shows the current one:
 
 | Workspace | Main tool | Alongside |
 | --- | --- | --- |
-| **Code** | Editor | Explorer, Overview, Search, Bookmarks, Output, Terminal |
-| **Analysis** | Analysis | Function, Editor, References, Bookmarks |
+| **Code** | Editor | Explorer, Search (find in project, Ctrl+Shift+F) and Overview as sidebar tabs; Bookmarks, Output, Terminal |
+| **Analysis** | Analysis | Function, Decompiler, Editor, References, Bookmarks |
 | **Debug** | Debugger | Devices, Editor, Logcat, Terminal |
 | **Network** | Traffic | Logcat, Terminal |
 | **Scripts** | Script | Output, Terminal |

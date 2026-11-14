@@ -276,9 +276,12 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
     Annotations& notes = workspace_.annotations();
     std::unordered_map<uint64_t, const Annotation*> commentAt, bookmarkAt;
     for (const Annotation& a : notes.all())
-        if (a.target == Annotation::Target::Native && a.group == libsGroup_ && a.path == nc.elf().name())
+        if (a.target == Annotation::Target::Native && !a.variableNote() && a.group == libsGroup_ &&
+            a.path == nc.elf().name())
             (a.kind == Annotation::Kind::Comment ? commentAt : bookmarkAt)[a.addr] = &a;
     if (ImGui::IsWindowFocused()) nativeShortcuts(nc, listing_);
+    // Following a branch replaces listing_: it waits until the rows are drawn.
+    uint64_t follow = UINT64_MAX;
     ImGuiListClipper clip;
     clip.Begin(static_cast<int>(listing_.size()), lh);
     while (clip.Step())
@@ -289,8 +292,8 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
             if (ImGui::Selectable("##row", l.insn.addr == focusAddr_, ImGuiSelectableFlags_AllowDoubleClick,
                                   ImVec2(0, ImGui::GetTextLineHeight()))) {
                 focusAddr_ = l.insn.addr;
-                const bool follow = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-                if (follow && l.insn.hasTarget && l.insn.flow != arm64::Flow::Normal) gotoNative(l.insn.target);
+                const bool dbl = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+                if (dbl && l.insn.hasTarget && l.insn.flow != arm64::Flow::Normal) follow = l.insn.target;
             }
             if (ImGui::BeginPopupContextItem("##ctx")) {
                 focusAddr_ = l.insn.addr;
@@ -302,7 +305,7 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
                 if (comment && ImGui::MenuItem("Remove comment")) notes.remove(comment->id);
                 ImGui::Separator();
                 if (l.insn.hasTarget && l.insn.flow != arm64::Flow::Normal && ImGui::MenuItem("Follow target"))
-                    gotoNative(l.insn.target);
+                    follow = l.insn.target;
                 if (l.dataAddr && ImGui::MenuItem("Copy referenced address")) ImGui::SetClipboardText(hex(l.dataAddr).c_str());
                 if (ImGui::MenuItem("Open listing in editor")) openInEditor();
                 if (ImGui::MenuItem("Copy address")) ImGui::SetClipboardText(hex(l.insn.addr).c_str());
@@ -350,6 +353,7 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
     if (listing_.size() >= 50000) ImGui::TextColored(kWarn(), "(listing truncated at 50000 instructions)");
     ImGui::EndChild();
     ImGui::PopFont();
+    if (follow != UINT64_MAX) gotoNative(follow);
 }
 
 void AnalysisPanel::nativeShortcuts(const NativeCode& nc, const std::vector<NativeCode::Line>& lines) {

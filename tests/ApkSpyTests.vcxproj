@@ -93,6 +93,7 @@
     <ClCompile Include="..\src\analysis\GraphLayout.cpp" />
     <ClCompile Include="..\src\core\Annotations.cpp" />
     <ClCompile Include="..\src\analysis\NativeCode.cpp" />
+    <ClCompile Include="..\src\analysis\Decompiler.cpp" />
     <ClCompile Include="..\src\mcp\Json.cpp" />
     <ClCompile Include="..\src\mcp\McpHost.cpp" />
     <ClCompile Include="..\src\mcp\McpServer.cpp" />

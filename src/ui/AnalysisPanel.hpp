@@ -9,6 +9,7 @@
 #include <vector>
 #include "analysis/ApkAnalysis.hpp"
 #include "analysis/ApkDiff.hpp"
+#include "analysis/Decompiler.hpp"
 #include "analysis/ElfFile.hpp"
 #include "analysis/NativeCode.hpp"
 #include "core/ResourceTable.hpp"
@@ -23,7 +24,9 @@
 //    control-flow graph or a call graph.
 //  - References: what calls the selection and what it calls, or the
 //    results of the last query (string uses, type uses, resource ids).
-// Selecting a class or method also opens its decompiled Java in the Editor.
+//  - Decompiler: the selection as Java-like (Dalvik) or C-like (AArch64)
+//    code, synced with the listing in both directions (as in Cutter).
+// Selecting a class or method also opens jadx's Java in the Editor.
 //
 // The panel never keeps an analysis alive: it holds a weak_ptr and drops its
 // caches when the analysis is replaced or the APK is removed.
@@ -33,9 +36,10 @@ public:
         : Panel(workspace, "Analysis"), showPanel_(std::move(showPanel)) {}
     ~AnalysisPanel() override;
 
-    // Contents of the Function and References panels (state lives here).
+    // Contents of the Function, References and Decompiler panels (state lives here).
     void drawFunctionView();
     void drawReferences();
+    void drawDecompiler();
 
 protected:
     void drawContents() override;
@@ -83,7 +87,7 @@ private:
     void showCallees(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m);
     void showGraph(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m);
     void showCallGraph(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m);
-    void resetCaches();
+    void resetCaches(bool keepNative = false);
 
     std::function<void(const std::string&)> showPanel_;
     int apkIdx_ = 0;
@@ -205,6 +209,33 @@ private:
     int nativeGraphMode_ = 0;
     uint64_t nativeGraphNotes_ = 0;
 
+    // Decompiler (see AnalysisDecompiler.cpp)
+    void decompilerFollowCall(const decompiler::Line& line);
+    void decompilerRenamePopup();
+    decompiler::Output decompRaw_;        // as decompiled
+    decompiler::Output decomp_;           // with the user's variable names
+    uint64_t decompNotesVersion_ = 0;     // annotations version the names come from
+    Annotation decompLoc_;                // where its renames are stored (Method / Native target)
+    std::string decompToken_;             // highlighted identifier, IDA style
+    size_t decompCol_ = 0;                // keyboard cursor: byte column in the current line
+    bool decompRenameOpen_ = false;
+    bool decompEditType_ = false;         // the popup sets the type (Y) instead of the name (N)
+    bool decompEditSymbol_ = false;       // the popup renames a symbol (function, field, class...) everywhere
+    Annotation decompSymLoc_;             // where symbol renames are stored: the whole APK / native library
+    std::string decompRenameKey_;         // variable being renamed / retyped (v3, x19)
+    char decompRenameBuf_[96] = {};
+    std::string decompRenameError_;
+    std::string decompStatus_;            // hint in the bottom bar (N / Y without a variable under the cursor)
+    int decompKind_ = 0;                  // 0 nothing, 1 Dalvik method, 2 native function
+    uint64_t decompKey_ = UINT64_MAX;     // dex << 32 | method id, or the function address
+    const void* decompOwner_ = nullptr;   // analysis / native code it came from (identity only)
+    std::string decompTitle_;
+    bool decompAuto_ = true;              // follow the selection
+    bool decompRefresh_ = false;
+    uint64_t decompSynced_ = UINT64_MAX;  // last listing address followed
+    bool decompScroll_ = false;
+    int decompLine_ = -1;
+
     // Resources
     int resType_ = 0;  // index into resTypes_ (0 = all)
     char resFilter_[128] = {};
@@ -229,6 +260,18 @@ public:
 
 protected:
     void drawContents() override { analysis_.drawFunctionView(); }
+
+private:
+    AnalysisPanel& analysis_;
+};
+
+// The selection as decompiled code (Cutter's Decompiler pane).
+class DecompilerPanel : public Panel {
+public:
+    DecompilerPanel(Workspace& workspace, AnalysisPanel& analysis) : Panel(workspace, "Decompiler"), analysis_(analysis) {}
+
+protected:
+    void drawContents() override { analysis_.drawDecompiler(); }
 
 private:
     AnalysisPanel& analysis_;

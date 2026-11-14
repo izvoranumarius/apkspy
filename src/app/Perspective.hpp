@@ -32,7 +32,7 @@ struct Perspective {
         static const std::pair<const char*, const char*> kIcons[] = {
             {"Explorer", icons::FOLDER}, {"Overview", icons::INFO}, {"Editor", icons::FILE},
             {"Search", icons::SEARCH}, {"Bookmarks", icons::BOOKMARK}, {"Output", icons::PAGE},
-            {"Analysis", icons::ANALYSIS}, {"Function", icons::CODE}, {"References", icons::LINK},
+            {"Analysis", icons::ANALYSIS}, {"Function", icons::CODE}, {"References", icons::LINK}, {"Decompiler", icons::FILE},
             {"Devices", icons::PHONE}, {"Debugger", icons::BUG}, {"Logcat", icons::LIST},
             {"Traffic", icons::GLOBE}, {"Script", icons::EDIT}, {"Terminal", icons::TERMINAL},
         };

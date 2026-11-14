@@ -1393,6 +1393,79 @@ static void testMcpToolsEndToEnd() {
     CHECK(m0.get("smali").asString().find("invoke-static") != std::string::npos && m0.get("callees").size() == 1 &&
               m0.get("constant_arguments").size() == 1,
           "get_method");
+    Json dec = callTool(server, d, &ws, "decompile_method", Json::obj({{"method", "LFoo;->bar()V"}, {"with_pcs", true}}));
+    const Json& dm = structured(dec).get("methods")[0];
+    const std::string decCode = dm.get("code").asString();
+    CHECK(decCode.find("public static void bar() {") != std::string::npos &&
+              decCode.find("v0 = \"https://api.example.com/v1/login\";") != std::string::npos &&
+              decCode.find("baz(v0);") != std::string::npos &&
+              decCode.find("return;") == std::string::npos &&  // a void method's final return is implied
+              decCode.find("if (") == std::string::npos,       // the branch only guards dead code
+          ("decompile_method: " + decCode).c_str());
+    bool callAtPc2 = false;
+    for (size_t i = 0; i < dm.get("lines").size(); ++i) {
+        const Json& l = dm.get("lines")[i];
+        if (l.get("text").asString().find("baz(v0)") != std::string::npos)
+            callAtPc2 = l.get("pcs").size() == 1 && l.get("pcs")[0].asInt() == 2;
+    }
+    CHECK(callAtPc2, "decompile_method maps lines to pcs");
+    // Any other name: renamed in every function of the APK.
+    Json sym = callTool(server, d, &ws, "rename_symbol", Json::obj({{"symbol", "baz"}, {"name", "sendLogin"}}));
+    CHECK(!isError(sym) && structured(sym).get("scope").asString() == "apk", ("rename_symbol: " + text(sym)).c_str());
+    CHECK(structured(callTool(server, d, &ws, "decompile_method", Json::obj({{"method", "LFoo;->bar()V"}}))).get("methods")[0]
+                  .get("code").asString().find("sendLogin(v0);") != std::string::npos,
+          "a renamed method shows in its callers");
+    CHECK(isError(callTool(server, d, &ws, "rename_symbol", Json::obj({{"symbol", "int"}, {"name", "x"}}))), "keywords are not renamed");
+    CHECK(isError(callTool(server, d, &ws, "rename_symbol", Json::obj({{"symbol", "v0"}, {"name", "x"}}))),
+          "variables go through rename_variable");
+    CHECK(structured(callTool(server, d, &ws, "list_annotations", Json::obj({{"kind", "symbol"}}))).get("annotations").size() == 1,
+          "list_annotations lists symbol renames");
+    CHECK(structured(callTool(server, d, &ws, "rename_symbol", Json::obj({{"symbol", "baz"}, {"name", ""}}))).get("restored").asBool(),
+          "an empty name restores the symbol");
+    // Declarations with inferred types, as in IDA's pseudocode.
+    CHECK(decCode.find("public static void bar() {\n    String v0;\n\n") != std::string::npos &&
+              dm.get("variables").size() == 1 && dm.get("variables")[0].get("type").asString() == "String" &&
+              !dm.get("variables")[0].get("parameter").asBool(),
+          ("locals declared with their type: " + decCode).c_str());
+    Json retype = callTool(server, d, &ws, "rename_variable",
+                           Json::obj({{"method", "LFoo;->bar()V"}, {"variable", "v0"}, {"type", "CharSequence"}}));
+    CHECK(!isError(retype) && structured(retype).get("current_type").asString() == "CharSequence", ("set type: " + text(retype)).c_str());
+    CHECK(structured(callTool(server, d, &ws, "decompile_method", Json::obj({{"method", "LFoo;->bar()V"}}))).get("methods")[0]
+                  .get("code").asString().find("    CharSequence v0;") != std::string::npos,
+          "the declaration shows the user's type");
+    CHECK(isError(callTool(server, d, &ws, "rename_variable", Json::obj({{"method", "LFoo;->bar()V"}, {"variable", "v0"}, {"type", "int;x"}}))),
+          "a malformed type is refused");
+    CHECK(structured(callTool(server, d, &ws, "rename_variable", Json::obj({{"method", "LFoo;->bar()V"}, {"variable", "v0"}, {"type", ""}})))
+                  .get("type_restored").asBool() &&
+              structured(callTool(server, d, &ws, "list_annotations", Json::obj({{"kind", "type"}}))).get("annotations").size() == 0,
+          "an empty type restores the inferred one");
+    // Variable renames (IDA's N), shared by the Decompiler panel and MCP.
+    Json ren = callTool(server, d, &ws, "rename_variable", Json::obj({{"method", "LFoo;->bar()V"}, {"variable", "v0"}, {"name", "url"}}));
+    CHECK(!isError(ren) && structured(ren).get("name").asString() == "url", ("rename_variable: " + text(ren)).c_str());
+    const Json renamedBar = structured(callTool(server, d, &ws, "decompile_method", Json::obj({{"method", "LFoo;->bar()V"}}))).get("methods")[0];
+    const std::string renamedCode = renamedBar.get("code").asString();
+    CHECK(renamedCode.find("url = \"https://api.example.com/v1/login\";") != std::string::npos &&
+              renamedCode.find("baz(url);") != std::string::npos && renamedCode.find("v0") == std::string::npos &&
+              renamedBar.get("renamed").get("v0").asString() == "url",
+          ("decompile_method shows the new name: " + renamedCode).c_str());
+    CHECK(isError(callTool(server, d, &ws, "rename_variable", Json::obj({{"method", "LFoo;->bar()V"}, {"variable", "v0"}, {"name", "baz"}}))),
+          "rename to a name already used is refused");
+    CHECK(isError(callTool(server, d, &ws, "rename_variable", Json::obj({{"method", "LFoo;->bar()V"}, {"variable", "v0"}, {"name", "int"}}))),
+          "rename to a keyword is refused");
+    CHECK(isError(callTool(server, d, &ws, "rename_variable", Json::obj({{"method", "LFoo;->bar()V"}, {"variable", "v9"}, {"name", "x"}}))),
+          "rename of a variable the method does not have is refused");
+    Json renList = callTool(server, d, &ws, "list_annotations", Json::obj({{"kind", "rename"}}));
+    CHECK(structured(renList).get("annotations").size() == 1 &&
+              structured(renList).get("annotations")[0].get("variable").asString() == "v0" &&
+              structured(renList).get("annotations")[0].get("method").asString() == "LFoo;->bar()V",
+          "list_annotations lists renames");
+    CHECK(structured(callTool(server, d, &ws, "list_annotations", Json::obj({{"kind", "comment"}}))).get("annotations").size() == 0,
+          "renames are not comments");
+    Json restore = callTool(server, d, &ws, "rename_variable", Json::obj({{"method", "LFoo;->bar()V"}, {"variable", "v0"}, {"name", ""}}));
+    CHECK(structured(restore).get("restored").asBool() &&
+              structured(callTool(server, d, &ws, "decompile_method", Json::obj({{"method", "LFoo;->bar()V"}}))).get("methods")[0]
+                      .get("code").asString().find("baz(v0);") != std::string::npos,
+          "an empty name restores the original");
     Json xr = callTool(server, d, &ws, "xrefs", Json::obj({{"kind", "method"}, {"target", "LFoo;->baz(Ljava/lang/String;)V"}}));
     CHECK(structured(xr).get("count").asInt() == 1 &&
               structured(xr).get("xrefs")[0].get("from").asString() == "LFoo;->bar()V",
@@ -1429,6 +1502,51 @@ static void testMcpToolsEndToEnd() {
     const std::string listing = structured(dis).get("listing").asString();
     CHECK(listing.find("bl       0x120 <sub_120>") != std::string::npos && listing.find("\"hello native\"") != std::string::npos,
           "disassemble_native names calls and strings");
+    Json ndec = callTool(server, d, &ws, "decompile_native", Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"function", "f_entry"}}));
+    const std::string ncode = structured(ndec).get("code").asString();
+    CHECK(ncode.find("int64_t f_entry(int64_t x0) {") != std::string::npos && ncode.find("    sub_120(x0);") != std::string::npos &&
+              ncode.find("    return \"hello native\";") != std::string::npos && ncode.find("x29") == std::string::npos,
+          ("decompile_native: " + ncode).c_str());
+    Json nleaf = callTool(server, d, &ws, "decompile_native", Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"function", "sub_120"}}));
+    CHECK(structured(nleaf).get("code").asString().find("return 1;") != std::string::npos,
+          ("decompile_native leaf: " + structured(nleaf).get("code").asString()).c_str());
+    Json nren = callTool(server, d, &ws, "rename_variable",
+                         Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"function", "f_entry"}, {"variable", "w0"}, {"name", "ctx"}}));
+    CHECK(!isError(nren) && structured(nren).get("variable").asString() == "x0", ("rename_variable native: " + text(nren)).c_str());
+    const std::string nrenamed = structured(callTool(server, d, &ws, "decompile_native",
+                                                     Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"function", "f_entry"}})))
+                                     .get("code").asString();
+    CHECK(nrenamed.find("int64_t f_entry(int64_t ctx) {") != std::string::npos && nrenamed.find("sub_120(ctx);") != std::string::npos,
+          ("w0 / x0 renamed together: " + nrenamed).c_str());
+    callTool(server, d, &ws, "rename_variable",
+             Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"function", "0x100"}, {"variable", "x0"}, {"type", "char *"}}));
+    const std::string ntyped = structured(callTool(server, d, &ws, "decompile_native",
+                                                   Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"function", "f_entry"}})))
+                                   .get("code").asString();
+    CHECK(ntyped.find("int64_t f_entry(char *ctx) {") != std::string::npos, ("parameter type: " + ntyped).c_str());
+    callTool(server, d, &ws, "rename_variable",
+             Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"function", "0x100"}, {"variable", "x0"}, {"type", ""}}));
+    callTool(server, d, &ws, "rename_symbol", Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"symbol", "sub_120"}, {"name", "helper"}}));
+    const std::string nsym = structured(callTool(server, d, &ws, "decompile_native",
+                                                 Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"function", "f_entry"}})))
+                                 .get("code").asString();
+    const std::string nhelper = structured(callTool(server, d, &ws, "decompile_native",
+                                                    Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"function", "sub_120"}})))
+                                    .get("code").asString();
+    CHECK(nsym.find("helper(ctx);") != std::string::npos && nhelper.find("int64_t helper() {") != std::string::npos,
+          ("a function renamed in its callers and its own signature: " + nsym + nhelper).c_str());
+    callTool(server, d, &ws, "rename_symbol", Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"symbol", "sub_120"}, {"name", ""}}));
+    CHECK(structured(callTool(server, d, &ws, "decompile_native", Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"function", "sub_120"}})))
+                  .get("code").asString().find("ctx") == std::string::npos,
+          "renames belong to one function");
+    CHECK(isError(callTool(server, d, &ws, "rename_variable",
+                           Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"function", "f_entry"}, {"variable", "foo"}, {"name", "a"}}))),
+          "only registers / stack slots are variables");
+    CHECK(structured(callTool(server, d, &ws, "rename_variable",
+                              Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"function", "0x100"}, {"variable", "x0"}, {"name", ""}})))
+                  .get("restored").asBool() &&
+              ws.annotations().all().empty(),
+          "native rename restored by address");
     Json nx = callTool(server, d, &ws, "native_xrefs", Json::obj({{"path", "lib/arm64-v8a/libnat.so"}, {"target", "sub_120"}}));
     CHECK(structured(nx).get("references").size() == 1 &&
               structured(nx).get("references")[0].get("from_function").asString() == "f_entry+0x4",

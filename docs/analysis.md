@@ -5,20 +5,22 @@ thread with progress and Cancel. The analysis needs no jadx and works on
 obfuscated or partially broken APKs (every offset is bounds-checked; malformed
 structures are skipped).
 
-The workspace is laid out like JADX, Ghidra and Binary Ninja:
+The workspace is laid out like Cutter (and JADX, Ghidra, Binary Ninja):
 
 | Panel | Where | Shows |
 | --- | --- | --- |
 | **Analysis** | left | the navigator: Classes, Strings, Native, Resources, Compare |
-| **Editor** / **Function** | center, as tabs | the decompiled Java; the selected method or native function |
-| **References** | bottom | what calls the selection and what it calls, or the last query's results |
+| **Function** | center | the selected method or native function: listing, control-flow graph or call graph |
+| **References** | under Function | what calls the selection and what it calls, or the last query's results |
+| **Decompiler** / **Editor** | right, as tabs | the selection decompiled (see [Decompiler](#decompiler)); jadx's Java |
 
 - **Classes** - a package tree (single-child packages are joined, as in
   `com.google.android`), with classes and their methods in readable form
   (`onCreate(Bundle) : void`). Type to filter by name or package. Clicking a
   class opens its Java in a preview tab, and clicking a method opens the Java
-  at that method; without jadx output the smali is shown instead. Double-click
-  keeps the tab. A method also fills **Function** (its smali, control-flow graph
+  at that method (in the Editor tab behind the Decompiler); without jadx output
+  the smali is shown instead. Double-click keeps the tab. A method also fills
+  **Decompiler** and **Function** (its smali, control-flow graph
   or call graph; `Space` switches between listing and graph) and
   **References**. Click a caller or callee there to go to it; callees outside
   the APK are dimmed. Right-click a class for its smali, type references and
@@ -56,6 +58,64 @@ The workspace is laid out like JADX, Ghidra and Binary Ninja:
 
 The analysis of an APK is freed when it is removed from the project or the
 project is closed.
+
+## Decompiler
+
+The **Decompiler** panel works like Cutter's decompiler pane. It shows what
+**Function** shows, decompiled by ApkSpy's built-in engines. No jadx or Ghidra
+is needed.
+
+- **Dalvik methods** come out as Java-like code: calls, field and array
+  accesses, `new T(args)`, casts, string / class constants, `null` / `true` /
+  `false` where the uses say so, and try ranges with their catch handlers.
+- **arm64 functions** come out as C-like code: named calls with their argument
+  registers, indirect and tail calls, `adrp` pairs resolved to strings and
+  symbols, typed loads and stores, stack slots as `sp_<off>` and comparisons
+  rebuilt from `cmp` / `tst` / `ccmp` + `b.cond`, `csel`, `cbz` and `tbz`. The
+  frame setup (saving and restoring registers, adjusting `sp`) is hidden.
+
+Both engines fold single-use temporaries into expressions and drop dead
+assignments. The control flow is structured into `if` / `else` (with `&&` /
+`||` chains), `while` and `switch`. Where the graph has no structured form,
+the output uses labelled `goto`s. Registers keep their names (`v3`, `arg0`,
+`x19`, `w8`), and no types are inferred beyond what the instructions say.
+
+Lines and instructions stay linked in both directions. The line holding the
+listing's current instruction is highlighted. Clicking a line moves the
+listing (or graph) to that line's first instruction, and the tooltip lists
+the line's instructions. Double-clicking a line with a call goes to the
+called method or function. Right-click copies the line or the whole function.
+As in IDA's pseudocode view, every variable is declared with a type. The
+parameters are typed in the signature, and the locals are declared at the top
+of the body. Types are inferred from the code: field and return types, `new`,
+casts and constants for Dalvik; register width, load size and string or
+symbol addresses for native code (`int32_t`, `uint8_t`, `char *`). When a
+register is reused for values of different types, it is declared `var` (or
+`Object`) with a comment listing what it holds.
+
+The panel has a text cursor, like IDA's:
+
+| Key | Action |
+| --- | --- |
+| click, arrows, Home / End, Page Up / Down | move the cursor; the identifier under it is highlighted everywhere, and the listing follows the line |
+| **N** | rename the variable under the cursor |
+| **Y** | set the type of the variable under the cursor |
+| Enter, double-click | follow the call on the line (double-clicking a variable renames it) |
+| Esc | clear the highlight |
+
+The same actions are in the right-click menu, which also has **Reset name**
+and **Reset type**. An empty name or type restores the original. Names and
+types belong to the method or native function and are saved with the project.
+They apply to the registers and stack slots the output names (`v3`, `arg0`,
+`x19`, `d0`, `sp_10`); `w8` and `x8` are the same variable. Names that are
+keywords or already used in the function are refused.
+
+**Auto Refresh** (on by default) follows the selection. Turn it off to keep
+a function on screen while you browse, then press **Refresh** to load the
+current selection. The same output, with the same names, is available over
+MCP as `decompile_method` and `decompile_native`, which also list the
+variables with their types. MCP clients rename and retype with
+`rename_variable` (`name` and/or `type`), and the panel updates live.
 
 ## Graphs
 

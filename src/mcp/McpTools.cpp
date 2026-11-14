@@ -4,10 +4,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <map>
 #include <set>
 #include <thread>
 #include "analysis/ApkDiff.hpp"
 #include "analysis/Dalvik.hpp"
+#include "analysis/Decompiler.hpp"
 #include "core/ApkInfo.hpp"
 #include "core/AxmlDecoder.hpp"
 #include "core/Paths.hpp"
@@ -235,6 +237,23 @@ Json xrefJson(const ApkAnalysis& a, const ApkAnalysis::XrefHit& h) {
 }
 
 // Resolves "method" args: "Lcom/a/B;->name(I)V", "com.a.B.name" or class+name.
+using NoteList = std::vector<std::pair<std::string, std::string>>;
+
+// The function's variables as decompiled: original name, shown name, type, parameter or local.
+Json variablesJson(const decompiler::Output& out, const NoteList& retypes) {
+    Json list = Json::array();
+    for (const decompiler::Var& v : out.vars) {
+        std::string shown = v.key;
+        for (const auto& [s, k] : out.renamed)
+            if (k == v.key) shown = s;
+        Json j = Json::obj({{"variable", v.key}, {"name", json::sanitizeUtf8(shown)},
+                            {"type", json::sanitizeUtf8(decompiler::typeOf(out, v.key, retypes))}, {"parameter", v.param}});
+        if (!v.note.empty()) j.set("note", v.note);
+        list.push(std::move(j));
+    }
+    return list;
+}
+
 bool resolveMethodArg(const ApkAnalysis& a, const Json& args, std::vector<ApkAnalysis::MethodDef>& out,
                       std::string& cls, std::string& name, std::string& proto, std::string& error) {
     const std::string ref = argStr(args, "method");
@@ -938,6 +957,68 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                      return McpToolResult::ok(Json::obj({{"methods", std::move(list)}}));
                  });
 
+    server.addTool({"decompile_method", "Decompile a method (built-in)",
+                    "Java-like pseudo-code of a method from ApkSpy's built-in decompiler (works without jadx; the same "
+                    "code as the Decompiler panel, with the user's variable names - see rename_variable). Structured "
+                    "into if / while / switch, temporaries folded. With with_pcs, each line also lists the bytecode "
+                    "pcs it came from.",
+                    schema::object({{"apk", apkArg()}, {"method", str("Lcom/a/B;->name(I)V or com.a.B.name")},
+                                    {"with_pcs", boolean("Return the lines with their bytecode pcs (default false)")}},
+                                   {"method"}),
+                    true, false, [&ws](const Json& args, McpToolContext&) -> McpToolOutcome {
+                        std::string err;
+                        Root* apk = resolveApk(ws, args, err);
+                        if (!apk) return McpToolResult::error(err);
+                        auto analysis = requireAnalysis(ws, *apk, err);
+                        if (!analysis) return McpToolResult::error(err);
+                        // Annotations belong to the owner thread: copy this APK's method renames now.
+                        std::map<std::string, std::vector<std::pair<std::string, std::string>>> renames, retypes;
+                        NoteList symbols;  // APK-wide names
+                        for (const Annotation& a : ws.annotations().all()) {
+                            if (!a.variableNote() || a.target != Annotation::Target::Method || a.group != apk->title) continue;
+                            if (a.kind == Annotation::Kind::Symbol) symbols.emplace_back(a.context, a.text);
+                            else (a.kind == Annotation::Kind::Rename ? renames : retypes)[a.path].emplace_back(a.context, a.text);
+                        }
+                        return McpToolOutcome::later([analysis, args, renames, retypes, symbols](McpToolContext&) {
+                            const ApkAnalysis& a = *analysis;
+                            std::vector<ApkAnalysis::MethodDef> defs;
+                            std::string cls, name, proto, e;
+                            if (!resolveMethodArg(a, args, defs, cls, name, proto, e)) return McpToolResult::error(e);
+                            const bool withPcs = argBool(args, "with_pcs", false);
+                            Json list = Json::array();
+                            for (const auto& m : defs) {
+                                decompiler::Output out = decompiler::decompileMethod(a, m);
+                                const std::string sig = a.methodSignature(m);
+                                const auto it = renames.find(sig);
+                                const auto ty = retypes.find(sig);
+                                const NoteList noTypes;
+                                const NoteList& types = ty != retypes.end() ? ty->second : noTypes;
+                                decompiler::applyUserNames(out, it != renames.end() ? it->second : noTypes, types, false, symbols);
+                                Json j = methodJson(a, m);
+                                j.set("code", json::sanitizeUtf8(decompiler::toText(out)));
+                                if (!out.error.empty()) j.set("error", out.error);
+                                if (!out.renamed.empty()) {
+                                    Json names = Json::object();
+                                    for (const auto& [shown, key] : out.renamed) names.set(key, shown);
+                                    j.set("renamed", std::move(names));
+                                }
+                                j.set("variables", variablesJson(out, types));
+                                if (withPcs) {
+                                    Json lines = Json::array();
+                                    for (const auto& l : out.lines) {
+                                        Json pcs = Json::array();
+                                        for (uint64_t pc : l.addrs) pcs.push(static_cast<unsigned long long>(pc));
+                                        lines.push(Json::obj({{"text", json::sanitizeUtf8(std::string(static_cast<size_t>(l.indent) * 4, ' ') + l.text)},
+                                                              {"pcs", std::move(pcs)}}));
+                                    }
+                                    j.set("lines", std::move(lines));
+                                }
+                                list.push(std::move(j));
+                            }
+                            return McpToolResult::ok(Json::obj({{"methods", std::move(list)}}));
+                        });
+                    }});
+
     analysisTool("xrefs", "Cross-references",
                  "Who calls a method, reads/writes a field, uses a string constant or references a type.",
                  schema::object({{"apk", apkArg()},
@@ -1325,6 +1406,58 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                    return McpToolResult::ok(std::move(head));
                });
 
+    server.addTool({"decompile_native", "Decompile native code (built-in)",
+                    "C-like pseudo-code of an arm64 function from ApkSpy's built-in decompiler (the Decompiler panel's "
+                    "output, with the user's variable names - see rename_variable): calls named, adrp pairs resolved "
+                    "to strings / symbols, frame setup hidden, control flow structured into if / while / switch.",
+                    schema::object({{"apk", apkArg()},
+                                    {"path", str("Library entry, e.g. lib/arm64-v8a/libfoo.so (see list_native_libs)")},
+                                    {"function", str("Function name or 0x address inside it")}},
+                                   {"path", "function"}),
+                    true, false, [&ws, hexStr](const Json& args, McpToolContext&) -> McpToolOutcome {
+                        std::string err;
+                        Root* apk = resolveApk(ws, args, err);
+                        if (!apk) return McpToolResult::error(err);
+                        const TreeNode* node = findNode(*apk, argStr(args, "path"));
+                        if (!node || node->isFolder()) return McpToolResult::error("entry not found");
+                        std::map<uint64_t, std::vector<std::pair<std::string, std::string>>> renames, retypes;
+                        NoteList symbols;  // library-wide names
+                        for (const Annotation& a : ws.annotations().all()) {
+                            if (!a.variableNote() || a.target != Annotation::Target::Native || a.group != apk->title || a.path != node->path())
+                                continue;
+                            if (a.kind == Annotation::Kind::Symbol) symbols.emplace_back(a.context, a.text);
+                            else (a.kind == Annotation::Kind::Rename ? renames : retypes)[a.addr].emplace_back(a.context, a.text);
+                        }
+                        AnalysisService* service = &ws.analysis();
+                        const std::string apkPath = apk->apkPath, entry = node->path();
+                        return McpToolOutcome::later([service, apkPath, entry, args, renames, retypes, symbols, hexStr](McpToolContext& ctx) {
+                            std::string e;
+                            if (ctx.progress) ctx.progress(0, 1, "disassembling " + entry);
+                            auto code = service->loadNative(apkPath, entry, ctx.cancel, e);
+                            if (!code) return McpToolResult::error(e);
+                            const std::string fn = argStr(args, "function");
+                            const NativeCode::Function* f = code->findFunction(fn);
+                            if (!f) return McpToolResult::error("no function matches '" + fn + "' (see native_functions)");
+                            decompiler::Output out = decompiler::decompileNative(*code, *f);
+                            const auto it = renames.find(f->addr);
+                            const auto ty = retypes.find(f->addr);
+                            const NoteList noTypes;
+                            const NoteList& types = ty != retypes.end() ? ty->second : noTypes;
+                            decompiler::applyUserNames(out, it != renames.end() ? it->second : noTypes, types, true, symbols);
+                            Json j = Json::obj({{"function", json::sanitizeUtf8(NativeCode::displayName(*f))},
+                                                {"address", hexStr(f->addr)},
+                                                {"code", json::sanitizeUtf8(decompiler::toText(out))}});
+                            if (!out.error.empty()) j.set("error", out.error);
+                            if (!out.renamed.empty()) {
+                                Json names = Json::object();
+                                for (const auto& [shown, key] : out.renamed) names.set(key, shown);
+                                j.set("renamed", std::move(names));
+                            }
+                            j.set("variables", variablesJson(out, types));
+                            return McpToolResult::ok(std::move(j));
+                        });
+                    }});
+
     nativeTool("native_xrefs", "Native cross-references",
                "References in an arm64 library: who calls / jumps to / takes the address of a function or "
                "address (direction 'to'), or what a function calls and references (direction 'from').",
@@ -1414,11 +1547,35 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                });
 
     // ----------------------------------------------------------------- annotations
-    const auto annotationJson = [&ws, hexStr](const Annotation& a) {
+    const auto annotationKindName = [](Annotation::Kind k) {
+        return k == Annotation::Kind::Comment  ? "comment"
+               : k == Annotation::Kind::Rename ? "rename"
+               : k == Annotation::Kind::Retype ? "type"
+               : k == Annotation::Kind::Symbol ? "symbol"
+                                               : "bookmark";
+    };
+    const auto annotationJson = [&ws, hexStr, annotationKindName](const Annotation& a) {
         Json j = Json::obj({{"id", a.id},
-                            {"kind", a.kind == Annotation::Kind::Comment ? "comment" : "bookmark"},
+                            {"kind", annotationKindName(a.kind)},
                             {"apk", a.group},
                             {"text", json::sanitizeUtf8(a.text)}});
+        if (a.kind == Annotation::Kind::Symbol) {
+            j.set("symbol", a.context);
+            j.set("name", json::sanitizeUtf8(a.text));
+            if (a.target == Annotation::Target::Native) j.set("path", a.path);
+            return j;
+        }
+        if (a.variableNote()) {
+            j.set("variable", a.context);
+            j.set(a.kind == Annotation::Kind::Rename ? "name" : "type", json::sanitizeUtf8(a.text));
+            if (a.target == Annotation::Target::Method) {
+                j.set("method", a.path);
+            } else {
+                j.set("path", a.path);
+                j.set("function", hexStr(a.addr));
+            }
+            return j;
+        }
         if (a.target == Annotation::Target::Native) {
             j.set("path", a.path);
             j.set("address", hexStr(a.addr));
@@ -1432,21 +1589,21 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
         return j;
     };
 
-    server.addTool({"list_annotations", "List bookmarks and comments",
-                    "The user's bookmarks and comments (on file lines and native addresses), which are also a good "
-                    "summary of what is already known about the APK.",
+    server.addTool({"list_annotations", "List bookmarks, comments and renames",
+                    "The user's bookmarks and comments (on file lines and native addresses) and decompiler variable "
+                    "renames, which are also a good summary of what is already known about the APK.",
                     schema::object({{"apk", str("Only this APK group")},
-                                    {"kind", strEnum("Only this kind", {"bookmark", "comment"})},
+                                    {"kind", strEnum("Only this kind", {"bookmark", "comment", "rename", "type", "symbol"})},
                                     {"filter", str("Only annotations whose text, context or path contains this")},
                                     {"limit", integer("Max results (default 500)", 1, 100000)}}),
-                    true, false, [&ws, annotationJson](const Json& args, McpToolContext&) -> McpToolOutcome {
+                    true, false, [&ws, annotationJson, annotationKindName](const Json& args, McpToolContext&) -> McpToolOutcome {
                         const std::string group = argStr(args, "apk"), kind = argStr(args, "kind"), filter = argStr(args, "filter");
                         const size_t limit = static_cast<size_t>(argInt(args, "limit", 500));
                         Json list = Json::array();
                         for (const Annotation& a : ws.annotations().all()) {
                             if (list.size() >= limit) break;
                             if (!group.empty() && a.group != group) continue;
-                            if (!kind.empty() && (kind == "comment") != (a.kind == Annotation::Kind::Comment)) continue;
+                            if (!kind.empty() && kind != annotationKindName(a.kind)) continue;
                             if (!filter.empty() && tex::ciFind(a.text, filter) == std::string_view::npos &&
                                 tex::ciFind(a.context, filter) == std::string_view::npos &&
                                 tex::ciFind(a.path, filter) == std::string_view::npos)
@@ -1495,7 +1652,178 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                         return McpToolResult::ok(annotationJson(*ws.annotations().find(id)));
                     }});
 
-    server.addTool({"remove_annotation", "Remove bookmark or comment", "Deletes an annotation by the id from list_annotations.",
+    server.addTool({"rename_variable", "Rename / retype a decompiler variable",
+                    "Gives a variable of the decompiled code a name (IDA's N) and/or a type (IDA's Y): a register or "
+                    "stack slot (v3, arg0 in a Dalvik method; x19 / w19, d0, sp_10 in an arm64 function - w and x are "
+                    "the same variable). Shown by the Decompiler panel and decompile_method / decompile_native (which "
+                    "also list the variables with their types), saved with the project. An empty name or type restores "
+                    "the original.",
+                    schema::object({{"apk", apkArg()},
+                                    {"method", str("Dalvik method, Lcom/a/B;->name(I)V or com.a.B.name")},
+                                    {"path", str("Native: library entry, e.g. lib/arm64-v8a/libfoo.so")},
+                                    {"function", str("Native: function name or 0x address")},
+                                    {"variable", str("The variable's original name, e.g. v3 or x19")},
+                                    {"name", str("New name (empty: restore the original)")},
+                                    {"type", str("New type, e.g. String, int, uint8_t * (empty: restore the inferred one)")}},
+                                   {"variable"}),
+                    false, false, [&ws, parseAddr, hexStr](const Json& args, McpToolContext&) -> McpToolOutcome {
+                        std::string err;
+                        Root* apk = resolveApk(ws, args, err);
+                        if (!apk) return McpToolResult::error(err);
+                        const bool native = !argStr(args, "path").empty();
+                        if (native == !argStr(args, "method").empty())
+                            return McpToolResult::error("give either method (Dalvik) or path + function (native)");
+                        const bool setName = args.has("name"), setType = args.has("type");
+                        if (!setName && !setType) return McpToolResult::error("give a name, a type or both");
+                        const std::string variable = argStr(args, "variable");
+                        if (!decompiler::isVariable(variable, native))
+                            return McpToolResult::error("'" + variable + "' is not a variable name (" +
+                                                        (native ? "x0-x30, w0-w30, d0, s0, t1, sp_10, fp_m8" : "v0, arg0") + ")");
+                        const std::string key = decompiler::variableKey(variable, native);
+                        std::string name = argStr(args, "name"), type = argStr(args, "type");
+                        if (name == key) name.clear();
+                        Annotation r;
+                        r.kind = Annotation::Kind::Rename;
+                        r.group = apk->title;
+                        r.context = key;
+                        decompiler::Output current;  // the function as decompiled, for name clashes and inferred types
+                        bool decompiled = false;
+                        if (native) {
+                            const TreeNode* node = findNode(*apk, argStr(args, "path"));
+                            if (!node || node->isFolder()) return McpToolResult::error("entry not found");
+                            r.target = Annotation::Target::Native;
+                            r.path = node->path();
+                            const std::string fn = argStr(args, "function");
+                            if (!parseAddr(fn, r.addr)) {
+                                // A name needs the function list (cached once the library was opened; built otherwise).
+                                std::string e;
+                                auto code = ws.analysis().loadNative(apk->apkPath, r.path, nullptr, e);
+                                const NativeCode::Function* f = code ? code->findFunction(fn) : nullptr;
+                                if (!f) return McpToolResult::error("no function matches '" + fn + "'");
+                                r.addr = f->addr;
+                                current = decompiler::decompileNative(*code, *f);
+                                decompiled = true;
+                            }
+                        } else {
+                            auto analysis = requireAnalysis(ws, *apk, err);
+                            if (!analysis) return McpToolResult::error(err);
+                            std::vector<ApkAnalysis::MethodDef> defs;
+                            std::string cls, mname, proto;
+                            if (!resolveMethodArg(*analysis, args, defs, cls, mname, proto, err)) return McpToolResult::error(err);
+                            if (defs.size() != 1) return McpToolResult::error("several overloads: give the full signature with its proto");
+                            r.target = Annotation::Target::Method;
+                            r.path = analysis->methodSignature(defs.front());
+                            current = decompiler::decompileMethod(*analysis, defs.front());
+                            decompiled = true;
+                            bool present = false;
+                            for (const auto& l : current.lines) present = present || !decompiler::findIdentifier(l.text, variable).empty();
+                            if (!present) return McpToolResult::error("'" + variable + "' does not appear in the decompiled method");
+                        }
+                        decompiler::applyUserNames(current, ws.annotations().renames(r), ws.annotations().retypes(r), native);
+                        if (setName)
+                            if (std::string why = decompiler::checkNewName(current, name, key, native); !why.empty())
+                                return McpToolResult::error(why);
+                        if (setType) {
+                            if (std::string why = decompiler::checkTypeName(type); !why.empty()) return McpToolResult::error(why);
+                            for (const decompiler::Var& v : current.vars)
+                                if (v.key == key && v.type == type) type.clear();  // the inferred type: same as resetting
+                        }
+                        Json j = Json::obj({{"variable", key}, {"apk", r.group}});
+                        if (native) j.set("path", r.path), j.set("function", hexStr(r.addr));
+                        else j.set("method", r.path);
+                        // One note: an empty value removes it (back to the original name / the inferred type).
+                        const auto apply = [&](Annotation::Kind kind, const std::string& value, const char* field,
+                                               const char* restoredField, const char* idField) {
+                            Annotation slot = r;
+                            slot.kind = kind;
+                            if (value.empty()) {
+                                for (const Annotation& a : ws.annotations().all())
+                                    if (a.sameSlot(slot)) {
+                                        ws.annotations().remove(a.id);
+                                        break;
+                                    }
+                                j.set(restoredField, true);
+                                if (kind == Annotation::Kind::Rename) j.set(field, key);
+                                return true;
+                            }
+                            slot.text = value;
+                            const int id = ws.annotations().set(slot);
+                            if (!id) return false;
+                            j.set(field, value);
+                            j.set(idField, id);
+                            return true;
+                        };
+                        if (setName && !apply(Annotation::Kind::Rename, name, "name", "restored", "id"))
+                            return McpToolResult::error("rejected (annotation limit reached)");
+                        if (setType && !apply(Annotation::Kind::Retype, type, "type", "type_restored", "type_id"))
+                            return McpToolResult::error("rejected (annotation limit reached)");
+                        if (decompiled) {
+                            decompiler::Output shown = current;
+                            decompiler::applyUserNames(shown, ws.annotations().renames(r), ws.annotations().retypes(r), native);
+                            if (std::string t = decompiler::typeOf(shown, key, ws.annotations().retypes(r)); !t.empty())
+                                j.set("current_type", t);
+                        }
+                        return McpToolResult::ok(std::move(j));
+                    }});
+
+    server.addTool({"rename_symbol", "Rename a name in the decompiled code",
+                    "Renames any name of the decompiled code that is not a variable - a function (sub_2c6fe4), method, "
+                    "field, class, label or global - in every function of the APK (Dalvik) or of a native library "
+                    "(give path). Shown by the Decompiler panel and decompile_method / decompile_native, saved with "
+                    "the project. An empty name restores the original. Variables: rename_variable.",
+                    schema::object({{"apk", apkArg()},
+                                    {"path", str("Native library entry, e.g. lib/arm64-v8a/libfoo.so (omit for the APK's Java code)")},
+                                    {"symbol", str("The original name, e.g. sub_2c6fe4, mTitle, AlertController")},
+                                    {"name", str("New name (empty: restore the original)")}},
+                                   {"symbol", "name"}),
+                    false, false, [&ws](const Json& args, McpToolContext&) -> McpToolOutcome {
+                        std::string err;
+                        Root* apk = resolveApk(ws, args, err);
+                        if (!apk) return McpToolResult::error(err);
+                        const bool native = !argStr(args, "path").empty();
+                        const std::string symbol = argStr(args, "symbol");
+                        std::string name = argStr(args, "name");
+                        if (!decompiler::isRenamableSymbol(symbol, native))
+                            return McpToolResult::error("'" + symbol + "' cannot be renamed here (a keyword, a built-in type or a variable - "
+                                                        "variables: rename_variable)");
+                        if (name == symbol) name.clear();
+                        if (std::string why = decompiler::checkSymbolName(decompiler::Output{}, name, native); !why.empty())
+                            return McpToolResult::error(why);
+                        Annotation slot;
+                        slot.kind = Annotation::Kind::Symbol;
+                        slot.group = apk->title;
+                        slot.context = symbol;
+                        if (native) {
+                            const TreeNode* node = findNode(*apk, argStr(args, "path"));
+                            if (!node || node->isFolder()) return McpToolResult::error("entry not found");
+                            slot.target = Annotation::Target::Native;
+                            slot.path = node->path();
+                            slot.addr = 0;  // the whole library
+                        } else {
+                            slot.target = Annotation::Target::Method;
+                            slot.path = "*";  // the whole APK
+                        }
+                        Json j = Json::obj({{"symbol", symbol}, {"apk", slot.group}, {"scope", native ? slot.path : std::string("apk")}});
+                        if (name.empty()) {
+                            for (const Annotation& a : ws.annotations().all())
+                                if (a.sameSlot(slot)) {
+                                    ws.annotations().remove(a.id);
+                                    break;
+                                }
+                            j.set("name", symbol);
+                            j.set("restored", true);
+                            return McpToolResult::ok(std::move(j));
+                        }
+                        slot.text = name;
+                        const int id = ws.annotations().set(slot);
+                        if (!id) return McpToolResult::error("rejected (annotation limit reached)");
+                        j.set("name", name);
+                        j.set("id", id);
+                        return McpToolResult::ok(std::move(j));
+                    }});
+
+    server.addTool({"remove_annotation", "Remove annotation",
+                    "Deletes a bookmark, comment, variable name or variable type by the id from list_annotations.",
                     schema::object({{"id", integer("Annotation id", 1, 1 << 30)}}, {"id"}), false, false,
                     [&ws](const Json& args, McpToolContext&) -> McpToolOutcome {
                         if (!ws.annotations().remove(static_cast<int>(argInt(args, "id", 0)))) return McpToolResult::error("no such annotation");
@@ -1570,7 +1898,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
         auto showPanel = env.showPanel;
         server.addTool({"show_panel", "Show panel",
                         "Brings an ApkSpy panel to the front for the user, switching workspace if needed: Explorer, Overview, Editor, Analysis, "
-                        "Debugger, Devices, Output, Search, Logcat, Traffic, Bookmarks or Script.",
+                        "Function, Decompiler, References, Debugger, Devices, Output, Search, Logcat, Traffic, Bookmarks or Script.",
                         schema::object({{"panel", str("Panel title")}}, {"panel"}), false, false,
                         [showPanel](const Json& args, McpToolContext&) -> McpToolOutcome {
                             const std::string panel = argStr(args, "panel");
@@ -1585,7 +1913,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                         schema::object({{"apk", apkArg()}, {"root", strEnum("Tree", {"apk", "decompiled"})},
                                         {"path", str("File path")}, {"line", integer("1-based line", 1, 100000000)}},
                                        {"path"}),
-                        false, false, [&ws](const Json& args, McpToolContext&) -> McpToolOutcome {
+                        false, false, [&ws, showPanel = env.showPanel](const Json& args, McpToolContext&) -> McpToolOutcome {
                             std::string err;
                             Root* apk = resolveApk(ws, args, err);
                             if (!apk) return McpToolResult::error(err);
@@ -1600,6 +1928,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                                 originPtr = &origin;
                             }
                             ws.navigateTo(*root, *node, static_cast<int>(argInt(args, "line", 1)) - 1, originPtr);
+                            if (showPanel) showPanel("Editor");  // it may be a background tab (behind the Decompiler in Analysis)
                             return McpToolResult::ok(Json::obj({{"opened", displayPath(*root, node->path())}}));
                         }});
     }
