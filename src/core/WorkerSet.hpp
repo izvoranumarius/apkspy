@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <concepts>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -12,6 +13,7 @@ class WorkerSet {
 public:
     ~WorkerSet() { joinAll(); }
     template <typename F>
+        requires std::invocable<std::decay_t<F>&>
     void spawn(F&& fn) {
         reap();
         auto done = std::make_shared<std::atomic<bool>>(false);

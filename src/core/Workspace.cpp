@@ -10,6 +10,7 @@
 #include "core/AxmlDecoder.hpp"
 #include "core/Paths.hpp"
 #include "core/SafePath.hpp"
+#include "core/UniqueFile.hpp"
 #include "core/TextUtils.hpp"
 
 namespace fs = std::filesystem;
@@ -29,13 +30,14 @@ std::string markerStatus(const fs::path& dir, bool& valid) {
     valid = false;
     std::error_code ec;
     if (!fs::is_directory(dir, ec)) return {};
-    std::FILE* f =
-        std::fopen(pathutil::toUtf8(dir / kOutMarkerName).c_str(), "rb");
-    if (!f) return {};
     std::string content;
     char buf[128];
-    size_t got = std::fread(buf, 1, sizeof buf - 1, f);
-    std::fclose(f);
+    size_t got = 0;
+    {
+        const UniqueFile f(std::fopen(pathutil::toUtf8(dir / kOutMarkerName).c_str(), "rb"));
+        if (!f) return {};
+        got = std::fread(buf, 1, sizeof buf - 1, f.get());
+    }
     buf[got] = 0;
     content.assign(buf, got);
     while (!content.empty() && (content.back() == '\n' || content.back() == '\r')) content.pop_back();
@@ -49,11 +51,9 @@ std::string markerStatus(const fs::path& dir, bool& valid) {
 void writeMarker(const fs::path& dir, const char* status) {
     std::error_code ec;
     fs::create_directories(dir, ec);
-    std::FILE* f =
-        std::fopen(pathutil::toUtf8(dir / kOutMarkerName).c_str(), "wb");
+    const UniqueFile f(std::fopen(pathutil::toUtf8(dir / kOutMarkerName).c_str(), "wb"));
     if (!f) return;
-    std::fprintf(f, "%s\n%s\n", kOutMarkerMagic, status);
-    std::fclose(f);
+    std::fprintf(f.get(), "%s\n%s\n", kOutMarkerMagic, status);
 }
 
 bool removeOutDirIfOwned(const fs::path& dir) {

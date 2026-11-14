@@ -21,10 +21,27 @@ void ShellIcons::shutdown() {
 #include <windows.h>
 #include <shellapi.h>
 #include <cctype>
+#include <memory>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace {
+
+// Owners for the GDI objects below, so every path releases them.
+struct GdiDeleter {
+    void operator()(HGDIOBJ obj) const noexcept { DeleteObject(obj); }
+};
+using UniqueBitmap = std::unique_ptr<std::remove_pointer_t<HBITMAP>, GdiDeleter>;
+struct ScreenDcReleaser {
+    void operator()(HDC dc) const noexcept { ReleaseDC(nullptr, dc); }
+};
+using ScreenDc = std::unique_ptr<std::remove_pointer_t<HDC>, ScreenDcReleaser>;
+struct IconDestroyer {
+    void operator()(HICON icon) const noexcept { DestroyIcon(icon); }
+};
+using UniqueIcon = std::unique_ptr<std::remove_pointer_t<HICON>, IconDestroyer>;
+
 std::string extOf(const std::string& name) {
     size_t dot = name.find_last_of('.');
     if (dot == std::string::npos) return {};
@@ -37,6 +54,7 @@ std::string extOf(const std::string& name) {
 bool hiconToRgba(HICON icon, std::vector<uint8_t>& px, int& w, int& h) {
     ICONINFO ii{};
     if (!GetIconInfo(icon, &ii)) return false;
+    const UniqueBitmap colorBits(ii.hbmColor), maskBits(ii.hbmMask);  // GetIconInfo hands both to the caller
     bool ok = false;
     BITMAP bm{};
     if (ii.hbmColor && GetObject(ii.hbmColor, sizeof bm, &bm) && bm.bmWidth > 0 && bm.bmHeight > 0) {
@@ -50,8 +68,8 @@ bool hiconToRgba(HICON icon, std::vector<uint8_t>& px, int& w, int& h) {
         bi.bmiHeader.biBitCount = 32;
         bi.bmiHeader.biCompression = BI_RGB;
         px.assign(static_cast<size_t>(w) * h * 4, 0);
-        HDC dc = GetDC(nullptr);
-        if (GetDIBits(dc, ii.hbmColor, 0, h, px.data(), &bi, DIB_RGB_COLORS) == h) {
+        const ScreenDc dc(GetDC(nullptr));
+        if (GetDIBits(dc.get(), ii.hbmColor, 0, h, px.data(), &bi, DIB_RGB_COLORS) == h) {
             ok = true;
             // GetDIBits yields BGRA - swap into RGBA.
             for (size_t i = 0; i < px.size(); i += 4) std::swap(px[i], px[i + 2]);
@@ -69,17 +87,14 @@ bool hiconToRgba(HICON icon, std::vector<uint8_t>& px, int& w, int& h) {
                 mb.bmiHeader.biPlanes = 1;
                 mb.bmiHeader.biBitCount = 1;
                 mb.bmiHeader.biCompression = BI_RGB;
-                if (GetDIBits(dc, ii.hbmMask, 0, h, mask.data(), &mb, DIB_RGB_COLORS) == h)
+                if (GetDIBits(dc.get(), ii.hbmMask, 0, h, mask.data(), &mb, DIB_RGB_COLORS) == h)
                     for (int y = 0; y < h; ++y)
                         for (int x = 0; x < w; ++x)
                             px[(static_cast<size_t>(y) * w + x) * 4 + 3] =
                                 (mask[static_cast<size_t>(y) * stride + x / 8] & (0x80 >> (x % 8))) ? 0 : 255;
             }
         }
-        ReleaseDC(nullptr, dc);
     }
-    if (ii.hbmColor) DeleteObject(ii.hbmColor);
-    if (ii.hbmMask) DeleteObject(ii.hbmMask);
     return ok;
 }
 }  // namespace
@@ -95,11 +110,11 @@ ImTextureID ShellIcons::textureFor(const std::string& key, const wchar_t* probeN
     if (SHGetFileInfoW(probeName, fileAttrs, &sfi, sizeof sfi,
                        SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES) &&
         sfi.hIcon) {
+        const UniqueIcon icon(sfi.hIcon);
         std::vector<uint8_t> px;
         int w = 0, h = 0;
-        if (hiconToRgba(sfi.hIcon, px, w, h) && w > 0 && h > 0)
+        if (hiconToRgba(icon.get(), px, w, h) && w > 0 && h > 0)
             tex = std::make_unique<Texture>(px.data(), w, h);
-        DestroyIcon(sfi.hIcon);
     }
     cache_[key] = std::move(tex);  // failures are cached too (as null)
     return cache_[key] ? static_cast<ImTextureID>(cache_[key]->id()) : 0;

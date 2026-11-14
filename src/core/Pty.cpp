@@ -7,6 +7,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "core/UniqueHandle.hpp"
 
 // ConPTY entry points are looked up at run time so the app still starts on
 // Windows versions without them (the terminal then reports it).
@@ -15,11 +16,11 @@ using ResizePseudoConsoleFn = HRESULT(WINAPI*)(void*, COORD);
 using ClosePseudoConsoleFn = void(WINAPI*)(void*);
 
 struct Pty::Impl {
-    void* console = nullptr;
-    HANDLE inWrite = nullptr;   // our end: keyboard -> shell
-    HANDLE outRead = nullptr;   // our end: shell -> screen
-    HANDLE process = nullptr;
-    HANDLE job = nullptr;
+    void* console = nullptr;  // closed through the looked-up ClosePseudoConsole, in stop()
+    UniqueHandle inWrite;     // our end: keyboard -> shell
+    UniqueHandle outRead;     // our end: shell -> screen
+    UniqueHandle process;
+    UniqueHandle job;
     CreatePseudoConsoleFn create = nullptr;
     ResizePseudoConsoleFn resize = nullptr;
     ClosePseudoConsoleFn close = nullptr;
@@ -81,21 +82,47 @@ bool Pty::start(const std::vector<std::string>& argv, const std::string& cwd, co
         error = "The terminal needs Windows 10 version 1809 or later (ConPTY)";
         return false;
     }
-    HANDLE inRead = nullptr, outWrite = nullptr;
-    if (!CreatePipe(&inRead, &d.inWrite, nullptr, 0) || !CreatePipe(&d.outRead, &outWrite, nullptr, 0)) {
+    HANDLE rawInRead = nullptr, rawInWrite = nullptr, rawOutRead = nullptr, rawOutWrite = nullptr;
+    const bool piped = CreatePipe(&rawInRead, &rawInWrite, nullptr, 0) && CreatePipe(&rawOutRead, &rawOutWrite, nullptr, 0);
+    // Owned at once, so a failure below (or of the second pipe) closes them.
+    UniqueHandle inRead(rawInRead), outWrite(rawOutWrite);
+    d.inWrite.reset(rawInWrite);
+    d.outRead.reset(rawOutRead);
+    if (!piped) {
         error = "Could not create the terminal pipes";
         return false;
     }
     const COORD size{static_cast<SHORT>(std::max(1, cols)), static_cast<SHORT>(std::max(1, rows))};
-    if (FAILED(d.create(size, inRead, outWrite, 0, &d.console))) {
-        CloseHandle(inRead);
-        CloseHandle(outWrite);
+    if (FAILED(d.create(size, inRead.get(), outWrite.get(), 0, &d.console))) {
         error = "Could not create the pseudo-console";
         return false;
     }
-    // The pseudo-console owns its ends of the pipes now.
-    CloseHandle(inRead);
-    CloseHandle(outWrite);
+    // The pseudo-console holds its own copies of these ends now.
+    inRead.reset();
+    outWrite.reset();
+
+    // Everything that allocates (and so may throw) comes before the attribute
+    // list, which needs DeleteProcThreadAttributeList once initialised.
+    // Environment: ours, with the tool folders first on PATH.
+    std::wstring env;
+    {
+        struct EnvFreer {
+            void operator()(wchar_t* p) const noexcept { FreeEnvironmentStringsW(p); }
+        };
+        const std::unique_ptr<wchar_t, EnvFreer> block(GetEnvironmentStringsW());
+        std::wstring prefix;
+        for (const std::string& dir : extraPath)
+            if (!dir.empty()) prefix += widen(dir) + L";";
+        for (const wchar_t* p = block.get(); p && *p; p += wcslen(p) + 1) {
+            std::wstring entry = p;
+            if (!prefix.empty() && _wcsnicmp(entry.c_str(), L"PATH=", 5) == 0) entry = entry.substr(0, 5) + prefix + entry.substr(5);
+            env += entry;
+            env += L'\0';
+        }
+        env += L'\0';
+    }
+    std::wstring cmd = commandLine(argv);
+    const std::wstring dir = widen(cwd);
 
     SIZE_T attrSize = 0;
     InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
@@ -103,23 +130,6 @@ bool Pty::start(const std::vector<std::string>& argv, const std::string& cwd, co
     auto* attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
     InitializeProcThreadAttributeList(attrs, 1, 0, &attrSize);
     UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, d.console, sizeof(d.console), nullptr, nullptr);
-
-    // Environment: ours, with the tool folders first on PATH.
-    std::wstring env;
-    {
-        wchar_t* block = GetEnvironmentStringsW();
-        std::wstring prefix;
-        for (const std::string& dir : extraPath)
-            if (!dir.empty()) prefix += widen(dir) + L";";
-        for (const wchar_t* p = block; *p; p += wcslen(p) + 1) {
-            std::wstring entry = p;
-            if (!prefix.empty() && _wcsnicmp(entry.c_str(), L"PATH=", 5) == 0) entry = entry.substr(0, 5) + prefix + entry.substr(5);
-            env += entry;
-            env += L'\0';
-        }
-        env += L'\0';
-        FreeEnvironmentStringsW(block);
-    }
 
     STARTUPINFOEXW si{};
     si.StartupInfo.cb = sizeof(si);
@@ -129,8 +139,6 @@ bool Pty::start(const std::vector<std::string>& argv, const std::string& cwd, co
     // instead of the pseudo-console, and the shell exits at once on EOF.
     si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     PROCESS_INFORMATION pi{};
-    std::wstring cmd = commandLine(argv);
-    const std::wstring dir = widen(cwd);
     const BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
                                    EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT, env.data(),
                                    dir.empty() ? nullptr : dir.c_str(), &si.StartupInfo, &pi);
@@ -142,26 +150,26 @@ bool Pty::start(const std::vector<std::string>& argv, const std::string& cwd, co
         return false;
     }
     // A job object ends the whole tree (shell and what it started) with us.
-    d.job = CreateJobObjectW(nullptr, nullptr);
+    d.process.reset(pi.hProcess);
+    CloseHandle(pi.hThread);
+    d.job.reset(CreateJobObjectW(nullptr, nullptr));
     if (d.job) {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        SetInformationJobObject(d.job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
-        AssignProcessToJobObject(d.job, pi.hProcess);
+        SetInformationJobObject(d.job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+        AssignProcessToJobObject(d.job.get(), d.process.get());
     }
-    CloseHandle(pi.hThread);
-    d.process = pi.hProcess;
     running_ = true;
     reader_ = std::thread([this] {
         char buf[8192];
         DWORD n = 0;
-        while (ReadFile(impl_->outRead, buf, sizeof buf, &n, nullptr) && n > 0) {
+        while (ReadFile(impl_->outRead.get(), buf, sizeof buf, &n, nullptr) && n > 0) {
             std::lock_guard<std::mutex> lock(mutex_);
             pending_.append(buf, n);
             if (pending_.size() > (8u << 20)) pending_.erase(0, pending_.size() - (4u << 20));
         }
         DWORD code = 0;
-        if (impl_->process && GetExitCodeProcess(impl_->process, &code)) exitCode_ = static_cast<int>(code);
+        if (impl_->process && GetExitCodeProcess(impl_->process.get(), &code)) exitCode_ = static_cast<int>(code);
         running_ = false;
     });
     return true;
@@ -171,16 +179,16 @@ bool Pty::start(const std::vector<std::string>& argv, const std::string& cwd, co
 // process itself says whether the shell still runs.
 bool Pty::running() const {
     if (!running_.load() || !impl_->process) return false;
-    if (WaitForSingleObject(impl_->process, 0) != WAIT_OBJECT_0) return true;
+    if (WaitForSingleObject(impl_->process.get(), 0) != WAIT_OBJECT_0) return true;
     DWORD code = 0;
-    if (GetExitCodeProcess(impl_->process, &code)) const_cast<Pty*>(this)->exitCode_ = static_cast<int>(code);
+    if (GetExitCodeProcess(impl_->process.get(), &code)) exitCode_ = static_cast<int>(code);  // mutable cache
     return false;
 }
 
 void Pty::write(const std::string& bytes) {
     if (!impl_->inWrite || bytes.empty()) return;
     DWORD written = 0;
-    WriteFile(impl_->inWrite, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
+    WriteFile(impl_->inWrite.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
 }
 
 void Pty::resize(int cols, int rows) {
@@ -189,31 +197,24 @@ void Pty::resize(int cols, int rows) {
 
 void Pty::stop() {
     Impl& d = *impl_;
+    // The order matters: end the shell, close the console (which ends the
+    // reader, after a last bit of output), join the reader, then its pipe.
     if (d.job) {
-        TerminateJobObject(d.job, 1);
-        CloseHandle(d.job);
-        d.job = nullptr;
+        TerminateJobObject(d.job.get(), 1);
+        d.job.reset();
     } else if (d.process) {
-        TerminateProcess(d.process, 1);
+        TerminateProcess(d.process.get(), 1);
     }
-    // Closing the console ends the reader (it may print a last bit first).
     if (d.console) {
         d.close(d.console);
         d.console = nullptr;
     }
-    if (d.inWrite) {
-        CloseHandle(d.inWrite);
-        d.inWrite = nullptr;
-    }
+    d.inWrite.reset();
     if (reader_.joinable()) reader_.join();
-    if (d.outRead) {
-        CloseHandle(d.outRead);
-        d.outRead = nullptr;
-    }
+    d.outRead.reset();
     if (d.process) {
-        WaitForSingleObject(d.process, 2000);
-        CloseHandle(d.process);
-        d.process = nullptr;
+        WaitForSingleObject(d.process.get(), 2000);
+        d.process.reset();
     }
     running_ = false;
 }

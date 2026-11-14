@@ -162,6 +162,12 @@
     <ClInclude Include="src\core\WorkerSet.hpp">
       <Filter>Header Files\core</Filter>
     </ClInclude>
+    <ClInclude Include="src\core\UniqueFile.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\UniqueHandle.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
     <ClInclude Include="src\ui\McpSettings.hpp">
       <Filter>Header Files\ui</Filter>
     </ClInclude>

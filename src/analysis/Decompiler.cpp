@@ -4,6 +4,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
+#include <concepts>
 #include <cstring>
 #include <map>
 #include <set>
@@ -29,6 +30,15 @@ std::string toText(const Output& out) {
 }
 
 namespace {
+
+// Graph walks take the edges as callables. A successor function maps a block
+// to its successor list; a predecessor visitor calls a sink for each one.
+template <class F>
+concept SuccessorFn = std::invocable<F&, int> &&
+                      std::convertible_to<std::invoke_result_t<F&, int>, const std::vector<int>&>;
+
+template <class F>
+concept PredecessorVisitor = std::invocable<F&, int, void (*)(int)>;
 
 // ===========================================================================
 // Expressions: text with register placeholders
@@ -101,7 +111,7 @@ int countUses(std::string_view s, int id) {
     return n;
 }
 
-template <class F>
+template <std::invocable<int> F>
 void forEachUse(std::string_view s, F f) {
     PhRef r;
     for (size_t at = 0; nextPh(s, at, r); at = r.end) f(r.id);
@@ -765,7 +775,7 @@ private:
         }
     }
 
-    template <class Next>
+    template <SuccessorFn Next>
     std::vector<int> postorder(const std::vector<int>& starts, Next next) const {
         std::vector<int> order;
         std::vector<char> seen(static_cast<size_t>(n_), 0);
@@ -792,7 +802,7 @@ private:
         return order;
     }
 
-    template <class Preds>
+    template <PredecessorVisitor Preds>
     std::vector<int> dominators(const std::vector<int>& rpo, int root, const std::vector<int>& idx, Preds preds) const {
         std::vector<int> dom(static_cast<size_t>(n_) + 1, -1);
         dom[static_cast<size_t>(root)] = root;
@@ -1959,12 +1969,6 @@ bool parseImm(std::string_view t, int64_t& v) {
     return true;
 }
 
-bool parseHex(std::string_view t, uint64_t& v) {
-    if (t.size() < 3 || t[0] != '0' || t[1] != 'x') return false;
-    v = std::strtoull(std::string(t.substr(2)).c_str(), nullptr, 16);
-    return true;
-}
-
 std::vector<std::string> splitOps(std::string_view s) {
     std::vector<std::string> out;
     int depth = 0;
@@ -2969,7 +2973,7 @@ bool identStart(char c) { return std::isalpha(static_cast<unsigned char>(c)) || 
 bool identChar(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$'; }
 
 // Calls f(begin, length, afterDot) for each identifier outside string / char literals and // comments.
-template <class F>
+template <std::invocable<size_t, size_t, bool> F>
 void forEachIdent(std::string_view s, F f) {
     for (size_t i = 0; i < s.size();) {
         const char c = s[i];
@@ -3264,13 +3268,21 @@ std::vector<size_t> findIdentifier(std::string_view text, std::string_view ident
     return out;
 }
 
+namespace {
+Output failed(std::string message) {
+    Output out;
+    out.error = std::move(message);
+    return out;
+}
+}  // namespace
+
 // A decompiler bug must not take the UI frame or an MCP call down with it.
 Output decompileMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m) {
-    if (m.dex >= a.dexes().size()) return {{}, "bad method"};
+    if (m.dex >= a.dexes().size()) return failed("bad method");
     try {
         return DalvikDecompiler(a, m).run();
     } catch (const std::exception& e) {
-        return {{}, std::string("decompiler error: ") + e.what()};
+        return failed(std::string("decompiler error: ") + e.what());
     }
 }
 
@@ -3278,7 +3290,7 @@ Output decompileNative(const NativeCode& nc, const NativeCode::Function& f) {
     try {
         return NativeDecompiler(nc, f).run();
     } catch (const std::exception& e) {
-        return {{}, std::string("decompiler error: ") + e.what()};
+        return failed(std::string("decompiler error: ") + e.what());
     }
 }
 

@@ -55,7 +55,8 @@ std::shared_ptr<ElfFile> ElfFile::parse(std::shared_ptr<const std::vector<uint8_
         error = "not an ELF file";
         return nullptr;
     }
-    std::shared_ptr<ElfFile> e(new ElfFile());
+    struct Made : ElfFile {};  // reaches the private constructor for make_shared
+    std::shared_ptr<ElfFile> e = std::make_shared<Made>();
     e->data_ = std::move(bytes);
     e->name_ = std::move(name);
     const uint8_t* d = e->data_->data();

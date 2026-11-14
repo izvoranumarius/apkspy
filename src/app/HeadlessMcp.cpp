@@ -20,6 +20,7 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+#include "core/UniqueHandle.hpp"
 #endif
 
 namespace fs = std::filesystem;
@@ -51,11 +52,9 @@ std::vector<std::string> commandLineArgs(int argc, char** argv) {
     (void)argc;
     (void)argv;
     int n = 0;
-    LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &n);
-    if (wargv) {
-        for (int i = 0; i < n; ++i) out.push_back(pathutil::toUtf8(fs::path(wargv[i])));
-        LocalFree(wargv);
-    }
+    const UniqueLocal<LPWSTR> wargv(CommandLineToArgvW(GetCommandLineW(), &n));
+    if (wargv)
+        for (int i = 0; i < n; ++i) out.push_back(pathutil::toUtf8(fs::path(wargv.get()[i])));
 #else
     for (int i = 0; i < argc; ++i) out.emplace_back(argv[i]);
 #endif

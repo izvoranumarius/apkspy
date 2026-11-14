@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <concepts>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -41,7 +42,7 @@ public:
     // safe). `query` must already be lowered ASCII (as start() does).
     static bool lineMatches(Mode mode, std::string_view line, std::string_view query);
 
-    template <typename F>
+    template <std::invocable<const std::vector<SearchHit>&> F>
     void withHits(F&& fn) const {
         std::lock_guard<std::mutex> lock(mutex_);
         fn(hits_);

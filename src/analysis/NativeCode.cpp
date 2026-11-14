@@ -44,7 +44,8 @@ std::shared_ptr<NativeCode> NativeCode::build(std::shared_ptr<const ElfFile> elf
                 ". Open the arm64-v8a copy of the library if the APK ships one.";
         return nullptr;
     }
-    std::shared_ptr<NativeCode> nc(new NativeCode());
+    struct Made : NativeCode {};  // reaches the private constructor for make_shared
+    std::shared_ptr<NativeCode> nc = std::make_shared<Made>();
     nc->elf_ = std::move(elf);
     for (const auto& s : nc->elf_->sections())
         if ((s.flags & SHF_EXECINSTR) && s.type != SHT_NOBITS && s.size >= 4 && s.offset + s.size <= nc->elf_->data().size())

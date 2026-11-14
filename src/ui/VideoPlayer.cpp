@@ -27,6 +27,7 @@ bool VideoPlayer::anyPlaying() { return sPlaying.load() > 0; }
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #include <shlwapi.h>
+#include <wrl/client.h>
 #include "ui/AudioConfig.hpp"
 #include "miniaudio/miniaudio.h"  // the implementation lives in AudioCodecs.cpp
 
@@ -43,11 +44,7 @@ constexpr size_t kMaxFrames = 3;           // decoded frames waiting for their t
 constexpr double kAudioBufferSeconds = 1.0;  // decoded audio kept ahead
 constexpr UINT32 kMaxSide = 1920;           // larger pictures are scaled down while decoding
 
-template <typename T>
-void release(T*& p) {
-    if (p) p->Release();
-    p = nullptr;
-}
+using Microsoft::WRL::ComPtr;  // COM references are released by their owner, never by hand
 
 bool startMediaFoundation() {
     static const bool ok = SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_LITE));
@@ -55,36 +52,28 @@ bool startMediaFoundation() {
 }
 
 // A source reader over the file bytes, with only one stream selected.
-IMFSourceReader* makeReader(const std::vector<uint8_t>& data, DWORD stream, bool videoProcessing) {
-    IStream* mem = SHCreateMemStream(data.data(), static_cast<UINT>(data.size()));
+ComPtr<IMFSourceReader> makeReader(const std::vector<uint8_t>& data, DWORD stream, bool videoProcessing) {
+    ComPtr<IStream> mem;
+    mem.Attach(SHCreateMemStream(data.data(), static_cast<UINT>(data.size())));  // returned with one reference
     if (!mem) return nullptr;
-    IMFByteStream* bytes = nullptr;
-    HRESULT hr = MFCreateMFByteStreamOnStream(mem, &bytes);
-    mem->Release();
-    if (FAILED(hr)) return nullptr;
+    ComPtr<IMFByteStream> bytes;
+    if (FAILED(MFCreateMFByteStreamOnStream(mem.Get(), &bytes))) return nullptr;
     // A content type helps Media Foundation pick the right parser.
-    IMFAttributes* streamAttrs = nullptr;
-    if (SUCCEEDED(bytes->QueryInterface(IID_PPV_ARGS(&streamAttrs)))) {
+    ComPtr<IMFAttributes> streamAttrs;
+    if (SUCCEEDED(bytes.As(&streamAttrs))) {
         if (data.size() > 12 && std::memcmp(data.data() + 4, "ftyp", 4) == 0)
             streamAttrs->SetString(MF_BYTESTREAM_CONTENT_TYPE, L"video/mp4");
         else if (data.size() > 4 && std::memcmp(data.data(), "\x1A\x45\xDF\xA3", 4) == 0)
             streamAttrs->SetString(MF_BYTESTREAM_CONTENT_TYPE, L"video/webm");
-        streamAttrs->Release();
     }
-    IMFAttributes* attrs = nullptr;
+    ComPtr<IMFAttributes> attrs;
     MFCreateAttributes(&attrs, 2);
     // Advanced processing converts to RGB and can also scale the picture down.
     if (attrs && videoProcessing) attrs->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE);
-    IMFSourceReader* reader = nullptr;
-    hr = MFCreateSourceReaderFromByteStream(bytes, attrs, &reader);
-    if (attrs) attrs->Release();
-    bytes->Release();
-    if (FAILED(hr)) return nullptr;
+    ComPtr<IMFSourceReader> reader;
+    if (FAILED(MFCreateSourceReaderFromByteStream(bytes.Get(), attrs.Get(), &reader))) return nullptr;
     reader->SetStreamSelection(static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS), FALSE);
-    if (FAILED(reader->SetStreamSelection(stream, TRUE))) {
-        reader->Release();
-        return nullptr;
-    }
+    if (FAILED(reader->SetStreamSelection(stream, TRUE))) return nullptr;
     return reader;
 }
 
@@ -159,56 +148,54 @@ struct VideoPlayer::Impl {
 
     void videoLoop(std::promise<void> ready) {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        IMFSourceReader* reader = makeReader(data, static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), true);
+        ComPtr<IMFSourceReader> reader = makeReader(data, static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), true);
         LONG stride = 0;
         if (reader) {
             // The file's own size, scaled to fit kMaxSide (a 4K frame is 33 MB as RGBA).
             UINT32 nativeW = 0, nativeH = 0;
-            IMFMediaType* native = nullptr;
-            if (SUCCEEDED(reader->GetNativeMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0, &native))) {
-                MFGetAttributeSize(native, MF_MT_FRAME_SIZE, &nativeW, &nativeH);
-                native->Release();
+            ComPtr<IMFMediaType> native;
+            if (SUCCEEDED(reader->GetNativeMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0, &native)))
+                MFGetAttributeSize(native.Get(), MF_MT_FRAME_SIZE, &nativeW, &nativeH);
+            ComPtr<IMFMediaType> type;
+            const bool haveType = SUCCEEDED(MFCreateMediaType(&type));
+            if (haveType) {
+                type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+                type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
             }
-            IMFMediaType* type = nullptr;
-            MFCreateMediaType(&type);
-            type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-            type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
             bool typeOk = false;
-            if (nativeW > kMaxSide || nativeH > kMaxSide) {
+            if (haveType && (nativeW > kMaxSide || nativeH > kMaxSide)) {
                 const double scale = static_cast<double>(kMaxSide) / static_cast<double>(std::max(nativeW, nativeH));
                 const UINT32 w = std::max<UINT32>(2, static_cast<UINT32>(nativeW * scale) & ~1u);
                 const UINT32 h = std::max<UINT32>(2, static_cast<UINT32>(nativeH * scale) & ~1u);
-                MFSetAttributeSize(type, MF_MT_FRAME_SIZE, w, h);
-                typeOk = SUCCEEDED(reader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), nullptr, type));
+                MFSetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, w, h);
+                typeOk = SUCCEEDED(reader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), nullptr, type.Get()));
                 if (!typeOk) type->DeleteItem(MF_MT_FRAME_SIZE);  // full size, then
             }
-            if (!typeOk) typeOk = SUCCEEDED(reader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), nullptr, type));
+            if (haveType && !typeOk) typeOk = SUCCEEDED(reader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), nullptr, type.Get()));
             if (typeOk) {
-                IMFMediaType* current = nullptr;
+                ComPtr<IMFMediaType> current;
                 if (SUCCEEDED(reader->GetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), &current))) {
                     UINT32 w = 0, h = 0;
-                    MFGetAttributeSize(current, MF_MT_FRAME_SIZE, &w, &h);
+                    MFGetAttributeSize(current.Get(), MF_MT_FRAME_SIZE, &w, &h);
                     width = static_cast<int>(w);
                     height = static_cast<int>(h);
                     UINT32 s = 0;
                     stride = SUCCEEDED(current->GetUINT32(MF_MT_DEFAULT_STRIDE, &s)) ? static_cast<LONG>(static_cast<INT32>(s)) : static_cast<LONG>(w) * 4;
-                    current->Release();
                     video = width > 0 && height > 0;
                 }
             }
-            type->Release();
             PROPVARIANT var;
             PropVariantInit(&var);
             if (SUCCEEDED(reader->GetPresentationAttribute(static_cast<DWORD>(MF_SOURCE_READER_MEDIASOURCE), MF_PD_DURATION, &var)))
                 duration = static_cast<double>(var.uhVal.QuadPart) / 1e7;
             PropVariantClear(&var);
-            if (!video) release(reader);
+            if (!video) reader.Reset();
         }
         ready.set_value();
         while (reader && !stop.load()) {
             const double target = seekVideo.exchange(-1.0);
             if (target >= 0.0) {
-                seekReader(reader, target);
+                seekReader(reader.Get(), target);
                 std::lock_guard<std::mutex> lock(frameMutex);
                 frames.clear();
                 videoEof = false;
@@ -222,7 +209,7 @@ struct VideoPlayer::Impl {
             }
             DWORD flags = 0;
             LONGLONG ts = 0;
-            IMFSample* sample = nullptr;
+            ComPtr<IMFSample> sample;
             if (FAILED(reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0, nullptr, &flags, &ts, &sample))) {
                 std::lock_guard<std::mutex> lock(frameMutex);
                 videoEof = true;
@@ -233,7 +220,7 @@ struct VideoPlayer::Impl {
                 videoEof = true;
             }
             if (!sample) continue;
-            IMFMediaBuffer* buffer = nullptr;
+            ComPtr<IMFMediaBuffer> buffer;
             if (SUCCEEDED(sample->ConvertToContiguousBuffer(&buffer))) {
                 BYTE* p = nullptr;
                 DWORD len = 0;
@@ -258,32 +245,29 @@ struct VideoPlayer::Impl {
                     std::lock_guard<std::mutex> lock(frameMutex);
                     if (seekVideo.load() < 0.0) frames.push_back(std::move(f));
                 }
-                buffer->Release();
             }
-            sample->Release();
         }
-        release(reader);
+        reader.Reset();  // before CoUninitialize
         CoUninitialize();
     }
 
     void audioLoop(std::promise<void> ready) {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        IMFSourceReader* reader = makeReader(data, static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), false);
+        ComPtr<IMFSourceReader> reader = makeReader(data, static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), false);
         if (reader) {
-            IMFMediaType* type = nullptr;
-            MFCreateMediaType(&type);
-            type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
-            type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_Float);
-            if (SUCCEEDED(reader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), nullptr, type))) {
-                IMFMediaType* current = nullptr;
+            ComPtr<IMFMediaType> type;
+            if (SUCCEEDED(MFCreateMediaType(&type))) {
+                type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+                type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_Float);
+            }
+            if (type && SUCCEEDED(reader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), nullptr, type.Get()))) {
+                ComPtr<IMFMediaType> current;
                 if (SUCCEEDED(reader->GetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), &current))) {
-                    channels = static_cast<int>(MFGetAttributeUINT32(current, MF_MT_AUDIO_NUM_CHANNELS, 0));
-                    sampleRate = static_cast<int>(MFGetAttributeUINT32(current, MF_MT_AUDIO_SAMPLES_PER_SECOND, 0));
-                    current->Release();
+                    channels = static_cast<int>(MFGetAttributeUINT32(current.Get(), MF_MT_AUDIO_NUM_CHANNELS, 0));
+                    sampleRate = static_cast<int>(MFGetAttributeUINT32(current.Get(), MF_MT_AUDIO_SAMPLES_PER_SECOND, 0));
                     audio = channels > 0 && sampleRate > 0;
                 }
             }
-            type->Release();
             if (duration <= 0.0) {
                 PROPVARIANT var;
                 PropVariantInit(&var);
@@ -291,14 +275,14 @@ struct VideoPlayer::Impl {
                     duration = static_cast<double>(var.uhVal.QuadPart) / 1e7;
                 PropVariantClear(&var);
             }
-            if (!audio) release(reader);
+            if (!audio) reader.Reset();
         }
         ready.set_value();
         bool eof = false;
         while (reader && !stop.load()) {
             const double target = seekAudio.exchange(-1.0);
             if (target >= 0.0) {
-                seekReader(reader, target);
+                seekReader(reader.Get(), target);
                 std::lock_guard<std::mutex> lock(audioMutex);
                 samples.clear();
                 eof = false;
@@ -312,14 +296,14 @@ struct VideoPlayer::Impl {
             }
             DWORD flags = 0;
             LONGLONG ts = 0;
-            IMFSample* sample = nullptr;
+            ComPtr<IMFSample> sample;
             if (FAILED(reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), 0, nullptr, &flags, &ts, &sample))) {
                 eof = true;
                 continue;
             }
             if (flags & MF_SOURCE_READERF_ENDOFSTREAM) eof = true;
             if (!sample) continue;
-            IMFMediaBuffer* buffer = nullptr;
+            ComPtr<IMFMediaBuffer> buffer;
             if (SUCCEEDED(sample->ConvertToContiguousBuffer(&buffer))) {
                 BYTE* p = nullptr;
                 DWORD len = 0;
@@ -329,11 +313,9 @@ struct VideoPlayer::Impl {
                     if (seekAudio.load() < 0.0) samples.insert(samples.end(), f, f + len / sizeof(float));
                     buffer->Unlock();
                 }
-                buffer->Release();
             }
-            sample->Release();
         }
-        release(reader);
+        reader.Reset();  // before CoUninitialize
         CoUninitialize();
     }
 };

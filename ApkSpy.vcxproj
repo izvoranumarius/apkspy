@@ -106,6 +106,8 @@
     <ClInclude Include="src\ui\UiUtil.hpp" />
     <ClInclude Include="src\debug\TrafficProxy.hpp" />
     <ClInclude Include="src\core\WorkerSet.hpp" />
+    <ClInclude Include="src\core\UniqueFile.hpp" />
+    <ClInclude Include="src\core\UniqueHandle.hpp" />
     <ClInclude Include="src\ui\McpSettings.hpp" />
     <ClInclude Include="src\ui\DevicePanels.hpp" />
     <ClInclude Include="src\ui\AnalysisPanel.hpp" />
