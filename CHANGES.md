@@ -1,5 +1,28 @@
 # Changelog
 
+## Behavior graph, version diff, Java <-> smali
+
+- **Behavior** panel (Analysis workspace): what the app does, from the
+  manifest down. Each component is walked through the code it reaches,
+  including listener, `Runnable` and lambda callbacks, to the permissions,
+  network endpoints, storage and native code it touches. Exported
+  components, permissions used but not declared (for the target SDK) and
+  cleartext endpoints are flagged. Overview, Classes and Methods levels,
+  filters, find, focus on a node's neighbourhood, evidence and the call path
+  to each capability; double-click opens the code.
+- **Diff** panel replaces the Compare list: manifest and signing
+  certificate, permissions, components, classes (obfuscator renames
+  matched), methods (what changed in each, register-only changes hidden),
+  resources, native library exports, bundled library versions, endpoints
+  and files. A changed method shows side by side, as smali or decompiled,
+  with change navigation. It compares on its own once both APKs are analysed.
+- **Java sync**: click a line of jadx's Java and its method and instructions
+  are highlighted in Function; click an instruction and the Java follows.
+  Exact with jadx's `--add-debug-lines`, matched by calls, constants,
+  fields and control flow otherwise; lambdas and anonymous classes included.
+- MCP: `behavior_graph`, `map_java_smali`, the GUI tool `show_diff`, and
+  `compare_apks` now reports every section above.
+
 ## Decompiler
 
 - **Decompiler** panel in the Analysis workspace, laid out as in Cutter:

@@ -2098,7 +2098,8 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
         auto showPanel = env.showPanel;
         server.addTool({"show_panel", "Show panel",
                         "Brings an ApkSpy panel to the front for the user, switching workspace if needed: Explorer, Overview, Editor, Analysis, "
-                        "Function, Decompiler, References, Debugger, Devices, Output, Search, Logcat, Traffic, Bookmarks or Script.",
+                        "Function, Decompiler, References, Behavior, Diff, Debugger, Devices, Output, Search, Logcat, Traffic, "
+                        "Bookmarks or Script.",
                         schema::object({{"panel", str("Panel title")}}, {"panel"}), false, false,
                         [showPanel](const Json& args, McpToolContext&) -> McpToolOutcome {
                             const std::string panel = argStr(args, "panel");
