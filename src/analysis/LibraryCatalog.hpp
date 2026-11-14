@@ -1,6 +1,10 @@
 #pragma once
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
+
+class ApkAnalysis;
 
 // Known third-party libraries and frameworks, identified by the package
 // prefixes of their classes. One table serves the behavior graph (calls into
@@ -29,5 +33,20 @@ const Library* byId(std::string_view id);
 // True for platform and runtime classes that are never bundled app code
 // (java/, javax/, android/, dalvik/, kotlin/ ...) - also when not in the table.
 bool isPlatformClass(std::string_view descriptor);
+
+// A library found in an APK.
+struct Detection {
+    const Library* lib = nullptr;  // nullptr: known only from a version file
+    std::string maven;             // coordinates ("group:artifact") when known
+    size_t classes = 0;            // bundled classes attributed to it
+    std::string version;           // from META-INF/<group>_<artifact>.version, "" when unknown
+};
+
+// META-INF/*.version entries worth reading (Gradle writes one per AndroidX /
+// Kotlin / Firebase artifact; each holds the version string).
+bool isVersionFile(std::string_view entryPath);
+// Libraries in `a` (nullptr = versions only), by class prefix and by version
+// file. `versionFiles` holds (entry path, file contents). Sorted by name.
+std::vector<Detection> detect(const ApkAnalysis* a, const std::vector<std::pair<std::string, std::string>>& versionFiles);
 
 }  // namespace libcatalog

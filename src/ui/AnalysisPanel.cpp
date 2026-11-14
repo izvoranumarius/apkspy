@@ -1384,101 +1384,13 @@ void AnalysisPanel::drawNative(Root& apk) {
 // Compare
 // ---------------------------------------------------------------------------
 
-void AnalysisPanel::drawCompare(Root& apk) {
-    std::vector<Root*> apks = workspace_.apkRoots();
-    if (apks.size() < 2) {
-        ImGui::TextDisabled("Add a second APK (another version) to the project to compare them.");
-        return;
-    }
-    if (compareWith_ < 0 || compareWith_ >= static_cast<int>(apks.size()) || apks[static_cast<size_t>(compareWith_)] == &apk)
-        for (int i = 0; i < static_cast<int>(apks.size()); ++i)
-            if (apks[static_cast<size_t>(i)] != &apk) compareWith_ = i;
-    Root& other = *apks[static_cast<size_t>(compareWith_)];
-    ImGui::Text("Compare %s with", apk.title.c_str());
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(std::min(ui::em(12.f), ImGui::GetContentRegionAvail().x));
-    if (ImGui::BeginCombo("##other", other.title.c_str())) {
-        for (int i = 0; i < static_cast<int>(apks.size()); ++i)
-            if (apks[static_cast<size_t>(i)] != &apk && ImGui::Selectable(apks[static_cast<size_t>(i)]->title.c_str(), i == compareWith_)) compareWith_ = i;
-        ImGui::EndCombo();
-    }
-    ImGui::SameLine();
-    const bool running = diffJob_.valid();
-    if (running) ImGui::BeginDisabled();
-    if (ImGui::Button("Compare")) {
-        auto* archA = dynamic_cast<ApkArchive*>(apk.source.get());
-        auto* archB = dynamic_cast<ApkArchive*>(other.source.get());
-        if (archA && archB) {
-            // Central directories and manifests are read here (UI thread
-            // owns the archives); the code diff runs on a worker.
-            auto entriesA = archA->entries(), entriesB = archB->entries();
-            workspace_.resources(apk.title);
-            workspace_.resources(other.title);
-            const ApkInfo ia = ApkInfo::extract(apk), ib = ApkInfo::extract(other);
-            permAdded_.clear();
-            permRemoved_.clear();
-            std::set<std::string> pa(ia.permissions.begin(), ia.permissions.end()), pb(ib.permissions.begin(), ib.permissions.end());
-            for (const auto& p : pb)
-                if (!pa.count(p)) permAdded_.push_back(p);
-            for (const auto& p : pa)
-                if (!pb.count(p)) permRemoved_.push_back(p);
-            diffTitle_ = apk.title + " (" + ia.versionName + ") -> " + other.title + " (" + ib.versionName + ")";
-            auto anA = workspace_.analysis().get(apk.title), anB = workspace_.analysis().get(other.title);
-            diffJob_ = std::async(std::launch::async, [entriesA = std::move(entriesA), entriesB = std::move(entriesB), anA, anB] {
-                ApkDiff d = ApkDiff::compareEntries(entriesA, entriesB);
-                if (anA && anB) d.compareCode(*anA, *anB, 20000, nullptr);
-                return d;
-            });
-            diffValid_ = false;
-        }
-    }
-    if (running) {
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::TextDisabled("comparing...");
-    }
-    if (ready(diffJob_)) {
-        diff_ = diffJob_.get();
-        diffValid_ = true;
-    }
-    if (!workspace_.analysis().get(apk.title) || !workspace_.analysis().get(other.title))
-        ImGui::TextDisabled("Tip: analyse both APKs to also compare classes and method bodies.");
-    if (!diffValid_) return;
-    ImGui::TextColored(kAccent(), "%s", diffTitle_.c_str());
-    ImGui::Text("%zu entries changed, %zu unchanged", diff_.entries.size(), diff_.entriesUnchanged);
-    const auto list = [](const char* title, const std::vector<std::string>& items) {
-        char header[128];
-        std::snprintf(header, sizeof header, "%s (%zu)###%s", title, items.size(), title);
-        if (ImGui::CollapsingHeader(header)) {
-            ImGui::BeginChild(title, ImVec2(0, std::min(240.f, 20.f + 18.f * static_cast<float>(items.size()))), ImGuiChildFlags_Borders);
-            ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(items.size()));
-            while (clipper.Step())
-                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) ImGui::TextUnformatted(items[static_cast<size_t>(i)].c_str());
-            ImGui::EndChild();
-        }
-    };
-    if (ImGui::CollapsingHeader("Archive entries")) {
-        ImGui::BeginChild("##entries", ImVec2(0, 240.f), ImGuiChildFlags_Borders);
-        for (const auto& e : diff_.entries) {
-            const ImVec4 col = e.kind == ApkDiff::Kind::Added ? theme::vec(Col::Success)
-                               : e.kind == ApkDiff::Kind::Removed ? theme::vec(Col::Error)
-                                                                  : theme::vec(Col::Warning);
-            ImGui::TextColored(col, "%-8s", ApkDiff::kindName(e.kind));
-            ImGui::SameLine();
-            ImGui::Text("%s  (%llu -> %llu bytes)", e.path.c_str(), static_cast<unsigned long long>(e.sizeA), static_cast<unsigned long long>(e.sizeB));
-        }
-        ImGui::EndChild();
-    }
-    list("Permissions added", permAdded_);
-    list("Permissions removed", permRemoved_);
-    if (diff_.codeCompared) {
-        list("Classes added", diff_.classesAdded);
-        list("Classes removed", diff_.classesRemoved);
-        list("Methods changed", diff_.methodsChanged);
-        list("Methods added", diff_.methodsAdded);
-        list("Methods removed", diff_.methodsRemoved);
-    }
+void AnalysisPanel::drawCompare(Root& /*apk*/) {
+    // The comparison has its own panel: sections, filters and side-by-side code.
+    ImGui::PushTextWrapPos(0.f);
+    ImGui::TextDisabled("Compare two versions of the app: manifest, permissions, classes, methods side by side, "
+                        "resources, native libraries, bundled libraries and endpoints.");
+    ImGui::PopTextWrapPos();
+    if (ui::flowButton("Open the Diff panel") && showPanel_) showPanel_("Diff");
 }
 
 // ---------------------------------------------------------------------------

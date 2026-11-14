@@ -4,7 +4,9 @@
 // macro; every fixture is built in memory with TestDex.
 #include <memory>
 #include "TestDex.hpp"
+#include "analysis/ApkDiff.hpp"
 #include "analysis/BehaviorGraph.hpp"
+#include "core/TextDiff.hpp"
 #include "analysis/Jni.hpp"
 #include "analysis/LibraryCatalog.hpp"
 
@@ -175,4 +177,150 @@ static void testBehaviorGraph() {
     std::atomic<bool> cancel{true};
     const behavior::Graph none = behavior::build(*a, fixtures::behaviorManifest(), {}, &cancel);
     CHECK(none.nodes.empty(), "cancelled build returns nothing");
+}
+
+namespace fixtures {
+
+inline std::shared_ptr<ApkAnalysis> analyse(const TestDex& d) {
+    auto bytes = std::make_shared<std::vector<uint8_t>>(d.build());
+    std::string err;
+    auto dex = DexFile::parse(bytes, "classes.dex", err);
+    if (!dex) {
+        std::printf("  fixture dex failed to parse: %s\n", err.c_str());
+        return nullptr;
+    }
+    std::atomic<bool> stop{false};
+    return ApkAnalysis::build({dex}, stop);
+}
+
+// Two versions of one app. v2: Main.run() switches to an https endpoint and
+// starts encrypting; Main.cosmetic() only uses another register; the helper
+// com.app.a is renamed to com.app.b by the obfuscator (same code); Gone is
+// deleted, New and OkHttp appear.
+inline std::pair<std::shared_ptr<ApkAnalysis>, std::shared_ptr<ApkAnalysis>> diffApps() {
+    const auto helper = [](TestDex& d, const std::string& cls) {
+        d.addClass(cls);
+        d.addMethod(cls, "x", "(Ljava/lang/String;)V", 0x9,
+                    {T::invokeStatic("Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I", {6, 6}),
+                     T::invokeStatic("Ljava/lang/System;->gc()V"), T::returnVoid()});
+        d.addMethod(cls, "y", "()V", 0x9, {T::const4(0, 1), T::const4(1, 2), T::returnVoid()});
+    };
+    TestDex a, b;
+    a.addClass("Lcom/app/Main;");
+    a.addMethod("Lcom/app/Main;", "run", "()V", 0x1,
+                {T::constString(0, "http://old.example.com/api"),
+                 T::invokeStatic("Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I", {0, 0}), T::returnVoid()});
+    a.addMethod("Lcom/app/Main;", "cosmetic", "()V", 0x1, {T::constString(0, "same"), T::returnVoid()});
+    helper(a, "Lcom/app/a;");
+    a.addClass("Lcom/app/Gone;");
+    a.addMethod("Lcom/app/Gone;", "z", "()V", 0x9, {});
+
+    b.addClass("Lcom/app/Main;");
+    b.addMethod("Lcom/app/Main;", "run", "()V", 0x1,
+                {T::constString(0, "https://new.example.com/api"),
+                 T::invokeStatic("Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I", {0, 0}),
+                 T::constString(1, "AES/GCM/NoPadding"),
+                 T::invokeStatic("Ljavax/crypto/Cipher;->getInstance(Ljava/lang/String;)Ljavax/crypto/Cipher;", {1}),
+                 T::returnVoid()});
+    b.addMethod("Lcom/app/Main;", "cosmetic", "()V", 0x1, {T::constString(2, "same"), T::returnVoid()});
+    helper(b, "Lcom/app/b;");
+    b.addClass("Lcom/app/New;");
+    b.addMethod("Lcom/app/New;", "w", "()V", 0x9, {});
+    b.addClass("Lokhttp3/OkHttpClient;");
+    b.addMethod("Lokhttp3/OkHttpClient;", "newCall", "()V", 0x1, {});
+    return {analyse(a), analyse(b)};
+}
+
+}  // namespace fixtures
+
+static void testApkDiff() {
+    std::printf("== apk diff ==\n");
+    {
+        const std::vector<std::string_view> a = {"a", "b", "c", "d"}, b = {"a", "x", "c", "d", "e"};
+        const auto edits = textdiff::diff(a, b);
+        int eq = 0, del = 0, ins = 0;
+        for (const auto& e : edits) (e.op == textdiff::Op::Equal ? eq : e.op == textdiff::Op::Delete ? del : ins)++;
+        CHECK(eq == 3 && del == 1 && ins == 2, "myers diff: b->x replaced, e appended");
+        const auto rows = textdiff::sideBySide(edits);
+        CHECK(rows.size() == 5 && rows[1].changed && rows[1].a == 1 && rows[1].b == 1 && rows[4].a < 0 && rows[4].b == 4,
+              "side by side pairs the replaced line, appends the insert");
+        const auto same = textdiff::diff(a, a);
+        CHECK(same.size() == 4 && std::all_of(same.begin(), same.end(), [](const textdiff::Edit& e) { return e.op == textdiff::Op::Equal; }),
+              "identical texts are all equal");
+        std::vector<std::string> big1, big2;
+        for (int i = 0; i < 3000; ++i) big1.push_back(std::to_string(i)), big2.push_back(std::to_string(i * 7 + 1));
+        std::vector<std::string_view> v1(big1.begin(), big1.end()), v2(big2.begin(), big2.end());
+        const auto capped = textdiff::diff(v1, v2, 50);
+        CHECK(capped.size() >= 5900, "edit cap falls back to replace-all without blowing up");
+        CHECK(textdiff::splitLines("a\r\nb\n").size() == 2 && textdiff::splitLines("").empty(), "line splitting");
+    }
+    auto [a, b] = fixtures::diffApps();
+    CHECK(a && b, "diff fixtures analysed");
+    if (!a || !b) return;
+    {
+        const auto defs = a->findMethodDefs("Lcom/app/Main;", "run");
+        const std::string listing = defs.empty() ? "" : ApkDiff::normalizedListing(*a, defs.front());
+        CHECK(listing.find("/* 0") == std::string::npos && listing.find("const-string") != std::string::npos,
+              "normalised listing drops offsets");
+    }
+    ApkDiff::Side sa, sb;
+    sa.analysis = a;
+    sb.analysis = b;
+    sa.info.packageName = sb.info.packageName = "com.app";
+    sa.info.versionName = "1.0";
+    sb.info.versionName = "1.1";
+    sa.info.permissions = {"android.permission.INTERNET", "android.permission.READ_SMS"};
+    sb.info.permissions = {"android.permission.INTERNET", "android.permission.CAMERA"};
+    ApkComponent recv;
+    recv.type = "receiver";
+    recv.name = ".Recv";
+    sa.info.components = {recv};
+    recv.exported = true;
+    recv.actions = {"android.intent.action.BOOT_COMPLETED"};
+    sb.info.components = {recv};
+    sa.entries = {{"classes.dex", 100, 50, 1, 8}, {"lib/arm64-v8a/libx.so", 10, 5, 7, 8}, {"res/a.png", 4, 4, 9, 0}};
+    sb.entries = {{"classes.dex", 120, 60, 2, 8}, {"lib/arm64-v8a/libx.so", 10, 5, 8, 8}, {"res/b.png", 4, 4, 9, 0}};
+    const ApkDiff d = ApkDiff::compare(sa, sb, {});
+    CHECK(d.manifest.size() == 1 && d.manifest[0].field == "versionName" && d.manifest[0].b == "1.1", "manifest field change");
+    CHECK(d.permissionsAdded == std::vector<std::string>{"android.permission.CAMERA"} &&
+              d.permissionsRemoved == std::vector<std::string>{"android.permission.READ_SMS"},
+          "permission changes");
+    CHECK(d.components.size() == 1 && d.components[0].kind == ApkDiff::Kind::Changed &&
+              d.components[0].detail.find("exported: no -> yes") != std::string::npos &&
+              d.components[0].detail.find("BOOT_COMPLETED") != std::string::npos,
+          "component became exported with a new action");
+    CHECK(d.entries.size() == 4 && d.natives.size() == 1 && d.natives[0].kind == ApkDiff::Kind::Changed, "files and native libraries");
+    CHECK(d.classesRenamed.size() == 1 && d.classesRenamed[0].from == "com.app.a" && d.classesRenamed[0].to == "com.app.b",
+          "obfuscator rename detected by code shape");
+    CHECK(d.classesRemoved == std::vector<std::string>{"com.app.Gone"}, "renamed class not reported as removed");
+    CHECK(std::find(d.classesAdded.begin(), d.classesAdded.end(), "com.app.New") != d.classesAdded.end() &&
+              std::find(d.classesAdded.begin(), d.classesAdded.end(), "com.app.b") == d.classesAdded.end(),
+          "renamed class not reported as added");
+    CHECK(d.methodsCosmetic == 1, "register-only change is cosmetic");
+    CHECK(d.methodsChanged.size() == 1 && d.methodDetails.size() == 1 && d.methodDetails[0].signature == "Lcom/app/Main;->run()V",
+          "one meaningful method change");
+    if (!d.methodDetails.empty()) {
+        const auto& m = d.methodDetails[0];
+        CHECK(m.callsAdded.size() == 1 && m.callsAdded[0].find("Cipher;->getInstance") != std::string::npos, "new call reported");
+        CHECK(std::find(m.stringsAdded.begin(), m.stringsAdded.end(), "AES/GCM/NoPadding") != m.stringsAdded.end() &&
+                  m.stringsRemoved == std::vector<std::string>{"http://old.example.com/api"},
+              "strings added and removed");
+        CHECK(m.added >= 3 && m.removed >= 1 && m.summary.find("Cipher.getInstance") != std::string::npos, "instruction counts and summary");
+    }
+    CHECK(d.endpointsAdded == std::vector<std::string>{"https://new.example.com/api"} &&
+              d.endpointsRemoved == std::vector<std::string>{"http://old.example.com/api"},
+          "endpoint changes");
+    CHECK(d.libraries.size() == 1 && d.libraries[0].name == "OkHttp" && d.libraries[0].kind == ApkDiff::Kind::Added, "library added");
+
+    // Library detection from version files.
+    CHECK(libcatalog::isVersionFile("META-INF/androidx.core_core.version") && !libcatalog::isVersionFile("META-INF/x/y.version") &&
+              !libcatalog::isVersionFile("res/a.version"),
+          "version file names");
+    const auto found = libcatalog::detect(b.get(), {{"META-INF/com.squareup.okhttp3_okhttp.version", "4.12.0\n"},
+                                                    {"META-INF/androidx.lifecycle_lifecycle-runtime.version", "2.6.2"}});
+    const auto ok = std::find_if(found.begin(), found.end(), [](const libcatalog::Detection& x) { return x.lib && std::string(x.lib->id) == "okhttp3"; });
+    CHECK(ok != found.end() && ok->classes == 1 && ok->version == "4.12.0", "catalogued library gets its version from META-INF");
+    const auto other = std::find_if(found.begin(), found.end(), [](const libcatalog::Detection& x) { return !x.lib; });
+    CHECK(other != found.end() && other->maven == "androidx.lifecycle:lifecycle-runtime" && other->version == "2.6.2",
+          "uncatalogued artifact kept by its coordinates");
 }

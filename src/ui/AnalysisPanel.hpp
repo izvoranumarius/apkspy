@@ -8,7 +8,6 @@
 #include <unordered_set>
 #include <vector>
 #include "analysis/ApkAnalysis.hpp"
-#include "analysis/ApkDiff.hpp"
 #include "analysis/Decompiler.hpp"
 #include "analysis/ElfFile.hpp"
 #include "analysis/NativeCode.hpp"
@@ -243,14 +242,6 @@ private:
     std::vector<ResourceTable::Item> resItems_;
     std::string resKey_;
     const ResourceTable* resOwner_ = nullptr;
-
-    // Compare
-    int compareWith_ = -1;
-    std::future<ApkDiff> diffJob_;
-    bool diffValid_ = false;
-    ApkDiff diff_;
-    std::string diffTitle_;
-    std::vector<std::string> permAdded_, permRemoved_;
 };
 
 // The selected method or native function: listing, control-flow graph, call graph.

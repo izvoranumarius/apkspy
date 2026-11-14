@@ -1903,8 +1903,11 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
 
     // ----------------------------------------------------------------- compare
     server.addTool({"compare_apks", "Compare APKs",
-                    "Compares two APKs of the project: archive entries, manifest facts and (when both analyses "
-                    "are ready) added/removed classes and changed method bodies.",
+                    "Compares two APKs of the project: manifest (versions, SDKs, flags, signing certificate), "
+                    "permissions, components, archive entries, resources, native libraries (exported symbols), "
+                    "bundled libraries and versions, and - when both analyses are ready - classes (with obfuscator "
+                    "renames detected), methods (what changed in each: instructions, calls, strings; register-only "
+                    "changes counted as cosmetic) and network endpoints.",
                     schema::object({{"apk_a", str("Old APK group")}, {"apk_b", str("New APK group")},
                                     {"limit", integer("Max items per list (default 300)", 1, 5000)}},
                                    {"apk_a", "apk_b"}),
@@ -1914,48 +1917,85 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                         Root* a = resolveApk(ws, ja, err);
                         Root* b = a ? resolveApk(ws, jb, err) : nullptr;
                         if (!a || !b) return McpToolResult::error(err);
-                        auto* archA = dynamic_cast<ApkArchive*>(a->source.get());
-                        auto* archB = dynamic_cast<ApkArchive*>(b->source.get());
-                        if (!archA || !archB) return McpToolResult::error("not APK archives");
-                        ApkDiff diff = ApkDiff::compareEntries(archA->entries(), archB->entries());
-                        ws.resources(a->title);
-                        ws.resources(b->title);
-                        const ApkInfo ia = ApkInfo::extract(*a), ib = ApkInfo::extract(*b);
-                        auto anA = ws.analysis().get(a->title), anB = ws.analysis().get(b->title);
+                        ApkDiff::Side sideA, sideB;
+                        if (!ws.diffSide(a->title, sideA) || !ws.diffSide(b->title, sideB)) return McpToolResult::error("not APK archives");
                         const size_t limit = static_cast<size_t>(argInt(args, "limit", 300));
-                        return McpToolOutcome::later([diff = std::move(diff), ia, ib, anA, anB, limit](McpToolContext& ctx) mutable {
-                            if (anA && anB) diff.compareCode(*anA, *anB, limit, ctx.cancel);
+                        return McpToolOutcome::later([sideA = std::move(sideA), sideB = std::move(sideB), limit](McpToolContext& ctx) {
+                            ApkDiff::Options opt;
+                            opt.limit = limit;
+                            const ApkDiff diff = ApkDiff::compare(sideA, sideB, opt, ctx.cancel);
+                            const ApkInfo& ia = sideA.info;
+                            const ApkInfo& ib = sideB.info;
+                            const auto list = [limit](const std::vector<std::string>& v) {
+                                Json l = Json::array();
+                                for (size_t i = 0; i < v.size() && i < limit; ++i) l.push(json::sanitizeUtf8(v[i]));
+                                return l;
+                            };
                             Json entries = Json::array();
                             for (const auto& e : diff.entries) {
                                 if (entries.size() >= limit) break;
                                 entries.push(Json::obj({{"path", e.path}, {"change", ApkDiff::kindName(e.kind)},
                                                         {"size_a", static_cast<unsigned long long>(e.sizeA)}, {"size_b", static_cast<unsigned long long>(e.sizeB)}}));
                             }
-                            std::set<std::string> const pa(ia.permissions.begin(), ia.permissions.end());
-                            std::set<std::string> const pb(ib.permissions.begin(), ib.permissions.end());
-                            Json permAdded = Json::array(), permRemoved = Json::array();
-                            for (const auto& p : pb)
-                                if (!pa.count(p)) permAdded.push(p);
-                            for (const auto& p : pa)
-                                if (!pb.count(p)) permRemoved.push(p);
-                            const auto list = [](const std::vector<std::string>& v) {
-                                Json l = Json::array();
-                                for (const auto& s : v) l.push(s);
-                                return l;
-                            };
+                            Json manifest = Json::array();
+                            for (const auto& f : diff.manifest) manifest.push(Json::obj({{"field", f.field}, {"a", f.a}, {"b", f.b}}));
+                            Json components = Json::array();
+                            for (const auto& c : diff.components)
+                                components.push(Json::obj({{"name", c.name}, {"type", c.type}, {"change", ApkDiff::kindName(c.kind)}, {"detail", c.detail}}));
+                            Json natives = Json::array();
+                            for (const auto& n : diff.natives)
+                                natives.push(Json::obj({{"path", n.path}, {"change", ApkDiff::kindName(n.kind)},
+                                                        {"size_a", static_cast<unsigned long long>(n.sizeA)}, {"size_b", static_cast<unsigned long long>(n.sizeB)},
+                                                        {"exports_added", list(n.exportsAdded)}, {"exports_removed", list(n.exportsRemoved)}}));
+                            Json libraries = Json::array();
+                            for (const auto& l : diff.libraries)
+                                libraries.push(Json::obj({{"name", l.name}, {"change", ApkDiff::kindName(l.kind)}, {"version_a", l.versionA},
+                                                          {"version_b", l.versionB}, {"classes_a", static_cast<unsigned long long>(l.classesA)},
+                                                          {"classes_b", static_cast<unsigned long long>(l.classesB)}}));
+                            Json resources = Json::array();
+                            for (const auto& r : diff.resources) {
+                                if (resources.size() >= limit) break;
+                                resources.push(Json::obj({{"name", r.name}, {"change", ApkDiff::kindName(r.kind)},
+                                                          {"a", json::sanitizeUtf8(r.a)}, {"b", json::sanitizeUtf8(r.b)}}));
+                            }
                             Json j = Json::obj({{"version_a", ia.versionName + " (" + ia.versionCode + ")"},
                                                 {"version_b", ib.versionName + " (" + ib.versionCode + ")"},
+                                                {"manifest", std::move(manifest)},
+                                                {"permissions_added", list(diff.permissionsAdded)},
+                                                {"permissions_removed", list(diff.permissionsRemoved)},
+                                                {"components", std::move(components)},
                                                 {"entries_changed", static_cast<unsigned long long>(diff.entries.size())},
                                                 {"entries_unchanged", static_cast<unsigned long long>(diff.entriesUnchanged)},
                                                 {"entries", std::move(entries)},
-                                                {"permissions_added", std::move(permAdded)},
-                                                {"permissions_removed", std::move(permRemoved)}});
+                                                {"native_libraries", std::move(natives)},
+                                                {"libraries", std::move(libraries)}});
+                            if (diff.resourcesCompared) {
+                                j.set("resources", std::move(resources));
+                                j.set("resources_unchanged", static_cast<unsigned long long>(diff.resourcesUnchanged));
+                            }
                             if (diff.codeCompared) {
                                 j.set("classes_added", list(diff.classesAdded));
                                 j.set("classes_removed", list(diff.classesRemoved));
+                                Json renamed = Json::array();
+                                for (const auto& r : diff.classesRenamed) renamed.push(Json::obj({{"from", r.from}, {"to", r.to}}));
+                                j.set("classes_renamed", std::move(renamed));
                                 j.set("methods_added", list(diff.methodsAdded));
                                 j.set("methods_removed", list(diff.methodsRemoved));
-                                j.set("methods_changed", list(diff.methodsChanged));
+                                Json changed = Json::array();
+                                for (const auto& m : diff.methodDetails) {
+                                    if (changed.size() >= limit) break;
+                                    Json mj = Json::obj({{"method", m.signature}, {"instructions_added", m.added}, {"instructions_removed", m.removed},
+                                                         {"summary", json::sanitizeUtf8(m.summary)}});
+                                    if (!m.callsAdded.empty()) mj.set("calls_added", list(m.callsAdded));
+                                    if (!m.callsRemoved.empty()) mj.set("calls_removed", list(m.callsRemoved));
+                                    if (!m.stringsAdded.empty()) mj.set("strings_added", list(m.stringsAdded));
+                                    if (!m.stringsRemoved.empty()) mj.set("strings_removed", list(m.stringsRemoved));
+                                    changed.push(std::move(mj));
+                                }
+                                j.set("methods_changed", std::move(changed));
+                                j.set("methods_cosmetic", static_cast<unsigned long long>(diff.methodsCosmetic));
+                                j.set("endpoints_added", list(diff.endpointsAdded));
+                                j.set("endpoints_removed", list(diff.endpointsRemoved));
                                 j.set("code_lists_truncated", diff.truncated);
                             } else {
                                 j.set("code_comparison", "skipped - run run_analysis on both APKs first");
@@ -2025,6 +2065,23 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             ws.requestMethodView({apk->title, method, argStr(args, "view", "listing")});
                             if (showPanel) showPanel("Analysis");
                             return McpToolResult::ok(Json::obj({{"shown", method}}));
+                        }});
+        server.addTool({"show_diff", "Show an APK comparison in ApkSpy",
+                        "Opens the Diff panel on two APKs of the project (old, new) so the user sees the comparison; "
+                        "with `method`, that changed method side by side. Use compare_apks for the data.",
+                        schema::object({{"apk_a", str("Old APK group")}, {"apk_b", str("New APK group")},
+                                        {"method", str("Changed method to show, e.g. Lcom/a/B;->name(I)V")}},
+                                       {"apk_a", "apk_b"}),
+                        false, false, [&ws, showPanel = env.showPanel](const Json& args, McpToolContext&) -> McpToolOutcome {
+                            std::string err;
+                            Json ja = Json::obj({{"apk", args.get("apk_a")}}), jb = Json::obj({{"apk", args.get("apk_b")}});
+                            Root const* a = resolveApk(ws, ja, err);
+                            Root const* b = a ? resolveApk(ws, jb, err) : nullptr;
+                            if (!a || !b) return McpToolResult::error(err);
+                            if (a == b) return McpToolResult::error("apk_a and apk_b are the same APK");
+                            ws.requestDiffView({a->title, b->title, argStr(args, "method")});
+                            if (showPanel) showPanel("Diff");
+                            return McpToolResult::ok(Json::obj({{"shown", a->title + " -> " + b->title}}));
                         }});
         server.addTool({"show_native", "Show native code in ApkSpy",
                         "Opens the Analysis panel's native view on a function or address of an arm64 library so "

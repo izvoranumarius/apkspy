@@ -13,6 +13,7 @@
 #include "imgui_internal.h"
 #include "ui/AnalysisPanel.hpp"
 #include "ui/BehaviorPanel.hpp"
+#include "ui/DiffPanel.hpp"
 #include "ui/DevicePanels.hpp"
 #include "ui/EditorPanel.hpp"
 #include "ui/ExplorerPanel.hpp"
@@ -70,7 +71,7 @@ std::vector<ProjectApk> collectApks(const Workspace& workspace, const Project& p
 
 namespace {
 // Version of the default dock layout (see Settings::kLayoutVersion).
-constexpr int kLayoutVersion = 15;
+constexpr int kLayoutVersion = 16;
 }  // namespace
 
 Application::Application()
@@ -98,6 +99,7 @@ Application::Application()
     panels_.push_back(std::make_unique<ReferencesPanel>(workspace_, *analysisPanel_));
     panels_.push_back(std::make_unique<DecompilerPanel>(workspace_, *analysisPanel_));
     panels_.push_back(std::make_unique<BehaviorPanel>(workspace_, show));
+    panels_.push_back(std::make_unique<DiffPanel>(workspace_, show));
     panels_.push_back(std::make_unique<DevicesPanel>(workspace_, devices_, show));
     auto debugger = std::make_unique<DebuggerPanel>(workspace_, devices_);
     debuggerPanel_ = debugger.get();
@@ -934,7 +936,7 @@ void Application::drawDockHost() {
 void Application::initPerspectives() {
     perspectives_ = {
         {"Code", "Browse the APK, read and search the sources", "Editor", {"Explorer", "Overview", "Editor", "Search", "Bookmarks", "Output", "Terminal"}, {}},
-        {"Analysis", "Classes, native code, graphs, strings and resources", "Analysis", {"Analysis", "Function", "Behavior", "Decompiler", "Editor", "References", "Bookmarks"}, {}},
+        {"Analysis", "Classes, native code, graphs, strings and resources", "Analysis", {"Analysis", "Function", "Behavior", "Diff", "Decompiler", "Editor", "References", "Bookmarks"}, {}},
         {"Debug", "Attach to a process: threads, stack, locals and logs", "Debugger", {"Devices", "Debugger", "Editor", "Logcat", "Terminal"}, {}},
         {"Network", "Capture the app's traffic and map its API", "Traffic", {"Traffic", "Logcat", "Terminal"}, {}},
         {"Scripts", "Automate ApkSpy with Python", "Script", {"Script", "Output", "Terminal"}, {}},
@@ -1083,6 +1085,7 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
         dock("Analysis", side);
         dock("Function", main);
         dock("Behavior", main);
+        dock("Diff", main);
         dock("Decompiler", right);
         dock("Editor", right);
         dock("References", bottom);

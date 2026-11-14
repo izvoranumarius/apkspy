@@ -7,6 +7,7 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "core/ApkInfo.hpp"
 #include "core/AxmlDecoder.hpp"
 #include "core/Paths.hpp"
 #include "core/SafePath.hpp"
@@ -700,6 +701,19 @@ void Workspace::exportFolder(Root& root, const TreeNode& folder, const std::stri
     collectExportItems(root, folder, folder, items);
     export_.start(destDir, std::move(items), decoded);
     log("Exporting " + folder.name() + " (" + std::to_string(export_.total()) + " file(s)) to " + destDir);
+}
+
+bool Workspace::diffSide(const std::string& group, ApkDiff::Side& out) {
+    Root* apk = rootByGroup(group, Root::Kind::Apk);
+    if (!apk || apk->title != group) return false;
+    auto* archive = dynamic_cast<ApkArchive*>(apk->source.get());
+    if (!archive) return false;
+    out.apkPath = apk->apkPath;
+    out.entries = archive->entries();
+    out.resources = resources(group);  // first: the manifest resolves its label through it
+    out.info = ApkInfo::extract(*apk);
+    out.analysis = analysis_.get(group);
+    return true;
 }
 
 std::shared_ptr<const ResourceTable> Workspace::resources(const std::string& group) {

@@ -1,5 +1,8 @@
 #include "analysis/LibraryCatalog.hpp"
 #include <algorithm>
+#include <cctype>
+#include <map>
+#include "analysis/ApkAnalysis.hpp"
 
 namespace libcatalog {
 namespace {
@@ -172,6 +175,89 @@ bool isPlatformClass(std::string_view d) {
     if (d.substr(0, 17) == "Landroid/support/") return false;
     if (d.substr(0, 14) == "Ljavax/inject/") return false;
     return std::any_of(std::begin(kPlatform), std::end(kPlatform), [&](std::string_view p) { return d.substr(0, p.size()) == p; });
+}
+
+namespace {
+
+// "androidx.core:core-ktx" / "androidx.core_core-ktx" -> "androidx_core_core_ktx"
+std::string normalizeCoord(std::string_view s) {
+    std::string out;
+    for (char c : s) out += (c == '.' || c == ':' || c == '-') ? '_' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return out;
+}
+
+std::string trimVersion(std::string_view v) {
+    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.remove_suffix(1);
+    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front()))) v.remove_prefix(1);
+    if (v.size() > 64) v = v.substr(0, 64);
+    return std::string(v);
+}
+
+}  // namespace
+
+bool isVersionFile(std::string_view p) {
+    return p.size() > 17 && p.substr(0, 9) == "META-INF/" && p.find('/', 9) == std::string_view::npos &&
+           p.substr(p.size() - 8) == ".version";
+}
+
+std::vector<Detection> detect(const ApkAnalysis* a, const std::vector<std::pair<std::string, std::string>>& versionFiles) {
+    std::map<const Library*, size_t> counts;
+    if (a)
+        for (const ApkAnalysis::ClassEntry& c : a->classes())
+            if (const Library* lib = forClass(a->classDescriptor(c))) ++counts[lib];
+
+    std::vector<Detection> out;
+    std::map<std::string, size_t> byMaven;  // normalized coordinates -> index in out
+    for (const auto& [lib, n] : counts) {
+        Detection d;
+        d.lib = lib;
+        d.maven = lib->maven;
+        d.classes = n;
+        if (lib->maven[0]) byMaven[normalizeCoord(lib->maven)] = out.size();
+        out.push_back(std::move(d));
+    }
+    for (const auto& [path, contents] : versionFiles) {
+        if (!isVersionFile(path)) continue;
+        const std::string stem = path.substr(9, path.size() - 9 - 8);  // "androidx.core_core"
+        const std::string key = normalizeCoord(stem);
+        const std::string version = trimVersion(contents);
+        // A catalogued library, by full coordinates or by artifact name alone.
+        const Library* match = nullptr;
+        for (const Library& lib : all()) {
+            if (!lib.maven[0]) continue;
+            const std::string_view coord(lib.maven);
+            const size_t colon = coord.find(':');
+            if (normalizeCoord(coord) == key || (colon != std::string_view::npos && normalizeCoord(coord.substr(colon + 1)) == key)) {
+                match = &lib;
+                break;
+            }
+        }
+        if (match) {
+            auto it = byMaven.find(normalizeCoord(match->maven));
+            if (it != byMaven.end()) {
+                if (out[it->second].version.empty()) out[it->second].version = version;
+                continue;
+            }
+            Detection d;
+            d.lib = match;
+            d.maven = match->maven;
+            d.version = version;
+            byMaven[normalizeCoord(match->maven)] = out.size();
+            out.push_back(std::move(d));
+            continue;
+        }
+        // Not in the catalog: still a dependency, named by its coordinates.
+        Detection d;
+        const size_t underscore = stem.find('_');
+        d.maven = underscore == std::string::npos ? stem : stem.substr(0, underscore) + ":" + stem.substr(underscore + 1);
+        d.version = version;
+        out.push_back(std::move(d));
+    }
+    std::sort(out.begin(), out.end(), [](const Detection& x, const Detection& y) {
+        const std::string_view nx = x.lib ? x.lib->name : x.maven, ny = y.lib ? y.lib->name : y.maven;
+        return nx < ny;
+    });
+    return out;
 }
 
 }  // namespace libcatalog
