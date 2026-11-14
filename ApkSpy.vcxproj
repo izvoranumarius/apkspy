@@ -116,6 +116,10 @@
     <ClInclude Include="src\mcp\McpTransports.hpp" />
     <ClInclude Include="src\mcp\McpTools.hpp" />
     <ClInclude Include="src\analysis\ApkDiff.hpp" />
+    <ClInclude Include="src\ui\BehaviorPanel.hpp" />
+    <ClInclude Include="src\analysis\Jni.hpp" />
+    <ClInclude Include="src\analysis\BehaviorGraph.hpp" />
+    <ClInclude Include="src\analysis\LibraryCatalog.hpp" />
     <ClInclude Include="src\mcp\McpServer.hpp" />
     <ClInclude Include="src\debug\Jdwp.hpp" />
     <ClInclude Include="src\debug\DeviceService.hpp" />
@@ -201,6 +205,9 @@
     <ClCompile Include="src\mcp\McpTransports.cpp" />
     <ClCompile Include="src\mcp\McpTools.cpp" />
     <ClCompile Include="src\analysis\ApkDiff.cpp" />
+    <ClCompile Include="src\ui\BehaviorPanel.cpp" />
+    <ClCompile Include="src\analysis\BehaviorGraph.cpp" />
+    <ClCompile Include="src\analysis\LibraryCatalog.cpp" />
     <ClCompile Include="src\mcp\McpServer.cpp" />
     <ClCompile Include="src\debug\Jdwp.cpp" />
     <ClCompile Include="src\debug\DeviceService.cpp" />

@@ -207,13 +207,24 @@ void AnalysisPanel::drawContents() {
     }
     current_ = analysis;
     currentGroup_ = apk.title;
-    if (methodRequested && analysis) {
+    if (methodRequested && analysis && methodReq.view == "class") {
+        // A class (descriptor or Java name): its source in the Editor.
+        const ApkAnalysis::ClassEntry* entry = analysis->findClass(methodReq.method);
+        uint32_t index = UINT32_MAX;
+        if (entry)
+            for (uint32_t i = 0; i < static_cast<uint32_t>(analysis->classes().size()); ++i)
+                if (analysis->classes()[i].dex == entry->dex && analysis->classes()[i].def == entry->def) index = i;
+        if (index == UINT32_MAX) workspace_.log("No bytecode in this APK for " + methodReq.method, "analysis");
+        else selectClass(*analysis, index, apk.title, false);
+    } else if (methodRequested && analysis) {
         std::string cls, name, proto;
         std::vector<ApkAnalysis::MethodDef> defs;
         if (ApkAnalysis::splitMethodRef(methodReq.method, cls, name, proto)) defs = analysis->findMethodDefs(cls, name, proto);
         if (defs.empty()) workspace_.log("No bytecode in this APK for " + methodReq.method, "analysis");
         else if (methodReq.view == "graph") showGraph(*analysis, defs.front());
         else if (methodReq.view == "calls") showCallGraph(*analysis, defs.front());
+        // "source": open the code (Java, or the smali listing) without bringing the Function panel forward.
+        else if (methodReq.view == "source") selectMethod(*analysis, defs.front(), apk.title, true, false, false);
         else selectMethod(*analysis, defs.front(), apk.title, false), showFunction(0);
     }
 
@@ -523,7 +534,7 @@ void AnalysisPanel::selectClass(const ApkAnalysis& a, uint32_t cls, const std::s
 // A method: the Function and References panels follow it; the Java opens at
 // the method when jadx output exists.
 void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m, const std::string& group,
-                                 bool openSource, bool keep) {
+                                 bool openSource, bool keep, bool focusFunction) {
     const DexFile& dex = *a.dexes()[m.dex];
     const uint32_t idx = m.method.methodIdx;
     const std::string cls(dex.typeDescriptor(dex.methodClass(idx)));
@@ -575,9 +586,13 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
         }
         // The listing stays in front: the Decompiler panel shows the method next to it,
         // jadx's Java waits in the Editor tab.
-        if (showPanel_) showPanel_("Function");
-    } else {
+        if (focusFunction && showPanel_) showPanel_("Function");
+        else if (!focusFunction && showPanel_) showPanel_("Editor");
+    } else if (focusFunction) {
         showFunction(0);  // no Java: the smali listing is the code
+    } else {
+        openMethod(a, m, group);  // the smali listing in the Editor
+        if (showPanel_) showPanel_("Editor");
     }
 }
 

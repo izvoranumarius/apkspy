@@ -55,7 +55,7 @@ private:
     const std::vector<ApkAnalysis::MethodDef>& methodsOfClass(const ApkAnalysis& a, uint32_t cls);
     void selectClass(const ApkAnalysis& a, uint32_t cls, const std::string& group, bool keep);
     void selectMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m, const std::string& group, bool openSource,
-                      bool keep = false);
+                      bool keep = false, bool focusFunction = true);
     void drawMethodView(const ApkAnalysis& a, Root& apk);
     void drawMethodListing(const ApkAnalysis& a, Root& apk);
     void drawQueryResults(const ApkAnalysis& a, Root& apk);

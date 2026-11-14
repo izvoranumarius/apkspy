@@ -8,6 +8,7 @@
 #include <set>
 #include <thread>
 #include "analysis/ApkDiff.hpp"
+#include "analysis/BehaviorGraph.hpp"
 #include "analysis/Dalvik.hpp"
 #include "analysis/Decompiler.hpp"
 #include "core/ApkInfo.hpp"
@@ -1192,6 +1193,75 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                      }
                      return McpToolResult::ok(std::move(out));
                  });
+
+    server.addTool({"behavior_graph", "Behavior graph",
+                    "What each manifest component can reach: the permissions, network endpoints, storage and native code "
+                    "its call paths touch, with the shortest call path to each. Flagged: exported components, permissions "
+                    "used but not declared, cleartext endpoints. Same model as the Behavior panel.",
+                    schema::object({{"apk", apkArg()},
+                                    {"component", str("Only components whose class contains this text")},
+                                    {"flagged_only", boolean("Only flagged components, and paths to flagged capabilities")},
+                                    {"limit", integer("Max capabilities per component (default 40)", 1, 500)}}),
+                    true, false,
+                    [&ws](const Json& args, McpToolContext&) -> McpToolOutcome {
+                        std::string err;
+                        Root* apk = resolveApk(ws, args, err);
+                        if (!apk) return McpToolResult::error(err);
+                        auto a = requireAnalysis(ws, *apk, err);
+                        if (!a) return McpToolResult::error(err);
+                        // The manifest is read here, on the owner thread; the walk runs off it.
+                        const ApkInfo info = ApkInfo::extract(*apk);
+                        if (!info.ok) return McpToolResult::error("the manifest could not be decoded");
+                        behavior::Input input{info.packageName, info.components, info.permissions, std::atoi(info.targetSdk.c_str())};
+                        return McpToolOutcome::later([a, args, input = std::move(input)](McpToolContext&) {
+                            const behavior::Graph g = behavior::build(*a, input);
+                            const std::string filter = argStr(args, "component");
+                            const bool flaggedOnly = argBool(args, "flagged_only", false);
+                            const size_t limit = static_cast<size_t>(argInt(args, "limit", 40));
+                            const auto nodeJson = [&](uint32_t i) {
+                                const behavior::Node& n = g.nodes[i];
+                                Json j = Json::obj({{"kind", behavior::kindName(n.kind)}, {"name", json::sanitizeUtf8(n.key)}});
+                                if (!n.detail.empty()) j.set("detail", n.detail);
+                                if (n.flagged) j.set("flagged", true);
+                                return j;
+                            };
+                            Json components = Json::array();
+                            std::set<uint32_t> used;
+                            for (uint32_t i = 0; i < static_cast<uint32_t>(g.nodes.size()); ++i) {
+                                const behavior::Node& n = g.nodes[i];
+                                if (n.kind != behavior::NodeKind::Component) continue;
+                                if (!filter.empty() && DexFile::descriptorToJava(n.key).find(filter) == std::string::npos) continue;
+                                if (flaggedOnly && !n.flagged) continue;
+                                Json reaches = Json::array();
+                                size_t count = 0;
+                                for (const behavior::Reach& r : behavior::reachableCapabilities(g, i)) {
+                                    if (flaggedOnly && !g.nodes[r.node].flagged && !n.flagged) continue;
+                                    if (count++ >= limit) break;
+                                    Json path = Json::array();
+                                    for (size_t k = 1; k + 1 < r.path.size(); ++k) path.push(g.nodes[r.path[k]].key);
+                                    Json j = nodeJson(r.node);
+                                    j.set("via", std::move(path));
+                                    reaches.push(std::move(j));
+                                    used.insert(r.node);
+                                }
+                                Json c = Json::obj({{"class", DexFile::descriptorToJava(n.key)}, {"type", n.detail}, {"reaches", std::move(reaches)}});
+                                if (n.flagged) c.set("flagged", true);
+                                components.push(std::move(c));
+                            }
+                            Json capabilities = Json::array();
+                            for (uint32_t i : used) {
+                                Json j = nodeJson(i);
+                                Json evidence = Json::array();
+                                for (size_t k = 0; k < g.nodes[i].evidence.size() && k < 10; ++k) evidence.push(json::sanitizeUtf8(g.nodes[i].evidence[k]));
+                                j.set("evidence", std::move(evidence));
+                                capabilities.push(std::move(j));
+                            }
+                            return McpToolResult::ok(Json::obj({{"components", std::move(components)},
+                                                                {"capabilities", std::move(capabilities)},
+                                                                {"methods_walked", static_cast<unsigned long long>(g.methodsVisited)},
+                                                                {"truncated", g.truncated}}));
+                        });
+                    }});
 
     // ------------------------------------------------------------------ native
     server.addTool({"list_native_libs", "Native libraries", "Native libraries (lib/<abi>/*.so) shipped in the APK.",

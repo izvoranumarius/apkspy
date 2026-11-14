@@ -43,6 +43,8 @@ public:
     size_t size() const { return blocks_.size(); }
     // Brings a block into view (after set(): applied on the next draw).
     void focusBlock(int block);
+    // The selected block (click or focusBlock), or -1.
+    int selected() const { return selected_; }
 
     // Fills the remaining space of the current window. `font` draws the block text.
     Result draw(const char* id, ImFont* font);

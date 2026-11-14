@@ -192,6 +192,18 @@
     <ClInclude Include="src\analysis\ApkDiff.hpp">
       <Filter>Header Files\analysis</Filter>
     </ClInclude>
+    <ClInclude Include="src\ui\BehaviorPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\Jni.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\BehaviorGraph.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\LibraryCatalog.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
     <ClInclude Include="src\mcp\McpServer.hpp">
       <Filter>Header Files\mcp</Filter>
     </ClInclude>
@@ -441,6 +453,15 @@
       <Filter>Source Files\mcp</Filter>
     </ClCompile>
     <ClCompile Include="src\analysis\ApkDiff.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\BehaviorPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\BehaviorGraph.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\LibraryCatalog.cpp">
       <Filter>Source Files\analysis</Filter>
     </ClCompile>
     <ClCompile Include="src\mcp\McpServer.cpp">
