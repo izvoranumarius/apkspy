@@ -141,6 +141,9 @@
     <ClInclude Include="src\analysis\NativeCode.hpp">
       <Filter>Header Files\analysis</Filter>
     </ClInclude>
+    <ClInclude Include="src\analysis\Decompiler.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
     <ClInclude Include="src\analysis\Arm64.hpp">
       <Filter>Header Files\analysis</Filter>
     </ClInclude>
@@ -391,6 +394,12 @@
     </ClCompile>
     <ClCompile Include="src\analysis\NativeCode.cpp">
       <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\Decompiler.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\AnalysisDecompiler.cpp">
+      <Filter>Source Files\ui</Filter>
     </ClCompile>
     <ClCompile Include="src\analysis\Arm64.cpp">
       <Filter>Source Files\analysis</Filter>

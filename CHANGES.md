@@ -1,5 +1,22 @@
 # Changelog
 
+## Decompiler
+
+- **Decompiler** panel in the Analysis workspace, laid out as in Cutter:
+  navigator | listing or graph over References | Decompiler (with jadx's Java
+  as a tab behind it). ApkSpy's own engines decompile the selection without
+  jadx or Ghidra: Dalvik methods to Java-like code, arm64 functions to C-like
+  code, with `if` / `else`, `while`, `switch` and try / catch rebuilt.
+- Lines and instructions stay linked both ways; double-click or Enter follows
+  a call. As in IDA, **N** renames and **Y** retypes the variable under the
+  cursor; names and types are saved with the project.
+- MCP: `decompile_method`, `decompile_native` and `rename_variable`; renames
+  from an AI assistant show up in the panel at once.
+- **Find in project** (`Ctrl+Shift+F`): Search now sits in the Code sidebar
+  next to the Explorer, with hits grouped under their file.
+- Fixed: looking up a string in a dex file could miss it when it held
+  characters outside the BMP (such as emoji) or an encoded NUL.
+
 ## Themes and settings (v0.4.0-beta.1)
 
 - **Nine themes**: Dark Modern (the default), Light, High Contrast, Solarized

@@ -19,6 +19,7 @@
 struct GLFWwindow;
 class EditorPanel;
 class AnalysisPanel;
+class SearchPanel;
 class DebuggerPanel;
 class McpSettings;
 class ScriptPanel;
@@ -121,6 +122,7 @@ private:
     int pendingTabsDelay_ = 0;               // frames until their dock tab bars exist
     EditorPanel* editor_ = nullptr;  // non-owning; document commands (Find, Go to Line) go here
     AnalysisPanel* analysisPanel_ = nullptr;  // non-owning
+    SearchPanel* searchPanel_ = nullptr;      // non-owning; Ctrl+Shift+F focuses its query
     TerminalPanel* terminal_ = nullptr;        // non-owning
     std::unique_ptr<CommandPalette> palette_;
     DebuggerPanel* debuggerPanel_ = nullptr;  // non-owning; global debugger shortcuts

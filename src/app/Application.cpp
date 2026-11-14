@@ -69,7 +69,7 @@ std::vector<ProjectApk> collectApks(const Workspace& workspace, const Project& p
 
 namespace {
 // Version of the default dock layout (see Settings::kLayoutVersion).
-constexpr int kLayoutVersion = 12;
+constexpr int kLayoutVersion = 14;
 }  // namespace
 
 Application::Application()
@@ -85,7 +85,9 @@ Application::Application()
     editor_ = editor.get();
     panels_.push_back(std::move(editor));
     panels_.push_back(std::make_unique<OutputPanel>(workspace_));
-    panels_.push_back(std::make_unique<SearchPanel>(workspace_));
+    auto search = std::make_unique<SearchPanel>(workspace_);
+    searchPanel_ = search.get();
+    panels_.push_back(std::move(search));
     panels_.push_back(std::make_unique<OverviewPanel>(workspace_));
     const auto show = [this](const std::string& title) { showPanel(title); };
     auto analysis = std::make_unique<AnalysisPanel>(workspace_, show);
@@ -93,6 +95,7 @@ Application::Application()
     panels_.push_back(std::move(analysis));
     panels_.push_back(std::make_unique<FunctionPanel>(workspace_, *analysisPanel_));
     panels_.push_back(std::make_unique<ReferencesPanel>(workspace_, *analysisPanel_));
+    panels_.push_back(std::make_unique<DecompilerPanel>(workspace_, *analysisPanel_));
     panels_.push_back(std::make_unique<DevicesPanel>(workspace_, devices_, show));
     auto debugger = std::make_unique<DebuggerPanel>(workspace_, devices_);
     debuggerPanel_ = debugger.get();
@@ -438,6 +441,9 @@ void Application::frame() {
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) requestAction(PendingAction::OpenProject);
     // VS Code keys: Ctrl+P quick open, Ctrl+Shift+P commands, Ctrl+` terminal.
     if (io.KeyCtrl && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_P, false)) palette_->open(io.KeyShift ? ">" : "");
+    // Find in project (as in VS Code): the Search sidebar with its query focused.
+    if (io.KeyCtrl && io.KeyShift && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_F, false) && showPanel("Search") && searchPanel_)
+        searchPanel_->focusQuery();
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false)) toggleTerminal();
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveRequested_ = true;
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Comma, false)) settingsRequested_ = true;
@@ -926,7 +932,7 @@ void Application::drawDockHost() {
 void Application::initPerspectives() {
     perspectives_ = {
         {"Code", "Browse the APK, read and search the sources", "Editor", {"Explorer", "Overview", "Editor", "Search", "Bookmarks", "Output", "Terminal"}, {}},
-        {"Analysis", "Classes, native code, graphs, strings and resources", "Analysis", {"Analysis", "Function", "Editor", "References", "Bookmarks"}, {}},
+        {"Analysis", "Classes, native code, graphs, strings and resources", "Analysis", {"Analysis", "Function", "Decompiler", "Editor", "References", "Bookmarks"}, {}},
         {"Debug", "Attach to a process: threads, stack, locals and logs", "Debugger", {"Devices", "Debugger", "Editor", "Logcat", "Terminal"}, {}},
         {"Network", "Capture the app's traffic and map its API", "Traffic", {"Traffic", "Logcat", "Terminal"}, {}},
         {"Scripts", "Automate ApkSpy with Python", "Script", {"Script", "Output", "Terminal"}, {}},
@@ -1068,15 +1074,17 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
     ImGuiID main = 0, side = 0, bottom = 0, rest = 0;
     // The main tool of each workspace takes the central area.
     if (p.name == "Analysis") {
-        // Navigator | code (Editor and Function as tabs) over References.
-        side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.26f, nullptr, &rest);
+        // As in Cutter: navigator | listing / graph over References | Decompiler (Java source as a tab).
+        side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.22f, nullptr, &rest);
+        ImGuiID right = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.42f, nullptr, &rest);
         bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 0.30f, nullptr, &main);
         dock("Analysis", side);
-        dock("Editor", main);
         dock("Function", main);
+        dock("Decompiler", right);
+        dock("Editor", right);
         dock("References", bottom);
         dock("Bookmarks", bottom);
-        select("Editor"), select("References");
+        select("Function"), select("Decompiler"), select("References");
     } else if (p.name == "Debug") {
         side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.17f, nullptr, &rest);
         ImGuiID editor = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.30f, nullptr, &rest);
@@ -1100,11 +1108,12 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
         dock("Terminal", bottom);
         select("Output"), select("Script");
     } else {
+        // Explorer, Search (find in project) and Overview as sidebar tabs, as in VS Code.
         side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.20f, nullptr, &rest);
         bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 0.25f, nullptr, &main);
-        dock("Explorer", side), dock("Overview", side);
+        dock("Explorer", side), dock("Search", side), dock("Overview", side);
         dock("Editor", main);
-        dock("Search", bottom), dock("Bookmarks", bottom), dock("Output", bottom), dock("Terminal", bottom);
+        dock("Bookmarks", bottom), dock("Output", bottom), dock("Terminal", bottom);
         select("Output"), select("Explorer"), select("Editor");
     }
     // Panels added later from the View menu start beside the streams.
@@ -1219,6 +1228,7 @@ void Application::drawWelcome() {
     ImGui::TextColored(theme::vec(Col::Info), "Get around");
     if (link(icons::FILE, "Go to file", "Ctrl+P")) palette_->open("");
     if (link(icons::SEARCH, "Run a command", "Ctrl+Shift+P")) palette_->open(">");
+    if (link(icons::SEARCH, "Find in project", "Ctrl+Shift+F") && showPanel("Search") && searchPanel_) searchPanel_->focusQuery();
     if (link(icons::TERMINAL, "Terminal", "Ctrl+`")) toggleTerminal();
     if (link(icons::ANALYSIS, "Analyse the code", "Ctrl+2")) pendingPerspective_ = 1;
     ImGui::Dummy(ImVec2(0, ui::em(0.6f)));

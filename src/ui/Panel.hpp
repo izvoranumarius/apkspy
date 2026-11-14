@@ -29,7 +29,7 @@ public:
 protected:
     virtual void drawContents() = 0;
     // Code-like panels draw on the editor background (a shade lighter).
-    virtual bool codeArea() const { return title_ == "Editor" || title_ == "Function" || title_ == "Terminal"; }
+    virtual bool codeArea() const { return title_ == "Editor" || title_ == "Function" || title_ == "Decompiler" || title_ == "Terminal"; }
 
     Workspace& workspace_;
 

@@ -40,6 +40,61 @@ bool readSleb(const uint8_t* data, size_t size, size_t& pos, int32_t& out) {
 
 namespace {
 
+// Reads UTF-16 code units from MUTF-8 or standard UTF-8 (a 4-byte sequence
+// yields a surrogate pair over two calls; C0 80 and a raw 0 both give 0).
+class Utf16Reader {
+public:
+    explicit Utf16Reader(std::string_view s) : s_(s) {}
+    bool next(uint32_t& unit) {
+        if (pendingLow_) {
+            unit = pendingLow_;
+            pendingLow_ = 0;
+            return true;
+        }
+        if (i_ >= s_.size()) return false;
+        const auto byte = [&](size_t k) { return static_cast<uint32_t>(static_cast<unsigned char>(s_[i_ + k])); };
+        const uint32_t c = byte(0);
+        const size_t left = s_.size() - i_;
+        if ((c & 0xE0) == 0xC0 && left >= 2) {
+            unit = ((c & 0x1F) << 6) | (byte(1) & 0x3F);
+            i_ += 2;
+        } else if ((c & 0xF0) == 0xE0 && left >= 3) {
+            unit = ((c & 0x0F) << 12) | ((byte(1) & 0x3F) << 6) | (byte(2) & 0x3F);
+            i_ += 3;
+        } else if ((c & 0xF8) == 0xF0 && left >= 4) {
+            const uint32_t cp = (((c & 0x07) << 18) | ((byte(1) & 0x3F) << 12) | ((byte(2) & 0x3F) << 6) | (byte(3) & 0x3F)) - 0x10000;
+            unit = 0xD800 + (cp >> 10);
+            pendingLow_ = 0xDC00 + (cp & 0x3FF);
+            i_ += 4;
+        } else {
+            unit = c;
+            i_ += 1;
+        }
+        return true;
+    }
+
+private:
+    std::string_view s_;
+    size_t i_ = 0;
+    uint32_t pendingLow_ = 0;
+};
+
+// string_ids are sorted by UTF-16 code units, which byte order does not match
+// for C0 80 (encoded NUL) or for 4-byte UTF-8 queries.
+int compareUtf16(std::string_view a, std::string_view b) {
+    Utf16Reader ra(a), rb(b);
+    for (;;) {
+        uint32_t x = 0, y = 0;
+        const bool hx = ra.next(x), hy = rb.next(y);
+        if (!hx || !hy) return hx ? 1 : hy ? -1 : 0;
+        if (x != y) return x < y ? -1 : 1;
+    }
+}
+
+}  // namespace
+
+namespace {
+
 constexpr size_t kHeaderSize = 0x70;
 constexpr uint32_t kEndianConstant = 0x12345678;
 
@@ -379,7 +434,7 @@ uint32_t DexFile::findString(std::string_view s) const {
     uint32_t lo = 0, hi = stringIdsSize_;
     while (lo < hi) {
         const uint32_t mid = lo + (hi - lo) / 2;
-        const int cmp = stringView(mid).compare(s);
+        const int cmp = compareUtf16(stringView(mid), s);
         if (cmp == 0) return mid;
         if (cmp < 0) lo = mid + 1;
         else hi = mid;

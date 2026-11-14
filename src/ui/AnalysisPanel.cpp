@@ -131,7 +131,7 @@ void folderIcon() {
 
 }  // namespace
 
-void AnalysisPanel::resetCaches() {
+void AnalysisPanel::resetCaches(bool keepNative) {
     appliedFilter_ = "\x01";  // force a refilter
     packages_.clear();
     packageOpen_.clear();
@@ -139,7 +139,7 @@ void AnalysisPanel::resetCaches() {
     classMethods_.clear();
     rows_.clear();
     rowsDirty_ = true;
-    sel_ = Selection::None;
+    if (!(keepNative && sel_ == Selection::Native)) sel_ = Selection::None;
     selClass_ = UINT32_MAX;
     selCallers_.clear();
     selCallees_.clear();
@@ -202,7 +202,8 @@ void AnalysisPanel::drawContents() {
     std::shared_ptr<const ApkAnalysis> analysis = workspace_.analysis().get(apk.title);
     if (analysis.get() != cacheOwner_) {
         cacheOwner_ = analysis.get();
-        resetCaches();
+        // The bytecode analysis finished or was replaced: a native function on screen does not depend on it.
+        resetCaches(true);
     }
     current_ = analysis;
     currentGroup_ = apk.title;
@@ -572,7 +573,9 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
             doc->goTo(static_cast<int>(i));
             break;
         }
-        if (showPanel_) showPanel_("Editor");
+        // The listing stays in front: the Decompiler panel shows the method next to it,
+        // jadx's Java waits in the Editor tab.
+        if (showPanel_) showPanel_("Function");
     } else {
         showFunction(0);  // no Java: the smali listing is the code
     }
@@ -648,6 +651,12 @@ void AnalysisPanel::drawQueryResults(const ApkAnalysis& a, Root& apk) {
     ImGui::TextColored(kAccent(), "%s", xrefTitle_.c_str());
     ImGui::SameLine();
     ImGui::TextDisabled("(%zu)", xrefs_.size());
+    if (xrefs_.empty() && xrefTitle_.rfind("Uses of \"", 0) == 0) {
+        ImGui::TextWrapped("No code loads this string with const-string. It is still in the dex string table "
+                           "because something else names it: a class, method or field name, a type descriptor, "
+                           "an annotation value, a static field initial value or debug info.");
+        return;
+    }
     if (ImGui::BeginTable("##xr", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
                                          ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupScrollFreeze(0, 1);
@@ -746,7 +755,9 @@ void AnalysisPanel::drawStrings(const ApkAnalysis& a, Root& apk) {
                 if (clicked) {
                     xrefs_.clear();
                     xrefTitle_ = "Uses of \"" + (shown.size() > 80 ? shown.substr(0, 80) + "..." : shown) + "\"";  // escaped: one line
-                    for (const auto& h : a.stringUses(s.value, false, 5000)) {
+                    // URL rows hold a token cut out of a longer constant: find the constants containing it.
+                    const bool isUrlToken = kCategories[stringCategory_] == ApkAnalysis::StringCategory::Url;
+                    for (const auto& h : a.stringUses(s.value, isUrlToken, 5000)) {
                         char pc[32];
                         std::snprintf(pc, sizeof pc, "const-string @%04x", h.from.pc);
                         xrefs_.push_back({a.methodSignature(h.from), pc, true, h.from, {}});
@@ -1027,7 +1038,9 @@ void AnalysisPanel::drawReferences() {
         drawQueryResults(*analysis, *apk);
         return;
     }
-    // Two lists side by side: what calls the selection, what it calls.
+    // Two lists side by side: what calls the selection, what it calls. A click only records
+    // where to go: navigating replaces the lists being drawn, so it happens after them.
+    std::function<void()> go;
     const auto twoColumns = [&](const char* left, size_t nLeft, const char* right, size_t nRight,
                                 const std::function<void(size_t)>& drawLeft, const std::function<void(size_t)>& drawRight) {
         if (!ImGui::BeginTable("##refs", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY))
@@ -1068,16 +1081,23 @@ void AnalysisPanel::drawReferences() {
                    [&](size_t i) {
                        const auto& r = funcCallers_[i];
                        const std::string from = nc.symbolize(r.from);
-                       if (ImGui::Selectable((from.empty() ? hexAddr(r.from) : from).c_str(), false, ImGuiSelectableFlags_None)) gotoNative(r.from);
+                       if (ImGui::Selectable((from.empty() ? hexAddr(r.from) : from).c_str(), false, ImGuiSelectableFlags_None)) {
+                           const uint64_t at = r.from;
+                           go = [this, at] { gotoNative(at); };
+                       }
                    },
                    [&](size_t i) {
                        const auto& r = nativeCallees_[i];
                        const NativeCode::Function* to = nc.functionAt(r.target);
                        const std::string name = to ? NativeCode::displayName(*to) : hexAddr(r.target);
                        ImGui::PushID("callee");
-                       if (ImGui::Selectable(name.c_str()) && to) gotoNative(to->addr);
+                       if (ImGui::Selectable(name.c_str()) && to) {
+                           const uint64_t at = to->addr;
+                           go = [this, at] { gotoNative(at); };
+                       }
                        ImGui::PopID();
                    });
+        if (go) go();
         return;
     }
     if (sel_ != Selection::Method || !analysis || !apk) {
@@ -1094,9 +1114,13 @@ void AnalysisPanel::drawReferences() {
                        const auto defs = a.findMethodDefs(dex.typeDescriptor(dex.methodClass(h.from.method)), dex.methodName(h.from.method),
                                                           dex.protoDescriptor(dex.methodProto(h.from.method)));
                        if (!defs.empty()) {
-                           selectMethod(a, defs.front(), apk->title, true);
-                           listingPc_ = static_cast<int32_t>(h.from.pc);
-                           listingScroll_ = true;
+                           const ApkAnalysis::MethodDef target = defs.front();
+                           const int32_t pc = static_cast<int32_t>(h.from.pc);
+                           go = [this, &a, apk, target, pc] {
+                               selectMethod(a, target, apk->title, true);
+                               listingPc_ = pc;
+                               listingScroll_ = true;
+                           };
                        }
                    }
                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\ncall at %04x", sig.c_str(), h.from.pc);
@@ -1110,8 +1134,10 @@ void AnalysisPanel::drawReferences() {
                    if (ApkAnalysis::splitMethodRef(c.signature, cls, name, proto)) defs = a.findMethodDefs(cls, name, proto);
                    if (defs.empty()) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
                    if (ImGui::Selectable(label.c_str())) {
-                       if (!defs.empty()) selectMethod(a, defs.front(), apk->title, true);
-                       else {
+                       if (!defs.empty()) {
+                           const ApkAnalysis::MethodDef target = defs.front();
+                           go = [this, &a, apk, target] { selectMethod(a, target, apk->title, true); };
+                       } else {
                            listingPc_ = static_cast<int32_t>(c.pc);  // framework method: show the call site
                            listingScroll_ = true;
                            showFunction(0);
@@ -1122,6 +1148,7 @@ void AnalysisPanel::drawReferences() {
                                                                  defs.empty() ? "\n(not in this APK)" : "");
                    ImGui::PopID();
                });
+    if (go) go();
 }
 
 // ---------------------------------------------------------------------------

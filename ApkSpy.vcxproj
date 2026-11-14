@@ -99,6 +99,7 @@
     <ClInclude Include="src\ui\AnnotationUi.hpp" />
     <ClInclude Include="src\core\Annotations.hpp" />
     <ClInclude Include="src\analysis\NativeCode.hpp" />
+    <ClInclude Include="src\analysis\Decompiler.hpp" />
     <ClInclude Include="src\analysis\Arm64.hpp" />
     <ClInclude Include="src\core\ResourceTable.hpp" />
     <ClInclude Include="src\ui\TrafficPanel.hpp" />
@@ -184,6 +185,8 @@
     <ClCompile Include="src\core\Annotations.cpp" />
     <ClCompile Include="src\ui\AnalysisNative.cpp" />
     <ClCompile Include="src\analysis\NativeCode.cpp" />
+    <ClCompile Include="src\analysis\Decompiler.cpp" />
+    <ClCompile Include="src\ui\AnalysisDecompiler.cpp" />
     <ClCompile Include="src\analysis\Arm64.cpp" />
     <ClCompile Include="src\core\ResourceTable.cpp" />
     <ClCompile Include="src\ui\TrafficPanel.cpp" />

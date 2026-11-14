@@ -714,7 +714,7 @@ void EditorPanel::processShortcuts(Document& doc) {
     ImGuiIO& io = ImGui::GetIO();
     if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) return;
     FindState* f = findState(doc);
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false)) openFind(doc, *f);
+    if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_F, false)) openFind(doc, *f);  // Ctrl+Shift+F: find in project
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_G, false)) openGoTo(doc);
     if (f->open && !io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F3, false))
         moveMatch(*f, io.KeyShift ? -1 : 1);

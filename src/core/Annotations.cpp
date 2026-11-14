@@ -4,6 +4,9 @@
 namespace {
 bool valid(const Annotation& a) {
     if (a.group.empty() || a.path.empty()) return false;
+    if (a.variableNote())
+        return (a.target == Annotation::Target::Native || a.target == Annotation::Target::Method) && !a.context.empty() &&
+               !a.text.empty();
     if (a.target == Annotation::Target::File)
         return (a.root == RootKind::Apk || a.root == RootKind::Decompiled) && a.line >= 0;
     return a.target == Annotation::Target::Native;
@@ -15,7 +18,7 @@ int Annotations::set(Annotation a) {
     if (a.text.size() > kMaxText) a.text.resize(kMaxText);
     if (a.context.size() > 300) a.context.resize(300);
     for (Annotation& existing : items_)
-        if (existing.kind == a.kind && existing.sameLocation(a)) {
+        if (existing.sameSlot(a)) {
             existing.text = std::move(a.text);
             if (!a.context.empty()) existing.context = std::move(a.context);
             ++version_;
@@ -56,6 +59,13 @@ const Annotation* Annotations::at(Annotation::Kind kind, const Annotation& locat
     for (const Annotation& a : items_)
         if (a.kind == kind && a.sameLocation(location)) return &a;
     return nullptr;
+}
+
+std::vector<std::pair<std::string, std::string>> Annotations::variableNotes(const Annotation& location, Annotation::Kind kind) const {
+    std::vector<std::pair<std::string, std::string>> out;
+    for (const Annotation& a : items_)
+        if (a.kind == kind && a.sameLocation(location)) out.emplace_back(a.context, a.text);
+    return out;
 }
 
 bool Annotations::toggleBookmark(const Annotation& location) {

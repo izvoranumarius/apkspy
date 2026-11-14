@@ -31,6 +31,7 @@ void BookmarksPanel::rebuildRows() {
     appliedFilter_ = filter_;
     appliedKind_ = kindFilter_;
     const auto matches = [&](const Annotation& a) {
+        if (a.variableNote()) return false;  // names and types are shown by the Decompiler, not here
         if (kindFilter_ == 1 && a.kind != Annotation::Kind::Bookmark) return false;
         if (kindFilter_ == 2 && a.kind != Annotation::Kind::Comment) return false;
         return appliedFilter_.empty() || tex::ciFind(a.text, appliedFilter_) != std::string_view::npos ||
