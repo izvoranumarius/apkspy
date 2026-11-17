@@ -69,7 +69,7 @@ std::vector<ProjectApk> collectApks(const Workspace& workspace, const Project& p
 
 namespace {
 // Version of the default dock layout (see Settings::kLayoutVersion).
-constexpr int kLayoutVersion = 14;
+constexpr int kLayoutVersion = 16;
 }  // namespace
 
 Application::Application()
@@ -110,13 +110,20 @@ Application::Application()
     auto scriptPanel = std::make_unique<ScriptPanel>(workspace_, settings_, *mcp_);
     scriptPanel_ = scriptPanel.get();
     panels_.push_back(std::move(scriptPanel));
+    auto decoder = std::make_unique<DecoderPanel>(workspace_);
+    decoder_ = decoder.get();
+    panels_.push_back(std::move(decoder));
     auto terminal = std::make_unique<TerminalPanel>(workspace_, settings_, [this] { return projectFolder(); });
     terminal_ = terminal.get();
     panels_.push_back(std::move(terminal));
     palette_ = std::make_unique<CommandPalette>(workspace_);
     palette_->setCommands([this] { return paletteCommands(); });
     palette_->setShowEditor([this] { showPanel("Editor"); });
-    editor_->setWelcome([this] { drawWelcome(); });
+    // The welcome page belongs to an empty window: with a project or an APK open, an
+    // editor without files stays blank.
+    editor_->setWelcome([this] {
+        if (!project_.isOpen() && workspace_.roots().empty()) drawWelcome();
+    });
     initPerspectives();
     loadSettings();
     initTitleBar();
@@ -427,6 +434,16 @@ void Application::frame() {
     scriptPanel_->pollOutput();
     editor_->sweep();  // a closed tab's audio / video stops even when the editor is hidden
     if (workspace_.takeRevealShow()) showPanel("Explorer");
+    if (workspace_.hasComparerRequest() && !comparerShown_) {  // the Traffic panel takes it once it is drawn
+        comparerShown_ = true;
+        showPanel("Traffic");
+    } else if (!workspace_.hasComparerRequest()) {
+        comparerShown_ = false;
+    }
+    if (std::string text; workspace_.takeDecoderRequest(text) && decoder_) {
+        decoder_->setInput(std::move(text));
+        showPanel("Decoder");
+    }
     workspace_.update();
     ImGui_ImplOpenGL3_NewFrame();  // creates the font texture on the first frame
     if (fontBuildDataPending_) {
@@ -444,7 +461,8 @@ void Application::frame() {
     // Find in project (as in VS Code): the Search sidebar with its query focused.
     if (io.KeyCtrl && io.KeyShift && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_F, false) && showPanel("Search") && searchPanel_)
         searchPanel_->focusQuery();
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false)) toggleTerminal();
+    if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false)) toggleTerminal();
+    if (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false)) newTerminal();
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveRequested_ = true;
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Comma, false)) settingsRequested_ = true;
     // Back/Forward (M2): Alt+Left / Alt+Right and mouse buttons 4/5. Alt+Arrow
@@ -472,10 +490,26 @@ void Application::frame() {
     // A file opened from a workspace without an editor needs one.
     if (workspace_.hasFocusRequest() && pendingPerspective_ < 0 && !perspectives_[static_cast<size_t>(activePerspective_)].shows("Editor"))
         showPanel("Editor");
+    // Nothing open: the window is the welcome page alone, as in VS Code. Asking for a
+    // panel or a workspace (Terminal, Find, Ctrl+1..5, View menu) shows the workbench.
+    const bool empty = !project_.isOpen() && workspace_.roots().empty() && workspace_.documents().empty();
+    if (!empty) hadContent_ = true;
+    else if (hadContent_) hadContent_ = false, workbench_ = false;  // project closed: back to the welcome page
+    if (pendingPerspective_ >= 0 || !pendingFocusPanel_.empty()) workbench_ = true;
+    welcomeOnly_ = empty && !workbench_;
     drawDockHost();
     Perspective& perspective = perspectives_[static_cast<size_t>(activePerspective_)];
-    for (auto& panel : panels_) {
-        if (perspective.shows(panel->title())) panel->render(perspective.windowName(panel->title()));
+    if (welcomeOnly_) {
+        // (drawn by drawDockHost, inside its window: a separate window would sit under it)
+        // A link asked for a panel or workspace: show the workbench from the next frame
+        // (the request is still pending then: it is applied once the windows exist).
+        if (pendingPerspective_ >= 0 || !pendingFocusPanel_.empty()) {
+            workbench_ = true;
+            glfwPostEmptyEvent();
+        }
+    } else {
+        for (auto& panel : panels_)
+            if (perspective.shows(panel->title())) panel->render(perspective.windowName(panel->title()));
     }
     if (!pendingTabs_.empty() && --pendingTabsDelay_ <= 0) {
         for (const std::string& name : pendingTabs_)
@@ -485,7 +519,7 @@ void Application::frame() {
         pendingTabs_.clear();
     }
     // Waits for a pending switch: the target window does not exist yet.
-    if (!pendingFocusPanel_.empty() && pendingPerspective_ < 0) {
+    if (!pendingFocusPanel_.empty() && pendingPerspective_ < 0 && !welcomeOnly_) {
         ImGui::SetWindowFocus(perspective.windowName(pendingFocusPanel_).c_str());
         pendingFocusPanel_.clear();
     }
@@ -805,10 +839,11 @@ void Application::drawViewMenu() {
     ImGui::Separator();
     if (ImGui::BeginMenu("Panels in this Workspace")) {
         Perspective& perspective = perspectives_[static_cast<size_t>(activePerspective_)];
-        for (auto& panel : panels_) ImGui::MenuItem(panel->title().c_str(), nullptr, &perspective.visible[panel->title()]);
+        for (auto& panel : panels_)
+            if (ImGui::MenuItem(panel->title().c_str(), nullptr, &perspective.visible[panel->title()])) workbench_ = true;
         ImGui::EndMenu();
     }
-    if (ImGui::MenuItem("Reset Workspace Layout")) resetLayout_ = true;
+    if (ImGui::MenuItem("Reset Workspace Layout")) resetLayout_ = true, workbench_ = true;
     ImGui::Separator();
     if (ImGui::MenuItem("Zoom In", "Ctrl+=")) setZoom(zoomTarget() + 0.1f);
     if (ImGui::MenuItem("Zoom Out", "Ctrl+-")) setZoom(zoomTarget() - 0.1f);
@@ -918,8 +953,13 @@ void Application::drawDockHost() {
     if (!ImGui::DockBuilderGetNode(dockId)) buildLayout(active, dockId, ImGui::GetContentRegionAvail());
     // A panel alone in its dock needs no tab: the workspace already says what it is.
     const float statusHeight = std::round(ImGui::GetFontSize() * 1.45f);
-    ImGui::DockSpace(dockId, ImVec2(0.f, -statusHeight), ImGuiDockNodeFlags_AutoHideTabBar);
-    drawStatusBar();
+    if (welcomeOnly_) {
+        ImGui::DockSpace(dockId, ImVec2(0.f, 0.f), ImGuiDockNodeFlags_KeepAliveOnly);  // kept for later, not shown
+        drawWelcomeScreen();
+    } else {
+        ImGui::DockSpace(dockId, ImVec2(0.f, -statusHeight), ImGuiDockNodeFlags_AutoHideTabBar);
+        drawStatusBar();
+    }
     // Hidden workspaces submit no windows: this keeps their dock trees intact.
     for (const Perspective& p : perspectives_) {
         const ImGuiID id = ImGui::GetID(p.dockName().c_str());
@@ -931,10 +971,10 @@ void Application::drawDockHost() {
 
 void Application::initPerspectives() {
     perspectives_ = {
-        {"Code", "Browse the APK, read and search the sources", "Editor", {"Explorer", "Overview", "Editor", "Search", "Bookmarks", "Output", "Terminal"}, {}},
-        {"Analysis", "Classes, native code, graphs, strings and resources", "Analysis", {"Analysis", "Function", "Decompiler", "Editor", "References", "Bookmarks"}, {}},
+        {"Code", "Browse the APK, read and search the sources", "Editor", {"Explorer", "Overview", "Editor", "Search", "Bookmarks", "Output", "Terminal", "Decoder"}, {}},
+        {"Analysis", "Classes, native code, graphs, strings and resources", "Analysis", {"Analysis", "Function", "Decompiler", "Editor", "References", "Bookmarks", "Decoder"}, {}},
         {"Debug", "Attach to a process: threads, stack, locals and logs", "Debugger", {"Devices", "Debugger", "Editor", "Logcat", "Terminal"}, {}},
-        {"Network", "Capture the app's traffic and map its API", "Traffic", {"Traffic", "Logcat", "Terminal"}, {}},
+        {"Network", "Capture the app's traffic and map its API", "Traffic", {"Traffic", "Logcat", "Terminal", "Decoder"}, {}},
         {"Scripts", "Automate ApkSpy with Python", "Script", {"Script", "Output", "Terminal"}, {}},
     };
     std::vector<std::string> titles;
@@ -1084,6 +1124,7 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
         dock("Editor", right);
         dock("References", bottom);
         dock("Bookmarks", bottom);
+        dock("Decoder", bottom);
         select("Function"), select("Decompiler"), select("References");
     } else if (p.name == "Debug") {
         side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.17f, nullptr, &rest);
@@ -1100,6 +1141,7 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
         dock("Traffic", main);
         dock("Logcat", bottom);
         dock("Terminal", bottom);
+        dock("Decoder", bottom);
         select("Logcat"), select("Traffic");
     } else if (p.name == "Scripts") {
         bottom = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Down, 0.34f, nullptr, &main);
@@ -1113,7 +1155,7 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
         bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 0.25f, nullptr, &main);
         dock("Explorer", side), dock("Search", side), dock("Overview", side);
         dock("Editor", main);
-        dock("Bookmarks", bottom), dock("Output", bottom), dock("Terminal", bottom);
+        dock("Bookmarks", bottom), dock("Output", bottom), dock("Terminal", bottom), dock("Decoder", bottom);
         select("Output"), select("Explorer"), select("Editor");
     }
     // Panels added later from the View menu start beside the streams.
@@ -1148,6 +1190,13 @@ void Application::toggleTerminal() {
     }
 }
 
+// Ctrl+Shift+`: another shell, in a new tab of the Terminal panel (as in VS Code).
+void Application::newTerminal() {
+    terminal_->newTerminal();
+    perspectives_[static_cast<size_t>(activePerspective_)].visible["Terminal"] = true;
+    pendingFocusPanel_ = "Terminal";
+}
+
 std::vector<CommandPalette::Command> Application::paletteCommands() {
     std::vector<CommandPalette::Command> c;
     const auto add = [&](std::string name, std::string keys, const char* icon, std::function<void()> run) {
@@ -1164,7 +1213,9 @@ std::vector<CommandPalette::Command> Application::paletteCommands() {
     add("Navigate Back", "Alt+Left", icons::BACK, [this] { workspace_.navBack(); });
     add("Navigate Forward", "Alt+Right", icons::FORWARD, [this] { workspace_.navForward(); });
     add("Terminal: Toggle", "Ctrl+`", icons::TERMINAL, [this] { toggleTerminal(); });
+    add("Terminal: New Terminal", "Ctrl+Shift+`", icons::ADD, [this] { newTerminal(); });
     add("Terminal: Restart Shell", "", icons::REFRESH, [this] { terminal_->restart(); showPanel("Terminal"); });
+    add("Terminal: Kill Terminal", "", icons::TRASH, [this] { terminal_->killActive(); });
     add("File: Open Project...", "Ctrl+O", icons::FOLDER_OPEN, [this] { requestAction(PendingAction::OpenProject); });
     add("File: New Project", "", icons::ADD, [this] { requestAction(PendingAction::NewProject); });
     add("File: Add APK to Project...", "", icons::PACKAGE, [this] { addApkRequested_ = true; });
@@ -1182,11 +1233,24 @@ std::vector<CommandPalette::Command> Application::paletteCommands() {
     return c;
 }
 
+// The welcome page filling the dock host (below the title bar) while nothing is open.
+void Application::drawWelcomeScreen() {
+    ImGui::SetCursorPos(ImVec2(0.f, 0.f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::editorBackground());
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImGui::GetStyle().FramePadding);
+    ImGui::BeginChild("##welcome", ImVec2(0.f, 0.f), ImGuiChildFlags_AlwaysUseWindowPadding);
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    drawWelcome();
+    ImGui::EndChild();
+}
+
 void Application::drawWelcome() {
+    // Centred both ways on its size from the last frame (the first frame guesses).
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    const float width = std::min(avail.x - ui::em(2.f), ui::em(34.f));
-    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + std::max(0.f, (avail.x - width) * 0.5f),
-                               ImGui::GetCursorPosY() + std::max(ui::em(1.f), avail.y * 0.12f)));
+    const ImVec2 size = welcomeSize_.x > 0.f ? welcomeSize_ : ImVec2(ui::em(24.f), ui::em(20.f));
+    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + std::max(0.f, (avail.x - size.x) * 0.5f),
+                               ImGui::GetCursorPosY() + std::max(0.f, (avail.y - size.y) * 0.5f)));
     ImGui::BeginGroup();
     ImGui::PushFont(nullptr);
     ImGui::SetWindowFontScale(1.8f);
@@ -1234,5 +1298,10 @@ void Application::drawWelcome() {
     ImGui::Dummy(ImVec2(0, ui::em(0.6f)));
     ImGui::TextDisabled("Drop APK files anywhere on the window to add them.");
     ImGui::EndGroup();
+    const ImVec2 measured = ImGui::GetItemRectSize();
+    if (measured.x != welcomeSize_.x || measured.y != welcomeSize_.y) {
+        welcomeSize_ = measured;
+        glfwPostEmptyEvent();  // one more frame, now centred on the real size
+    }
 }
 

@@ -283,6 +283,49 @@ std::string NativeCode::cStringAt(uint64_t vaddr) const {
     return s;
 }
 
+std::string NativeCode::wideStringAt(uint64_t vaddr) const {
+    uint64_t off = 0;
+    if (!elf_->vaddrToOffset(vaddr, off)) return {};
+    const auto& d = elf_->data();
+    std::string s;
+    size_t chars = 0;
+    for (uint64_t i = off; i + 1 < d.size() && s.size() < 240; i += 2) {
+        uint32_t c = static_cast<uint32_t>(d[i]) | static_cast<uint32_t>(d[i + 1]) << 8;
+        if (c == 0) break;
+        if (c >= 0xD800 && c < 0xDC00 && i + 3 < d.size()) {  // surrogate pair
+            const uint32_t lo = static_cast<uint32_t>(d[i + 2]) | static_cast<uint32_t>(d[i + 3]) << 8;
+            if (lo < 0xDC00 || lo >= 0xE000) return {};
+            c = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00);
+            i += 2;
+        } else if (c >= 0xD800 && c < 0xE000) {
+            return {};
+        }
+        if (c == '\n') s += "\\n";
+        else if (c == '\t') s += "\\t";
+        else if (c == '\r') s += "\\r";
+        else if (c < 0x20 || c == 0x7F || (c >= 0x80 && c < 0xA0) || c == 0xFFFE || c == 0xFFFF) return {};
+        else if (c < 0x80) s.push_back(static_cast<char>(c));
+        else if (c < 0x800) s += static_cast<char>(0xC0 | (c >> 6)), s += static_cast<char>(0x80 | (c & 0x3F));
+        else if (c < 0x10000)
+            s += static_cast<char>(0xE0 | (c >> 12)), s += static_cast<char>(0x80 | ((c >> 6) & 0x3F)), s += static_cast<char>(0x80 | (c & 0x3F));
+        else
+            s += static_cast<char>(0xF0 | (c >> 18)), s += static_cast<char>(0x80 | ((c >> 12) & 0x3F)),
+                s += static_cast<char>(0x80 | ((c >> 6) & 0x3F)), s += static_cast<char>(0x80 | (c & 0x3F));
+        ++chars;
+    }
+    if (chars < 2) return {};
+    return s;
+}
+
+std::string NativeCode::stringAt(uint64_t vaddr, bool* wide) const {
+    if (wide) *wide = false;
+    std::string s = cStringAt(vaddr);
+    if (!s.empty()) return s;
+    s = wideStringAt(vaddr);
+    if (!s.empty() && wide) *wide = true;
+    return s;
+}
+
 std::vector<NativeCode::Line> NativeCode::disassemble(uint64_t start, uint64_t end, size_t maxInsns) const {
     std::vector<Line> out;
     struct Page {
@@ -316,8 +359,9 @@ std::vector<NativeCode::Line> NativeCode::disassemble(uint64_t start, uint64_t e
             l.dataAddr = data;
             // A load reads a value (pointer, constant) from data: only address-forming instructions can
             // point at a string literal.
-            const std::string str = l.dataRead ? std::string() : cStringAt(data);
-            if (!str.empty()) l.comment = "\"" + str + "\"";
+            bool wide = false;
+            const std::string str = l.dataRead ? std::string() : stringAt(data, &wide);
+            if (!str.empty()) l.comment = (wide ? "u\"" : "\"") + str + "\"";  // u"..." : UTF-16 text
             else if (std::string sym = symbolize(data); !sym.empty()) l.comment = l.dataRead ? "[" + sym + "]" : sym;
             else l.comment = l.dataRead ? "[" + hex(data) + "]" : hex(data);
         }

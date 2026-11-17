@@ -35,6 +35,7 @@ struct Perspective {
             {"Analysis", icons::ANALYSIS}, {"Function", icons::CODE}, {"References", icons::LINK}, {"Decompiler", icons::FILE},
             {"Devices", icons::PHONE}, {"Debugger", icons::BUG}, {"Logcat", icons::LIST},
             {"Traffic", icons::GLOBE}, {"Script", icons::EDIT}, {"Terminal", icons::TERMINAL},
+            {"Decoder", icons::CONVERT},
         };
         for (const auto& [t, glyph] : kIcons)
             if (title == t) return glyph;

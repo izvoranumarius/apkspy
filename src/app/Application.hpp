@@ -1,5 +1,6 @@
 #pragma once
 #include "ui/CommandPalette.hpp"
+#include "ui/DecoderPanel.hpp"
 #include "ui/TerminalPanel.hpp"
 #include <memory>
 #include <vector>
@@ -59,6 +60,8 @@ private:
     std::vector<CommandPalette::Command> paletteCommands();
     std::string projectFolder() const;
     void toggleTerminal();
+    void drawWelcomeScreen();
+    void newTerminal();
     void drawWindowBorder();
     void updateTitle();
     void drawDockHost();
@@ -118,12 +121,18 @@ private:
     std::vector<Perspective> perspectives_;  // the workspaces of the switcher
     int activePerspective_ = 0;
     int pendingPerspective_ = -1;            // applied at the start of the next dock host
+    ImVec2 welcomeSize_{0.f, 0.f};  // the welcome page's content, measured last frame (for centring)
+    bool welcomeOnly_ = false;   // this frame shows the welcome page alone (nothing open)
+    bool workbench_ = false;     // the user asked for a panel or workspace while nothing was open
+    bool hadContent_ = false;    // something was open (closing it returns to the welcome page)
     std::vector<std::string> pendingTabs_;   // windows to bring forward once a new layout is shown
     int pendingTabsDelay_ = 0;               // frames until their dock tab bars exist
     EditorPanel* editor_ = nullptr;  // non-owning; document commands (Find, Go to Line) go here
     AnalysisPanel* analysisPanel_ = nullptr;  // non-owning
     SearchPanel* searchPanel_ = nullptr;      // non-owning; Ctrl+Shift+F focuses its query
     TerminalPanel* terminal_ = nullptr;        // non-owning
+    DecoderPanel* decoder_ = nullptr;          // non-owning ("Send to Decoder")
+    bool comparerShown_ = false;               // Traffic shown for a pending Send to Comparer
     std::unique_ptr<CommandPalette> palette_;
     DebuggerPanel* debuggerPanel_ = nullptr;  // non-owning; global debugger shortcuts
     std::unique_ptr<McpSettings> mcpSettings_;  // the AI page of the Settings dialog

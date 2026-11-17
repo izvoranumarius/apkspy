@@ -1,4 +1,5 @@
 #include "ui/OverviewPanel.hpp"
+#include "ui/TextSelect.hpp"
 #include <algorithm>
 #include <cstdio>
 #include "app/Theme.hpp"
@@ -50,6 +51,9 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
     ImGui::PushTextWrapPos(0.f);
     ImGui::TextUnformatted(label.c_str());
     ImGui::PopTextWrapPos();
+    ui::copyMenu("##labelctx", label, [&] {
+        if (ImGui::MenuItem("Copy package name")) ImGui::SetClipboardText(info.packageName.c_str());
+    });
     std::string sub = info.packageName;
     if (!info.versionName.empty() || !info.versionCode.empty()) {
         sub += "  |  version " + info.versionName;
@@ -60,6 +64,10 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
     ImGui::PushTextWrapPos(0.f);
     ImGui::TextDisabled("%s", sub.c_str());
     ImGui::PopTextWrapPos();
+    ui::copyMenu("##subctx", sub, [&] {
+        if (ImGui::MenuItem("Copy package name")) ImGui::SetClipboardText(info.packageName.c_str());
+        if (!info.versionName.empty() && ImGui::MenuItem("Copy version")) ImGui::SetClipboardText(info.versionName.c_str());
+    });
     if (info.debuggable || info.allowBackup) {
         if (info.debuggable) {
             ImGui::TextColored(theme::vec(Col::Warning), "debuggable");
@@ -98,6 +106,9 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
             if (dangerous) ImGui::TextColored(theme::vec(Col::Warning), "%s", p.c_str());
             else ImGui::TextUnformatted(p.c_str());
             ImGui::PopTextWrapPos();
+            ImGui::PushID(p.c_str());
+            ui::copyMenu("##permctx", p);
+            ImGui::PopID();
             if (dangerous && ImGui::IsItemHovered()) ImGui::SetTooltip("Runtime (dangerous) permission");
         }
     }
@@ -132,6 +143,7 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
                                                              ImGuiSelectableFlags_AllowOverlap) &&
                     !c.name.empty())
                     openComponent(apk.title, info.packageName, c);
+                ui::copyMenu("##compctx", full);
                 if (ImGui::IsItemHovered()) {
                     std::string tip = full + (c.exported ? "\nexported" : "");
                     for (const std::string& a : c.actions) tip += "\naction: " + a;

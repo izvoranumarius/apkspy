@@ -146,6 +146,26 @@ public:
         revealShow_ = false;
         return v;
     }
+    // "Send to Decoder": the Decoder panel takes the text on the next frame.
+    void sendToDecoder(std::string text) {
+        decoderText_ = std::move(text);
+        decoderRequest_ = true;
+    }
+    // "Send to Comparer": the Traffic panel's Comparer takes it (label, text).
+    void sendToComparer(std::string label, std::string text) { comparerQueue_.emplace_back(std::move(label), std::move(text)); }
+    bool hasComparerRequest() const { return !comparerQueue_.empty(); }
+    std::vector<std::pair<std::string, std::string>> takeComparerRequests() {
+        std::vector<std::pair<std::string, std::string>> out;
+        out.swap(comparerQueue_);
+        return out;
+    }
+    bool takeDecoderRequest(std::string& text) {
+        if (!decoderRequest_) return false;
+        decoderRequest_ = false;
+        text = std::move(decoderText_);
+        decoderText_.clear();
+        return true;
+    }
     // Folders from the root down to `node` (the root's tree first, `node` last); empty when absent.
     static std::vector<const TreeNode*> chainTo(const TreeNode& from, const TreeNode* node);
     // Decompiled source of a class (dotted name), or null without jadx output for it.
@@ -283,6 +303,9 @@ private:
     std::vector<std::string> log_;
     RevealRequest reveal_;
     bool revealShow_ = false;
+    std::string decoderText_;
+    bool decoderRequest_ = false;
+    std::vector<std::pair<std::string, std::string>> comparerQueue_;
     size_t logTrims_ = 0;
     std::string jadxPath_ = "jadx";
     std::string jadxArgs_;

@@ -12,6 +12,8 @@
 #include <unordered_map>
 #include <vector>
 #include "ui/AnnotationUi.hpp"
+#include "ui/StringHints.hpp"
+#include "ui/TextSelect.hpp"
 
 class Settings;
 
@@ -117,6 +119,7 @@ private:
     // gone (closed tab, replaced preview).
     std::unordered_map<const Document*, FindState> find_;
     std::unordered_map<const Document*, HexView> hex_;  // swept together with find_
+    std::unordered_map<const Document*, ui::TextSelect> textSel_;  // text selection of each code view (swept too)
     std::unordered_map<const Document*, std::unique_ptr<AudioView>> audio_;
     std::unordered_map<const Document*, std::unique_ptr<FontView>> fonts_;
     std::unordered_map<const Document*, std::unique_ptr<VideoView>> videos_;

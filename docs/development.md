@@ -4,6 +4,15 @@
 
 Windows: open `ApkSpy.sln` in Visual Studio 2022, select x64 and press F5. Nothing else needs to be installed.
 
+The Windows build writes everything under `build/`:
+
+| Folder | What is there |
+| --- | --- |
+| `build/Debug/` | `ApkSpy.exe` and `apkspy_platform_test.exe`, Debug |
+| `build/Release/` | the same, Release (the one to run day to day) |
+| `build/obj/` | intermediate object files; safe to delete |
+| `build/dist/` | release zips made for GitHub releases |
+
 Linux and macOS: install GLFW 3 and pkg-config (`libglfw3-dev` on Debian and Ubuntu, `brew install glfw` on macOS), then run `make`. The binary is `build/apkspy`. `make run` builds and starts it, `make clean` removes `build/`.
 
 Headless tests (Linux/macOS, no GUI needed):

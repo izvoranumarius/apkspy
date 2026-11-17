@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include "app/Theme.hpp"
+#include "ui/TextSelect.hpp"
 #include "ui/UiUtil.hpp"
 
 void SearchPanel::drawContents() {
@@ -104,6 +105,14 @@ void SearchPanel::drawContents() {
                 // The text is drawn after the row, not used as its label:
                 // "##" inside a line of code would hide the rest of it.
                 const bool clicked = ImGui::Selectable("##hit", false, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap);
+                {
+                    const size_t lead = h.text.find_first_not_of(" \t");
+                    ui::copyMenu("##hitctx", lead == std::string::npos ? std::string() : h.text.substr(lead), [&] {
+                        if (ImGui::MenuItem("Copy path")) ImGui::SetClipboardText(h.node->path().c_str());
+                        const std::string at = h.node->path() + ":" + std::to_string(h.line + 1);
+                        if (ImGui::MenuItem("Copy path:line")) ImGui::SetClipboardText(at.c_str());
+                    });
+                }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s:%d\n%s", h.node->path().c_str(), h.line + 1, h.text.c_str());
                 ImGui::SameLine(0.f, 0.f);
                 ImGui::Indent(ui::em(0.8f));

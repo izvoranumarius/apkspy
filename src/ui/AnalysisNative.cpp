@@ -309,20 +309,10 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
                 if (l.dataAddr && ImGui::MenuItem("Copy referenced address")) ImGui::SetClipboardText(hex(l.dataAddr).c_str());
                 if (ImGui::MenuItem("Open listing in editor")) openInEditor();
                 if (ImGui::MenuItem("Copy address")) ImGui::SetClipboardText(hex(l.insn.addr).c_str());
-                if (ImGui::MenuItem("Copy line")) {
-                    std::string text = hex(l.insn.addr) + "  " + l.insn.mnemonic + " " + l.insn.operands;
-                    if (!l.targetName.empty()) text += " <" + l.targetName + ">";
-                    if (!l.comment.empty()) text += "  ; " + l.comment;
-                    ImGui::SetClipboardText(text.c_str());
-                }
+                if (ImGui::MenuItem("Copy line", "Ctrl+C")) ImGui::SetClipboardText(nativeLineText(l).c_str());
                 if (ImGui::MenuItem("Copy function listing")) {
                     std::string text;
-                    for (const auto& x : listing_) {
-                        text += hex(x.insn.addr) + "  " + x.insn.mnemonic + " " + x.insn.operands;
-                        if (!x.targetName.empty()) text += " <" + x.targetName + ">";
-                        if (!x.comment.empty()) text += "  ; " + x.comment;
-                        text += "\n";
-                    }
+                    for (const auto& x : listing_) text += nativeLineText(x) + "\n";
                     ImGui::SetClipboardText(text.c_str());
                 }
                 ImGui::EndPopup();
@@ -356,12 +346,22 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
     if (follow != UINT64_MAX) gotoNative(follow);
 }
 
+// An instruction as one line of text (copying).
+std::string AnalysisPanel::nativeLineText(const NativeCode::Line& l) {
+    std::string text = hex(l.insn.addr) + "  " + l.insn.mnemonic + " " + l.insn.operands;
+    if (!l.targetName.empty()) text += " <" + l.targetName + ">";
+    if (!l.comment.empty()) text += "  ; " + l.comment;
+    return text;
+}
+
 void AnalysisPanel::nativeShortcuts(const NativeCode& nc, const std::vector<NativeCode::Line>& lines) {
     const ImGuiIO& io = ImGui::GetIO();
     if (io.WantTextInput) return;
     Annotations& notes = workspace_.annotations();
+    // Ctrl+C: the selected instruction, as text.
     for (const auto& l : lines) {
         if (l.insn.addr != focusAddr_) continue;
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false)) ImGui::SetClipboardText(nativeLineText(l).c_str());
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_B, false)) notes.toggleBookmark(nativeLocation(nc, l));
         if (!io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Semicolon, false)) nativeComment_.open(notes, nativeLocation(nc, l));
         break;
@@ -526,6 +526,7 @@ void AnalysisPanel::drawNativeStrings(Root& apk) {
                     gotoNative(s.from);
                 }
                 if (ImGui::MenuItem("Copy string")) ImGui::SetClipboardText(s.text.c_str());
+                if (ImGui::MenuItem("Send to Decoder")) workspace_.sendToDecoder(s.text);
                 ImGui::EndPopup();
             }
             ImGui::TableNextColumn();

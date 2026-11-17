@@ -90,6 +90,15 @@
     <ClInclude Include="src\ui\TerminalPanel.hpp">
       <Filter>Header Files\ui</Filter>
     </ClInclude>
+    <ClInclude Include="src\ui\DecoderPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\TextSelect.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\StringHints.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
     <ClInclude Include="src\ui\CommandPalette.hpp">
       <Filter>Header Files\ui</Filter>
     </ClInclude>
@@ -153,10 +162,19 @@
     <ClInclude Include="src\ui\TrafficPanel.hpp">
       <Filter>Header Files\ui</Filter>
     </ClInclude>
+    <ClInclude Include="src\ui\TrafficCommon.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
     <ClInclude Include="src\ui\UiUtil.hpp">
       <Filter>Header Files\ui</Filter>
     </ClInclude>
     <ClInclude Include="src\debug\TrafficProxy.hpp">
+      <Filter>Header Files\debug</Filter>
+    </ClInclude>
+    <ClInclude Include="src\debug\HttpClient.hpp">
+      <Filter>Header Files\debug</Filter>
+    </ClInclude>
+    <ClInclude Include="src\debug\MatchReplace.hpp">
       <Filter>Header Files\debug</Filter>
     </ClInclude>
     <ClInclude Include="src\core\WorkerSet.hpp">
@@ -247,6 +265,12 @@
       <Filter>Header Files\core</Filter>
     </ClInclude>
     <ClInclude Include="src\core\ApkInfo.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\Codec.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\TextDiff.hpp">
       <Filter>Header Files\core</Filter>
     </ClInclude>
     <ClInclude Include="src\core\SafePath.hpp">
@@ -350,6 +374,9 @@
     <ClCompile Include="src\ui\TerminalPanel.cpp">
       <Filter>Source Files\ui</Filter>
     </ClCompile>
+    <ClCompile Include="src\ui\DecoderPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
     <ClCompile Include="src\ui\CommandPalette.cpp">
       <Filter>Source Files\ui</Filter>
     </ClCompile>
@@ -410,7 +437,28 @@
     <ClCompile Include="src\ui\TrafficPanel.cpp">
       <Filter>Source Files\ui</Filter>
     </ClCompile>
+    <ClCompile Include="src\ui\TrafficRepeater.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\TrafficIntercept.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\TrafficRules.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\TrafficComparer.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\TrafficHistory.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
     <ClCompile Include="src\debug\TrafficProxy.cpp">
+      <Filter>Source Files\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\HttpClient.cpp">
+      <Filter>Source Files\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\MatchReplace.cpp">
       <Filter>Source Files\debug</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\McpSettings.cpp">
@@ -510,6 +558,12 @@
       <Filter>Source Files\core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\ApkInfo.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\Codec.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\TextDiff.cpp">
       <Filter>Source Files\core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\ExportJob.cpp">

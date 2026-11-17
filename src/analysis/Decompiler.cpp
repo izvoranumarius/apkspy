@@ -1248,6 +1248,7 @@ public:
             out.headerPrefix = "static";
         } else {
             out.headerPrefix = flags.empty() ? "" : flags + " ";
+            if (!isCtor_) out.returnAt = out.headerPrefix.size(), out.returnType = javaType(retDesc_);
             out.headerPrefix += isCtor_ ? javaType(clsDesc_) : javaType(retDesc_) + " " + name;
             out.headerPrefix += "(";
             out.headerSuffix = ")";
@@ -2110,7 +2111,9 @@ public:
         for (int r = 0; r <= maxD; ++r) out.vars.push_back(Var{"d" + std::to_string(r), "double", std::string(), true});
         out.lines.push_back({"// " + hex(f_.addr) + " (" + std::to_string(f_.size) + " bytes)", 0, {}});
         out.headerLine = static_cast<int>(out.lines.size());
-        out.headerPrefix = std::string(returnsValue_ ? "int64_t " : "void ") + NativeCode::displayName(f_) + "(";
+        out.returnType = returnsValue_ ? "int64_t" : "void";
+        out.returnAt = 0;
+        out.headerPrefix = out.returnType + " " + NativeCode::displayName(f_) + "(";
         out.headerSuffix = ") {";
         out.lines.push_back({std::string(), 0, {f_.addr}});
         Structurer(fn_, out.lines).run(1);
@@ -2605,9 +2608,11 @@ private:
         }
         if (l.dataAddr && hasD && !l.dataRead && (m == "add" || m == "adr")) {
             std::string e = l.comment.empty() ? hex(l.dataAddr) : l.comment;
+            const bool wideLit = e.rfind("u\"", 0) == 0;
             if (!e.empty() && e[0] == '"') e = cQuote(nc_.cStringAt(l.dataAddr));
+            else if (wideLit) e = "u" + cQuote(nc_.stringAt(l.dataAddr));
             else if (!e.empty() && e.rfind("0x", 0) != 0) e = "&" + e;
-            define(blk, st, d, e, true, addr, false, false, true, e[0] == '"' ? "char *" : "void *");
+            define(blk, st, d, e, true, addr, false, false, true, e[0] == '"' ? "char *" : wideLit ? "char16_t *" : "void *");
             st.consts[d.id] = st.addrs[d.id] = l.dataAddr;
             return;
         }
@@ -2741,12 +2746,13 @@ private:
                 const auto c = st.addrs.find(src.id);
                 if (c != st.addrs.end()) {
                     const uint64_t v = m == "add" ? c->second + static_cast<uint64_t>(imm) : c->second - static_cast<uint64_t>(imm);
-                    const std::string str = nc_.cStringAt(v);
+                    bool wide = false;
+                    const std::string str = nc_.stringAt(v, &wide);
                     std::string e;
-                    if (looksLikeText(str)) e = cQuote(str);
+                    if (looksLikeText(str)) e = (wide ? "u" : "") + cQuote(str);
                     else if (const std::string sym = nc_.symbolize(v); !sym.empty()) e = "&" + sym;
                     else e = hex(v);
-                    define(blk, st, d, e, true, addr, false, false, true, e[0] == '"' ? "char *" : "void *");
+                    define(blk, st, d, e, true, addr, false, false, true, e[0] == '"' ? "char *" : wide && e[0] == 'u' ? "char16_t *" : "void *");
                     st.consts[d.id] = st.addrs[d.id] = v;
                     return;
                 }
@@ -3053,8 +3059,16 @@ void applyUserNames(Output& out, const std::vector<std::pair<std::string, std::s
         if (out.declLine < 0 || at >= out.lines.size()) continue;
         out.lines[at].text = declare(type, nameOf(v.key)) + ";" + (v.note.empty() || t != typeByKey.end() ? "" : "  // " + v.note);
     }
+    std::string prefix = out.headerPrefix;
+    if (auto r = typeByKey.find(std::string(kReturnKey)); r != typeByKey.end() && out.returnAt != std::string::npos &&
+                                                          out.returnAt + out.returnType.size() <= prefix.size()) {
+        const bool pointer = !r->second.empty() && r->second.back() == '*';
+        size_t len = out.returnType.size();
+        if (pointer && out.returnAt + len < prefix.size() && prefix[out.returnAt + len] == ' ') ++len;  // "char *name"
+        prefix.replace(out.returnAt, len, r->second);
+    }
     if (out.headerLine >= 0 && static_cast<size_t>(out.headerLine) < out.lines.size())
-        out.lines[static_cast<size_t>(out.headerLine)].text = out.headerPrefix + params + out.headerSuffix;
+        out.lines[static_cast<size_t>(out.headerLine)].text = prefix + params + out.headerSuffix;
     // Other names (functions, methods, fields, classes, labels, globals): everywhere, even after a '.'.
     std::map<std::string, std::string> symbolMap(symbols.begin(), symbols.end());
     for (const auto& [original, name] : symbolMap) out.renamedSymbols.emplace_back(name, original);
@@ -3097,18 +3111,19 @@ void applyUserNames(Output& out, const std::vector<std::pair<std::string, std::s
     }
 }
 
+// Pseudocode: any text is a type (struct foo *, unsigned int, void (*)(int), int[4]), on one line.
 std::string checkTypeName(std::string_view type) {
     if (type.empty()) return "";  // back to the inferred type
-    if (type.size() > 80) return "at most 80 characters";
-    if (!identStart(type[0])) return "a type starts with a letter or _";
+    if (type.size() > 200) return "at most 200 characters";
     for (const char c : type)
-        if (!identChar(c) && !std::strchr(" .*&<>[],:", c)) return std::string("'") + c + "' cannot appear in a type";
+        if (c == '\n' || c == '\r' || c == '\0') return "a type is one line";
     return "";
 }
 
 std::string typeOf(const Output& out, std::string_view key, const std::vector<std::pair<std::string, std::string>>& types) {
     for (const auto& [k, t] : types)
         if (k == key) return t;
+    if (key == kReturnKey) return out.returnType;
     for (const Var& v : out.vars)
         if (v.key == key) return v.type;
     return "";

@@ -68,6 +68,8 @@
     <ClCompile Include="apkspy_platform_test.cpp" />
     <ClCompile Include="..\src\core\ApkArchive.cpp" />
     <ClCompile Include="..\src\core\ApkInfo.cpp" />
+    <ClCompile Include="..\src\core\Codec.cpp" />
+    <ClCompile Include="..\src\core\TextDiff.cpp" />
     <ClCompile Include="..\src\core\VtScreen.cpp" />
     <ClCompile Include="..\src\core\AxmlDecoder.cpp" />
     <ClCompile Include="..\src\core\ExportJob.cpp" />
@@ -103,6 +105,8 @@
     <ClCompile Include="..\src\debug\DeviceService.cpp" />
     <ClCompile Include="..\src\debug\Jdwp.cpp" />
     <ClCompile Include="..\src\debug\TrafficProxy.cpp" />
+    <ClCompile Include="..\src\debug\HttpClient.cpp" />
+    <ClCompile Include="..\src\debug\MatchReplace.cpp" />
     <ClCompile Include="..\src\document\Document.cpp" />
     <ClCompile Include="..\src\document\SyntaxHighlighter.cpp" />
     <ClCompile Include="..\lib\miniz\miniz.c" />

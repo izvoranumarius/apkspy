@@ -144,6 +144,7 @@ void AnalysisPanel::resetCaches(bool keepNative) {
     selCallers_.clear();
     selCallees_.clear();
     methodListing_.clear();
+    listingSel_.reset();
     refsQuery_ = false;
     xrefs_.clear();
     xrefTitle_.clear();
@@ -544,6 +545,7 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
 
     // Smali of the method, line by line with each instruction's pc.
     methodListing_.clear();
+    listingSel_.reset();
     std::string listing;
     std::vector<int32_t> pcs;
     dalvik::ListingOptions opt;
@@ -689,6 +691,7 @@ void AnalysisPanel::drawQueryResults(const ApkAnalysis& a, Root& apk) {
                         openClass(a, *c, apk.title);
                     }
                 }
+                ui::copyHovered(r.from);
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", r.from.c_str());
                 if (ImGui::BeginPopupContextItem("##xrctx")) {
                     if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText(r.from.c_str());
@@ -750,6 +753,8 @@ void AnalysisPanel::drawStrings(const ApkAnalysis& a, Root& apk) {
                 }
                 if (shown.size() >= 300) shown += "...";
                 const bool clicked = ImGui::Selectable("##str", false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap);
+                ui::copyHovered(s.value);
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ui::encodedStringTooltip(s.value);
                 ImGui::SameLine(0.f, 0.f);
                 ImGui::TextUnformatted(shown.c_str());  // not a label: "##" in a string would hide text
                 if (clicked) {
@@ -766,6 +771,7 @@ void AnalysisPanel::drawStrings(const ApkAnalysis& a, Root& apk) {
                 }
                 if (ImGui::BeginPopupContextItem("##sctx")) {
                     if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText(s.value.c_str());
+                    if (ImGui::MenuItem("Send to Decoder")) workspace_.sendToDecoder(s.value);
                     ImGui::EndPopup();
                 }
                 ImGui::TableNextColumn();
@@ -1015,6 +1021,17 @@ void AnalysisPanel::drawMethodListing(const ApkAnalysis& a, Root& apk) {
                     }
                 }
             }
+            listingSel_.row(i, l.text, pos, lh);
+            if (ImGui::IsItemHovered()) ui::literalTooltip(l.text, pos.x, ImGui::GetIO().MousePos.x);
+            if (ImGui::BeginPopupContextItem("##lctx")) {
+                const ui::TextSelect::LineFn text = [this](int k) { return methodListing_[static_cast<size_t>(k)].text; };
+                if (std::string lit; ui::literalForMenu(l.text, std::string::npos, lit) && ImGui::MenuItem("Send string to Decoder"))
+                    workspace_.sendToDecoder(lit);
+                if (ImGui::MenuItem("Copy line")) ImGui::SetClipboardText(l.text.c_str());
+                listingSel_.menuItems(static_cast<int>(methodListing_.size()), text,
+                                      [this](std::string s) { workspace_.sendToDecoder(std::move(s)); });
+                ImGui::EndPopup();
+            }
             // Smali colouring, drawn over the row.
             bool inBlock = false;
             SyntaxHighlighter::tokenize(l.text, Language::Smali, inBlock, spans);
@@ -1027,6 +1044,7 @@ void AnalysisPanel::drawMethodListing(const ApkAnalysis& a, Root& apk) {
             }
             ImGui::PopID();
         }
+    listingSel_.finish(static_cast<int>(methodListing_.size()), [this](int k) { return methodListing_[static_cast<size_t>(k)].text; }, lh);
     ImGui::EndChild();
     ImGui::PopFont();
 }
@@ -1041,6 +1059,15 @@ void AnalysisPanel::drawReferences() {
     // Two lists side by side: what calls the selection, what it calls. A click only records
     // where to go: navigating replaces the lists being drawn, so it happens after them.
     std::function<void()> go;
+    // Each entry's text, for Ctrl+C and its context menu (set by the draw functions below).
+    std::string entryText;
+    const auto copyMenu = [&](const char* id) {
+        ui::copyHovered(entryText);
+        if (ImGui::BeginPopupContextItem(id)) {
+            if (ImGui::MenuItem("Copy", "Ctrl+C")) ImGui::SetClipboardText(entryText.c_str());
+            ImGui::EndPopup();
+        }
+    };
     const auto twoColumns = [&](const char* left, size_t nLeft, const char* right, size_t nRight,
                                 const std::function<void(size_t)>& drawLeft, const std::function<void(size_t)>& drawRight) {
         if (!ImGui::BeginTable("##refs", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY))
@@ -1060,9 +1087,9 @@ void AnalysisPanel::drawReferences() {
                 ImGui::TableNextRow();
                 ImGui::PushID(i);
                 ImGui::TableNextColumn();
-                if (static_cast<size_t>(i) < nLeft) drawLeft(static_cast<size_t>(i));
+                if (static_cast<size_t>(i) < nLeft) drawLeft(static_cast<size_t>(i)), copyMenu("##lcopy");
                 ImGui::TableNextColumn();
-                if (static_cast<size_t>(i) < nRight) drawRight(static_cast<size_t>(i));
+                if (static_cast<size_t>(i) < nRight) drawRight(static_cast<size_t>(i)), copyMenu("##rcopy");
                 ImGui::PopID();
             }
         ImGui::EndTable();
@@ -1081,7 +1108,8 @@ void AnalysisPanel::drawReferences() {
                    [&](size_t i) {
                        const auto& r = funcCallers_[i];
                        const std::string from = nc.symbolize(r.from);
-                       if (ImGui::Selectable((from.empty() ? hexAddr(r.from) : from).c_str(), false, ImGuiSelectableFlags_None)) {
+                       entryText = from.empty() ? hexAddr(r.from) : from;
+                       if (ImGui::Selectable(entryText.c_str(), false, ImGuiSelectableFlags_None)) {
                            const uint64_t at = r.from;
                            go = [this, at] { gotoNative(at); };
                        }
@@ -1090,6 +1118,7 @@ void AnalysisPanel::drawReferences() {
                        const auto& r = nativeCallees_[i];
                        const NativeCode::Function* to = nc.functionAt(r.target);
                        const std::string name = to ? NativeCode::displayName(*to) : hexAddr(r.target);
+                       entryText = name;
                        ImGui::PushID("callee");
                        if (ImGui::Selectable(name.c_str()) && to) {
                            const uint64_t at = to->addr;
@@ -1109,6 +1138,7 @@ void AnalysisPanel::drawReferences() {
                [&](size_t i) {
                    const auto& h = selCallers_[i];
                    const std::string sig = a.methodSignature(h.from);
+                   entryText = sig;
                    if (ImGui::Selectable(prettyRef(sig).c_str())) {
                        const DexFile& dex = *a.dexes()[h.from.dex];
                        const auto defs = a.findMethodDefs(dex.typeDescriptor(dex.methodClass(h.from.method)), dex.methodName(h.from.method),
@@ -1128,6 +1158,7 @@ void AnalysisPanel::drawReferences() {
                [&](size_t i) {
                    const auto& c = selCallees_[i];
                    const std::string label = prettyRef(c.signature);
+                   entryText = c.signature;
                    ImGui::PushID("callee");
                    std::string cls, name, proto;
                    std::vector<ApkAnalysis::MethodDef> defs;
@@ -1304,6 +1335,15 @@ void AnalysisPanel::drawNative(Root& apk) {
                             ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                             symbolView_ = 5;
                             gotoNative(s->value & ~1ull);
+                        }
+                        ui::copyHovered(dem);
+                        if (ImGui::BeginPopupContextItem("##symctx")) {
+                            if (ImGui::MenuItem("Copy name", "Ctrl+C")) ImGui::SetClipboardText(dem.c_str());
+                            if (dem != s->name && ImGui::MenuItem("Copy mangled name")) ImGui::SetClipboardText(s->name.c_str());
+                            char addr[32];
+                            std::snprintf(addr, sizeof addr, "0x%llx", static_cast<unsigned long long>(s->value));
+                            if (ImGui::MenuItem("Copy address")) ImGui::SetClipboardText(addr);
+                            ImGui::EndPopup();
                         }
                         ImGui::PopID();
                         if (ImGui::IsItemHovered())

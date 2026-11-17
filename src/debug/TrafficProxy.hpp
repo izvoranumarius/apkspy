@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -10,6 +11,7 @@
 #include <vector>
 #include "core/Socket.hpp"
 #include "core/WorkerSet.hpp"
+#include "debug/MatchReplace.hpp"
 
 namespace adb {
 class Adb;
@@ -24,6 +26,10 @@ class Adb;
 //  - HTTPS arrives as CONNECT tunnels: the proxy relays the encrypted bytes
 //    untouched and records host, port, TLS SNI, timing and byte counts. The
 //    contents stay encrypted (no interception).
+//  - Match & replace rules rewrite plain-HTTP requests and responses on the way.
+//  - Intercept (as in Burp): matching plain-HTTP requests and / or responses
+//    wait in the proxy until the user forwards them (possibly edited) or drops
+//    them. Tunnels are never held.
 //
 // Memory: at most kMaxFlows flows are kept (oldest dropped) and each body is
 // capped at kMaxBody bytes. Threading: one worker per client connection;
@@ -59,6 +65,7 @@ public:
         uint64_t bytesUp = 0;   // client -> server
         uint64_t bytesDown = 0; // server -> client
         std::string error;
+        bool edited = false;    // changed at the intercept before it went on
         Message request;
         Message response;
 
@@ -91,8 +98,34 @@ public:
     std::vector<Flow> flows(uint64_t sinceId = 0, size_t limit = kMaxFlows) const;
     bool flow(uint64_t id, Flow& out) const;
     std::vector<Endpoint> endpoints() const;
+    // Ids (above `sinceId`) of the flows whose request or response contains `text`
+    // (case-insensitive) in the start line, a header or the decoded body.
+    std::vector<uint64_t> searchFlows(const std::string& text, uint64_t sinceId = 0) const;
     uint64_t lastId() const;
     void clear();
+
+    // A message waiting at the intercept.
+    struct Held {
+        uint64_t id = 0;
+        uint64_t flowId = 0;
+        bool response = false;  // false: a request on its way to the server
+        std::string url;
+        std::string raw;        // start line, headers (CRLF), blank line, body as received
+    };
+    // What to hold: requests, responses, and only URLs containing `filter`
+    // (case-insensitive; empty = all). Turning a kind off releases what waits.
+    void setIntercept(bool requests, bool responses, const std::string& filter);
+    std::vector<Held> held() const;
+    size_t heldCount() const;
+    // Sends a held message on: `edited` replaces it (LF or CRLF lines; Content-Length
+    // follows the body), empty sends it unchanged.
+    void forward(uint64_t heldId, const std::string& edited = {});
+    void drop(uint64_t heldId);
+    void forwardAll();
+
+    // Match & replace: the rules applied from now on (hit counts start over).
+    void setRules(matchreplace::RuleSet rules);
+    std::vector<int> ruleHits() const;  // replacements made by each rule
 
     // Routes the device through the proxy (adb reverse + global http_proxy)
     // and undoes it. The device setting survives ApkSpy: always restore.
@@ -114,6 +147,15 @@ private:
     void serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::string pending);
     std::shared_ptr<Flow> newFlow();
     void finish(const std::shared_ptr<Flow>& f, std::chrono::steady_clock::time_point t0);
+    struct Waiter {
+        Held held;
+        bool decided = false;
+        bool dropped = false;
+        std::string raw;  // what to send on
+    };
+    bool interceptMatches(bool response, const std::string& url) const;  // under interceptMutex_
+    // Blocks until the waiter is forwarded (true; w.raw is what to send) or dropped (false).
+    bool hold(const std::shared_ptr<Waiter>& w);
 
     Socket listener_;
     std::thread acceptThread_;
@@ -127,4 +169,17 @@ private:
     std::deque<std::shared_ptr<Flow>> flows_;
     uint64_t nextId_ = 1;
     std::string routedSerial_;
+
+    mutable std::mutex interceptMutex_;  // guards the intercept settings and waiting_
+    std::condition_variable interceptCv_;
+    std::deque<std::shared_ptr<Waiter>> waiting_;
+    bool interceptRequests_ = false;
+    bool interceptResponses_ = false;
+    std::string interceptFilter_;
+    uint64_t nextHeldId_ = 1;
+
+    mutable std::mutex rulesMutex_;
+    std::shared_ptr<const matchreplace::RuleSet> rules_;
+    std::vector<int> ruleHits_;
+    void countHits(const std::vector<int>& hits);
 };

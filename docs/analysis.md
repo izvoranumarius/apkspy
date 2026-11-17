@@ -108,7 +108,17 @@ and **Reset type**. An empty name or type restores the original. Names and
 types belong to the method or native function and are saved with the project.
 They apply to the registers and stack slots the output names (`v3`, `arg0`,
 `x19`, `d0`, `sp_10`); `w8` and `x8` are the same variable. Names that are
-keywords or already used in the function are refused.
+keywords or already used in the function are refused. Types are free text,
+since the output is pseudocode for reading: `struct conn *`, `unsigned int`,
+`void (*)(int)` or anything else on one line. **Y** on a declaration sets that
+variable's type, and **Y** on the signature line sets the function's return
+type. Drag to select text (double-click a word) and copy it with `Ctrl+C`.
+
+Strings that decode to readable text (Base64, hex, URL-encoded, JWT, gzip,
+UTF-16...) get a `// decoded: "..."` note after the line, and hovering any
+string literal shows its decoded form. Right-click > **Send string to Decoder**
+opens it in the Decoder panel with the steps that decode it. Native code shows
+UTF-16 strings as `u"..."`.
 
 **Auto Refresh** (on by default) follows the selection. Turn it off to keep
 a function on screen while you browse, then press **Refresh** to load the

@@ -253,8 +253,9 @@ void ExplorerPanel::drawContents() {
 
     // Ctrl+C copies the selected rows' names (the text shown in the panel).
     ImGuiIO& io = ImGui::GetIO();
-    if (!selection_.empty() && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false) &&
-        ImGui::IsWindowFocused())
+    // The tree is a child window: focus anywhere inside the panel counts.
+    if (!selection_.empty() && io.KeyCtrl && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_C, false) &&
+        ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
         copySelection();
 
     drawExportProgress();
@@ -514,6 +515,7 @@ void ExplorerPanel::drawRow(Root& root, const TreeNode& node, int depth, bool is
             if (ImGui::MenuItem("Export Folder (decoded)...")) openExportFolder(root, node, true);
             ImGui::Separator();
         }
+        if (ImGui::MenuItem("Copy Name", "Ctrl+C")) ImGui::SetClipboardText(node.name().c_str());
         if (ImGui::MenuItem("Copy Path")) ImGui::SetClipboardText(node.path().c_str());
         if (isRoot && root.kind == Root::Kind::Apk) {
             ImGui::Separator();

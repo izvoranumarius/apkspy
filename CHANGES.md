@@ -1,5 +1,65 @@
 # Changelog
 
+## Terminals, copying and free retyping
+
+- **Request history** in the Network workspace, as in Burp: filters by method,
+  status, content type, static files, edited, parameters, highlighted and
+  hosts; a search that can look inside decoded bodies; sortable columns;
+  colour highlights and comments on requests (Note column).
+- **Comparer** in the Network workspace, as in Burp: send two requests or
+  responses (or Repeater responses, Decoder output, pasted text) and see them
+  side by side, changed lines coloured and the differing words highlighted,
+  with next / previous difference. Bodies are compared decoded and with JSON
+  indented.
+- **Match & replace** in the Network workspace, as in Burp: saved rules rewrite
+  plain-HTTP request and response lines, headers and bodies as they pass
+  through the proxy. Literal or regex (with `$1` groups); header rules can add
+  or remove headers; body rules see through chunked and gzip bodies and fix
+  Content-Length; per-rule hit counts and a set of presets.
+- **Intercept** in the Network workspace, as in Burp: plain-HTTP requests (and,
+  if ticked, responses) stop in ApkSpy; edit them, then **Forward** (`Ctrl+F`)
+  or **Drop**. A URL filter limits what is held, Content-Length follows an
+  edited body, and edited requests are marked in the Requests list. Turning
+  intercept off or stopping the capture lets everything waiting go on.
+- **Repeater** in the Network workspace, as in Burp: **Send to Repeater** (or
+  `Ctrl+R`) on a captured request opens it in a numbered tab; edit and **Send**
+  (`Ctrl+Enter` / `Ctrl+Space`), the response shows beside it as raw, pretty or
+  headers, and every send stays in the tab's history. Plain HTTP goes out
+  exactly as typed; HTTPS is sent through WinHTTP. Content-Length is kept in
+  step with the body; certificate errors can be ignored for test servers.
+- **Decoder** panel (Code, Analysis and Network workspaces), as in CyberChef or
+  Burp's Decoder: input, a chain of steps, output, recomputed as you type.
+  Steps: Base64 / Base64url, Base32, hex, URL, HTML entities, string escapes
+  (`\n`, `\x41`, `\u00e9`), XOR, ROT13, reverse, inflate (gzip / zlib /
+  deflate), zlib and gzip compression, MD5, SHA-1, SHA-256 and JWT. **Smart
+  decode** peels off layers by itself (URL > Base64 > gzip...). The output shows
+  as text or a hex dump, and can be copied or used as the next input.
+- **Text encodings**: decode or encode UTF-8, UTF-16LE / BE, UTF-32LE / BE,
+  Latin-1, Windows-1252, ASCII and Java's modified UTF-8 (DEX strings).
+  Native decompilation and listings now also show UTF-16 strings, as `u"..."`.
+- **Encoded strings in code**: in the decompiler a string that decodes to text
+  gets a `// decoded: "..."` note; hovering a string literal in the decompiler,
+  code viewer, smali listing or Strings list shows what it decodes to.
+  **Send to Decoder** is in their right-click menus, and in Output, the
+  terminal and the native strings.
+- **Several terminals**, as in VS Code: tabs in the Terminal panel, **+** or
+  `` Ctrl+Shift+` `` for another, close with the tab's x or the trash button,
+  double-click to rename. Background shells keep running. Double-click selects
+  a word; Copy All, Select All and `Ctrl+Shift+C` added.
+- **Copy text everywhere**: the code viewer, decompiler, smali listing and
+  Output now select text like an editor (drag, double-click, Shift+click,
+  `Ctrl+A`, `Ctrl+C`). Explorer, references, strings, symbols, search hits,
+  the native listing and Overview copy the item under the mouse with `Ctrl+C`
+  or a right-click **Copy**. Fixed: `Ctrl+C` in the Explorer did nothing.
+- **Welcome screen**: with no APK, project or file open, the window shows only
+  the welcome page. Opening something, or asking for a panel or workspace
+  (Terminal, Find in project, `Ctrl+1` to `Ctrl+5`, the View menu), brings the
+  workbench back; closing the project returns to the welcome page. With a
+  project or APK open, an editor with no files stays blank.
+- **Decompiler types are free text** (`struct conn *`, `unsigned int`,
+  `void (*)(int)`): it is pseudocode. **Y** also works on a declaration and on
+  the signature line, which sets the return type.
+
 ## Decompiler
 
 - **Decompiler** panel in the Analysis workspace, laid out as in Cutter:

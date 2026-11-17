@@ -11,6 +11,7 @@
 #include "app/Theme.hpp"
 #include "document/SyntaxHighlighter.hpp"
 #include "ui/AnalysisPanel.hpp"
+#include "ui/TextSelect.hpp"
 #include "ui/UiUtil.hpp"
 
 namespace {
@@ -28,6 +29,28 @@ std::string addrText(const decompiler::Line& l, bool native) {
 
 std::string shownText(const decompiler::Line& l) {
     return std::string(static_cast<size_t>(std::max(l.indent, 0)) * 4, ' ') + l.text;
+}
+
+// What Y sets the type of on a line when the cursor is not on a variable: the
+// local declared there, the return type on the signature line, or the line's
+// only variable. "" when there is nothing to type.
+std::string typeTargetOfLine(const decompiler::Output& out, int line, bool native) {
+    if (line < 0 || static_cast<size_t>(line) >= out.lines.size()) return {};
+    if (line == out.headerLine) return out.returnAt == std::string::npos ? std::string() : std::string(decompiler::kReturnKey);
+    if (out.declLine >= 0 && line >= out.declLine) {
+        int local = 0;
+        for (const decompiler::Var& v : out.vars)
+            if (!v.param && local++ == line - out.declLine) return v.key;
+    }
+    std::string only;
+    for (size_t at : decompiler::identifierStarts(out.lines[static_cast<size_t>(line)].text)) {
+        const std::string tok = decompiler::identifierAt(out.lines[static_cast<size_t>(line)].text, at);
+        const std::string k = decompiler::keyOfShown(out, tok, native);
+        if (k.empty() || k == only) continue;
+        if (!only.empty()) return {};
+        only = k;
+    }
+    return only;
 }
 
 // Removes the name / type the user gave a variable.
@@ -91,6 +114,7 @@ void AnalysisPanel::drawDecompiler() {
         decompNotesVersion_ = 0;
         decompToken_.clear();
         decompRenameOpen_ = false;
+        decompSel_.reset();
     }
     decompRefresh_ = false;
     const bool native = decompKind_ == 2;
@@ -99,6 +123,8 @@ void AnalysisPanel::drawDecompiler() {
         decompiler::applyUserNames(decomp_, notes.renames(decompLoc_), notes.retypes(decompLoc_), native,
                                    notes.variableNotes(decompSymLoc_, Annotation::Kind::Symbol));
         decompNotesVersion_ = notes.version();
+        decompNotes_.clear();
+        for (const decompiler::Line& l : decomp_.lines) decompNotes_.push_back(ui::decodedNote(l.text));
     }
     const bool following = decompKind_ != 0 && !(kind != decompKind_ || key != decompKey_ || owner != decompOwner_);
 
@@ -157,8 +183,9 @@ void AnalysisPanel::drawDecompiler() {
             decompStatus_ = "Refresh first: this is not the selection";
             return;
         }
-        const std::string k = decompToken_.empty() ? std::string() : decompiler::keyOfShown(decomp_, decompToken_, native);
+        std::string k = decompToken_.empty() ? std::string() : decompiler::keyOfShown(decomp_, decompToken_, native);
         const std::string sym = decompToken_.empty() ? std::string() : decompiler::symbolOfShown(decomp_, decompToken_, native);
+        if (type && k.empty()) k = typeTargetOfLine(decomp_, decompLine_, native);  // a type, a declaration, the signature
         if (!k.empty()) {
             decompEditSymbol_ = false;
             decompRenameKey_ = k;
@@ -166,7 +193,7 @@ void AnalysisPanel::drawDecompiler() {
             decompEditSymbol_ = true;
             decompRenameKey_ = sym;
         } else {
-            decompStatus_ = type ? "Y sets a variable's type: put the cursor on a variable (" + std::string(native ? "x19, sp_10" : "v3, arg0") + ")"
+            decompStatus_ = type ? "Y sets a type: put the cursor on a variable (" + std::string(native ? "x19, sp_10" : "v3, arg0") + ") or the signature"
                                  : "Put the cursor on a name (keywords and built-in types cannot be renamed)";
             return;
         }
@@ -230,6 +257,7 @@ void AnalysisPanel::drawDecompiler() {
             ImGui::SetScrollY(std::max(0.f, y - ImGui::GetWindowHeight() * 0.3f));
     }
 
+    const ui::TextSelect::LineFn lineText = [&](int i) { return shownText(decomp_.lines[static_cast<size_t>(i)]); };
     std::vector<Span> spans;
     bool inBlock = false;
     int clickedLine = -1;
@@ -278,7 +306,7 @@ void AnalysisPanel::drawDecompiler() {
                 decompCol_ = std::min(col, shown.size());
                 decompToken_ = decompiler::identifierAt(shown, decompCol_);
             }
-            if (ImGui::IsItemHovered() && !l.addrs.empty())
+            if (ImGui::IsItemHovered() && !ui::literalTooltip(shown, pos.x, mx) && !l.addrs.empty())
                 ImGui::SetTooltip("%s %s", native ? "address" : "pc", addrText(l, native).c_str());
             if (ImGui::BeginPopupContextItem("##dctx")) {
                 const std::string k = decompToken_.empty() ? std::string() : decompiler::keyOfShown(decomp_, decompToken_, native);
@@ -310,10 +338,26 @@ void AnalysisPanel::drawDecompiler() {
                         removeVariableNote(notes, slot);
                     ImGui::Separator();
                 }
-                if (ImGui::MenuItem("Copy line")) ImGui::SetClipboardText(l.text.c_str());
+                if (k.empty() && following && i == decomp_.headerLine && decomp_.returnAt != std::string::npos) {
+                    if (ImGui::MenuItem("Set return type...", "Y")) startEdit(true);
+                    Annotation slot = decompLoc_;
+                    slot.kind = Annotation::Kind::Retype;
+                    slot.context = std::string(decompiler::kReturnKey);
+                    if (std::any_of(notes.all().begin(), notes.all().end(), [&](const Annotation& a) { return a.sameSlot(slot); }) &&
+                        ImGui::MenuItem("Reset return type"))
+                        removeVariableNote(notes, slot);
+                    ImGui::Separator();
+                }
+                if (std::string lit; ui::literalForMenu(shown, decompCol_, lit) && ImGui::MenuItem("Send string to Decoder"))
+                    workspace_.sendToDecoder(lit);
+                if (!decompSel_.empty() && ImGui::MenuItem("Send selection to Decoder")) workspace_.sendToDecoder(decompSel_.selected(lineText));
+                if (ImGui::MenuItem("Copy", "Ctrl+C", false, !decompSel_.empty())) decompSel_.copy(lineText);
+                if (ImGui::MenuItem("Copy line")) ImGui::SetClipboardText(shown.c_str());
                 if (ImGui::MenuItem("Copy function")) ImGui::SetClipboardText(decompiler::toText(decomp_).c_str());
+                if (ImGui::MenuItem("Select All", "Ctrl+A")) decompSel_.selectAll(lineCount, lineText);
                 ImGui::EndPopup();
             }
+            decompSel_.row(i, shown, pos, lh);
             // Java colouring also suits the C-like output: strings, numbers, comments, keywords.
             inBlock = false;
             SyntaxHighlighter::tokenize(shown, Language::Java, inBlock, spans);
@@ -324,6 +368,11 @@ void AnalysisPanel::drawDecompiler() {
                 dl->AddText(ImVec2(x, pos.y), theme::syntax(s.token), b, e);
                 x += ImGui::CalcTextSize(b, e).x;
             }
+            // An encoded string: what it decodes to, after the line.
+            if (static_cast<size_t>(i) < decompNotes_.size() && !decompNotes_[static_cast<size_t>(i)].empty()) {
+                const std::string& note = decompNotes_[static_cast<size_t>(i)];
+                dl->AddText(ImVec2(x + ImGui::GetFontSize(), pos.y), theme::u32(Col::TextMuted), note.c_str(), note.c_str() + note.size());
+            }
             // The text cursor.
             if (i == decompLine_ && focused) {
                 const float cx = xOf(decompCol_);
@@ -331,6 +380,7 @@ void AnalysisPanel::drawDecompiler() {
             }
             ImGui::PopID();
         }
+    decompSel_.finish(lineCount, lineText, lh);
     // A click puts the cursor there: the identifier under it is highlighted everywhere.
     if (clickedLine >= 0 && !decompRenameOpen_) moveCursor(clickedLine, clickedCol);
     else if (clickedLine >= 0) decompLine_ = clickedLine, decompCol_ = clickedCol;
@@ -388,14 +438,15 @@ void AnalysisPanel::decompilerRenamePopup() {
     std::string shownName = decompRenameKey_;
     for (const auto& [shown, key] : shownNames)
         if (key == decompRenameKey_) shownName = shown;
-    if (decompEditType_) ImGui::Text("Type of %s", shownName.c_str());
+    if (decompEditType_ && decompRenameKey_ == decompiler::kReturnKey) ImGui::Text("Return type of %s", decompTitle_.c_str());
+    else if (decompEditType_) ImGui::Text("Type of %s", shownName.c_str());
     else if (decompEditSymbol_) ImGui::Text("Rename %s in every function of %s", shownName.c_str(), native ? decompSymLoc_.path.c_str() : "this APK");
     else ImGui::Text("Rename %s", shownName.c_str());
     if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
     ImGui::SetNextItemWidth(ui::em(18.f));
     bool apply = ImGui::InputText("##newname", decompRenameBuf_, sizeof decompRenameBuf_,
                                   ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
-    if (decompEditType_) ImGui::TextDisabled("e.g. String, int, uint8_t *, MyStruct *. Empty restores the inferred type.");
+    if (decompEditType_) ImGui::TextDisabled("Any text: it is pseudocode (struct conn *, unsigned int, byte[]). Empty restores the inferred type.");
     else ImGui::TextDisabled("Empty restores %s. Saved with the project.", decompRenameKey_.c_str());
     if (!decompRenameError_.empty()) ImGui::TextColored(theme::vec(Col::Error), "%s", decompRenameError_.c_str());
     apply |= ui::smallButton("OK");
@@ -412,7 +463,7 @@ void AnalysisPanel::decompilerRenamePopup() {
             if (value == decompRenameKey_) value.clear();  // the original name: same as resetting
             decompRenameError_ = decompiler::checkSymbolName(decomp_, value, native);
         } else if (decompEditType_) {
-            std::string inferred;
+            std::string inferred = decompRenameKey_ == decompiler::kReturnKey ? decomp_.returnType : std::string();
             for (const decompiler::Var& v : decomp_.vars)
                 if (v.key == decompRenameKey_) inferred = v.type;
             if (value == inferred) value.clear();  // the inferred type: same as resetting

@@ -27,6 +27,11 @@
 #include "analysis/ApkAnalysis.hpp"
 #include "analysis/ApkDiff.hpp"
 #include "analysis/Dalvik.hpp"
+#include "analysis/Decompiler.hpp"
+#include "core/Codec.hpp"
+#include "core/TextDiff.hpp"
+#include "debug/HttpClient.hpp"
+#include "debug/MatchReplace.hpp"
 #include "analysis/DexFile.hpp"
 #include "analysis/Arm64.hpp"
 #include "analysis/ElfFile.hpp"
@@ -1196,6 +1201,10 @@ static void testTrafficProxy() {
               TrafficProxy::decodeBody(full.response, nullptr) == "{\"id\":123,\"ok\":true}",
           "request and response bodies captured");
     CHECK(TrafficProxy::curl(full).find("--data-binary 'hello'") != std::string::npos, "copy as cURL");
+    CHECK(proxy.searchFlows("\"OK\":TRUE").size() == 1 && proxy.searchFlows("content-type: text/plain").size() == 1 &&
+              proxy.searchFlows("users/123").size() == 1 && proxy.searchFlows("not-in-any-flow").empty() &&
+              proxy.searchFlows("hello", flows[0].id).empty(),
+          "search in bodies, headers and URLs (case-insensitive, after an id)");
     auto eps = proxy.endpoints();
     CHECK(eps.size() == 1 && eps[0].pathTemplate == "/api/users/{id}" && eps[0].count == 1, "endpoint map");
 
@@ -1239,6 +1248,429 @@ static void testTrafficProxy() {
           "tunnel recorded with SNI and byte counts");
     proxy.stop();
     CHECK(!proxy.running(), "proxy stops");
+}
+
+static void testCodec() {
+    using codec::Op;
+    const auto run = [](Op op, std::string_view in, std::string_view arg = {}) { return codec::apply(op, in, arg).out; };
+    // Base64 / Base32 / hex, both ways (RFC 4648 vectors).
+    CHECK(run(Op::Base64Encode, "foobar") == "Zm9vYmFy" && run(Op::Base64Encode, "fo") == "Zm8=" && run(Op::Base64UrlEncode, "\xfb\xff") == "-_8",
+          "base64 encode");
+    CHECK(run(Op::Base64Decode, "Zm9v\nYmE=\n") == "fooba" && run(Op::Base64Decode, "Zm8") == "fo" && run(Op::Base64Decode, "-_8") == "\xfb\xff",
+          "base64 decode: whitespace, no padding, url alphabet");
+    CHECK(!codec::apply(Op::Base64Decode, "Zm9v!").ok, "base64 rejects other characters");
+    CHECK(run(Op::Base32Encode, "foobar") == "MZXW6YTBOI======" && run(Op::Base32Decode, "MZXW6YTBOI======") == "foobar", "base32");
+    CHECK(run(Op::HexDecode, "48 65 0x6c \\x6c 6f") == "Hello" && run(Op::HexEncode, "Hi") == "4869" && !codec::apply(Op::HexDecode, "486").ok,
+          "hex");
+    CHECK(run(Op::UrlDecode, "a%20b+c%2F") == "a b c/" && run(Op::UrlEncode, "a b/") == "a%20b%2F", "url");
+    CHECK(run(Op::HtmlDecode, "&lt;a&gt; &amp; &#65;&#x42;") == "<a> & AB", "html entities");
+    CHECK(run(Op::Unescape, "a\\nb\\x41\\u00e9\\ud83d\\ude00") == "a\nbA\xc3\xa9\xf0\x9f\x98\x80", "unescape incl. surrogate pairs");
+    CHECK(run(Op::Escape, "a\n\"\xc3\xa9") == "a\\n\\\"\\u00e9", "escape");
+    CHECK(run(Op::Xor, run(Op::Xor, "secret", "k3y"), "k3y") == "secret" && run(Op::Xor, "A", "0x01") == "@", "xor");
+    CHECK(run(Op::Rot13, "Hello") == "Uryyb", "rot13");
+    // Hashes ("abc" test vectors).
+    CHECK(run(Op::Md5, "abc") == "900150983cd24fb0d6963f7d28e17f72" && run(Op::Md5, "") == "d41d8cd98f00b204e9800998ecf8427e", "md5");
+    CHECK(run(Op::Sha1, "abc") == "a9993e364706816aba3e25717850c26c9cd0d89d", "sha1");
+    CHECK(run(Op::Sha256, "abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "sha256");
+    // Compression round trips.
+    const std::string text(500, 'x');
+    CHECK(run(Op::Inflate, run(Op::ZlibCompress, text)) == text && run(Op::Inflate, run(Op::GzipCompress, text)) == text, "zlib and gzip");
+    // Text encodings.
+    std::string bytes, back, error;
+    CHECK(codec::encodeText("h\xc3\xa9\xf0\x9f\x98\x80", "UTF-16LE", bytes, error) && bytes == std::string("h\0\xe9\0\x3d\xd8\x00\xde", 8) &&
+              codec::decodeText(bytes, "UTF-16LE", back, error) && back == "h\xc3\xa9\xf0\x9f\x98\x80",
+          "UTF-16LE with a surrogate pair");
+    CHECK(codec::encodeText("hi", "UTF-16BE", bytes, error) && bytes == std::string("\0h\0i", 4), "UTF-16BE");
+    CHECK(codec::encodeText("A", "UTF-32LE", bytes, error) && bytes == std::string("A\0\0\0", 4) && codec::decodeText(bytes, "UTF-32LE", back, error) &&
+              back == "A",
+          "UTF-32");
+    CHECK(codec::decodeText("\xe9\x80", "Windows-1252", back, error) && back == "\xc3\xa9\xe2\x82\xac" &&
+              codec::encodeText("\xe2\x82\xac", "Windows-1252", bytes, error) && bytes == "\x80",
+          "Windows-1252 (euro sign)");
+    CHECK(codec::decodeText("\xe9", "Latin-1", back, error) && back == "\xc3\xa9" && !codec::encodeText("\xe2\x82\xac", "Latin-1", bytes, error),
+          "Latin-1, and characters it cannot hold");
+    CHECK(!codec::decodeText("\xe9", "ASCII", back, error), "ASCII refuses 8-bit bytes");
+    CHECK(codec::encodeText(std::string("a\0", 2), "Modified UTF-8 (Java / DEX)", bytes, error) && bytes == "a\xc0\x80" &&
+              codec::decodeText("a\xc0\x80\xed\xa0\xbd\xed\xb8\x80", "Modified UTF-8 (Java / DEX)", back, error) &&
+              back == std::string("a\0\xf0\x9f\x98\x80", 6),
+          "modified UTF-8: NUL and surrogate pairs");
+    // Smart decode: layers peel off, plain text is left alone.
+    const std::string layered = run(Op::UrlEncode, run(Op::Base64Encode, run(Op::GzipCompress, "{\"token\":\"abc\"}")));
+    std::vector<Op> chain = codec::smartDecode(layered);
+    CHECK(chain.size() == 3 && chain[0] == Op::UrlDecode && chain[1] == Op::Base64Decode && chain[2] == Op::Inflate,
+          "smart decode: URL > Base64 > gzip");
+    CHECK(codec::smartDecode("hello world").empty() && codec::smartDecode("username").empty(), "smart decode leaves words alone");
+    std::string decoded, steps;
+    CHECK(codec::decodePreview("aHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20v", decoded, steps) && decoded == "https://api.example.com/",
+          "decode preview of a Base64 URL");
+    CHECK(!codec::decodePreview("Hello, world", decoded, steps), "no preview for plain text");
+    CHECK(codec::smartDecode(std::string("h\0i\0!\0", 6)).size() == 1, "UTF-16LE bytes are recognised");
+    const std::string jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.sig";
+    CHECK(run(Op::JwtDecode, jwt) == "{\"alg\":\"HS256\"}\n{\"sub\":\"123\"}", "jwt");
+    // String literals in code.
+    const auto lits = codec::stringLiterals("s = \"a\\\"b\" + 'x' + \"c\"; // \"no\"");
+    CHECK(lits.size() == 2 && lits[0].text == "a\"b" && lits[1].text == "c" && codec::literalAt(lits, lits[1].begin + 1) == &lits[1],
+          "string literals: escapes, char literals and comments");
+}
+
+static void testHttpClient() {
+    // A request as typed in the Repeater: LF lines, a body, a stale Content-Length.
+    const std::string prepared = httpclient::prepare("POST /api HTTP/1.1\nHost: h:8080\nContent-Length: 99\n\n{\"a\":1}", true);
+    CHECK(prepared == "POST /api HTTP/1.1\r\nHost: h:8080\r\nContent-Length: 7\r\n\r\n{\"a\":1}", ("prepare: " + prepared).c_str());
+    CHECK(httpclient::prepare("GET / HTTP/1.1\nHost: x\n", true) == "GET / HTTP/1.1\r\nHost: x\r\n\r\n", "prepare: no body, no length added");
+    CHECK(httpclient::prepare("PUT /p HTTP/1.1\r\nHost: x\r\n\r\nab\ncd", true) == "PUT /p HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nab\ncd",
+          "prepare: the body is kept byte for byte");
+    httpclient::Target t;
+    CHECK(httpclient::targetFromRequest("GET / HTTP/1.1\nHost: api.test:8443\n\n", t) && t.host == "api.test" && t.port == 8443,
+          "target from the Host header");
+    TrafficProxy::Flow f;
+    f.method = "GET";
+    f.host = "example.org";
+    f.port = 80;
+    f.path = "/a?b=1";
+    f.request.startLine = "GET http://example.org/a?b=1 HTTP/1.1";
+    f.request.headers = {{"Host", "example.org"}, {"Proxy-Connection", "keep-alive"}, {"Accept", "*/*"}};
+    CHECK(httpclient::editableRequest(f) == "GET /a?b=1 HTTP/1.1\nHost: example.org\nAccept: */*\n\n",
+          ("editable request: " + httpclient::editableRequest(f)).c_str());
+
+    // Real sends to a local server: Content-Length, chunked and close-delimited bodies.
+    const char* answers[] = {
+        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+        "HTTP/1.1 201 Created\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n",
+        "HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\n\r\nmissing",
+        "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 204 No Content\r\n\r\n",
+    };
+    for (int k = 0; k < 4; ++k) {
+        Socket server;
+        std::string err;
+        if (!Socket::initNetworking() || !server.listenLoopback(0, err)) {
+            CHECK(false, ("listen: " + err).c_str());
+            return;
+        }
+        const int port = server.localPort();
+        std::string received;
+        std::thread peer([&] {
+            Socket c = server.accept(5000);
+            if (!c.valid()) return;
+            char buf[4096];
+            while (received.find("\r\n\r\n") == std::string::npos) {
+                const long n = c.recvSome(buf, sizeof buf);
+                if (n <= 0) return;
+                received.append(buf, static_cast<size_t>(n));
+            }
+            const size_t cl = received.find("Content-Length: ");
+            if (cl != std::string::npos) {
+                const size_t want = received.find("\r\n\r\n") + 4 + static_cast<size_t>(std::atoi(received.c_str() + cl + 16));
+                while (received.size() < want) {
+                    const long n = c.recvSome(buf, sizeof buf);
+                    if (n <= 0) break;
+                    received.append(buf, static_cast<size_t>(n));
+                }
+            }
+            c.sendAll(std::string(answers[k]));
+            if (k == 2) c.close();  // HTTP/1.0 without a length: the body ends with the connection
+            else std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        });
+        httpclient::Options o;
+        o.timeoutMs = 4000;
+        const auto r = httpclient::send({"127.0.0.1", port, false}, "POST /x HTTP/1.1\nHost: 127.0.0.1\n\nbody!", o);
+        peer.join();
+        CHECK(received.find("POST /x HTTP/1.1\r\n") == 0 && received.find("Content-Length: 5\r\n") != std::string::npos &&
+                  received.size() >= 5 && received.compare(received.size() - 5, 5, "body!") == 0,
+              ("the server got the request as typed (" + std::to_string(k) + ")").c_str());
+        std::string note;
+        const std::string body = TrafficProxy::decodeBody(r.response, &note);
+        if (k == 0) CHECK(r.ok && r.status == 200 && body == "hello", ("content-length response: " + r.error).c_str());
+        if (k == 1) CHECK(r.ok && r.status == 201 && body == "abcde", ("chunked response: " + r.error + " " + body).c_str());
+        if (k == 2) CHECK(r.ok && r.status == 404 && body == "missing", ("close-delimited response: " + r.error).c_str());
+        if (k == 3) CHECK(r.ok && r.status == 204 && body.empty(), ("interim 100 skipped: " + r.error).c_str());
+    }
+    httpclient::Options quick;
+    quick.timeoutMs = 2000;
+    const auto refused = httpclient::send({"127.0.0.1", 1, false}, "GET / HTTP/1.1\nHost: x\n\n", quick);
+    CHECK(!refused.ok && refused.error.find("could not connect") != std::string::npos, ("refused: " + refused.error).c_str());
+    CHECK(!httpclient::send({"", 80, false}, "GET / HTTP/1.1\n\n", quick).ok, "no host");
+}
+
+static void testIntercept() {
+    std::printf("== intercept ==\n");
+    // Origin: records the request it gets, answers with a short JSON body.
+    const auto runOrigin = [](Socket& origin, std::string& seen) {
+        return std::thread([&origin, &seen] {
+            Socket c = origin.accept(5000);
+            if (!c.valid()) return;
+            char buf[4096];
+            while (seen.find("\r\n\r\n") == std::string::npos && c.waitReadable(3000)) {
+                const long n = c.recvSome(buf, sizeof buf);
+                if (n <= 0) break;
+                seen.append(buf, static_cast<size_t>(n));
+            }
+            const size_t cl = seen.find("Content-Length: ");
+            if (cl != std::string::npos) {
+                const size_t want = seen.find("\r\n\r\n") + 4 + static_cast<size_t>(std::atoi(seen.c_str() + cl + 16));
+                while (seen.size() < want && c.waitReadable(3000)) {
+                    const long n = c.recvSome(buf, sizeof buf);
+                    if (n <= 0) break;
+                    seen.append(buf, static_cast<size_t>(n));
+                }
+            }
+            c.sendAll(std::string("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\n\r\n{\"ok\":true}"));
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        });
+    };
+    const auto waitHeld = [](TrafficProxy& p, bool response) {
+        for (int i = 0; i < 300; ++i) {
+            for (const auto& h : p.held())
+                if (h.response == response) return h;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return TrafficProxy::Held{};
+    };
+    std::string err;
+    TrafficProxy proxy;
+    CHECK(proxy.start(0, err), ("proxy starts: " + err).c_str());
+
+    // 1. A held request, edited (path, header, body), then forwarded.
+    {
+        Socket origin;
+        origin.listenLoopback(0, err);
+        std::string seen;
+        std::thread o = runOrigin(origin, seen);
+        proxy.setIntercept(true, false, "");
+        std::string resp;
+        std::thread client([&] {
+            Socket c;
+            c.connectLoopback(proxy.port(), 2000, err);
+            c.sendAll("POST http://127.0.0.1:" + std::to_string(origin.localPort()) +
+                      "/login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 4\r\n\r\nuser");
+            resp = readAllFrom(c);
+        });
+        const TrafficProxy::Held h = waitHeld(proxy, false);
+        CHECK(h.id != 0 && h.raw.rfind("POST /login HTTP/1.1\r\n", 0) == 0 && h.raw.find("\r\n\r\nuser") != std::string::npos,
+              "the request waits at the intercept");
+        CHECK(proxy.heldCount() == 1, "one message waiting");
+        proxy.forward(h.id, "POST /login?edited=1 HTTP/1.1\nHost: 127.0.0.1\nX-Test: yes\nContent-Length: 4\n\nadmin");
+        client.join();
+        o.join();
+        CHECK(seen.rfind("POST /login?edited=1 HTTP/1.1\r\n", 0) == 0 && seen.find("X-Test: yes\r\n") != std::string::npos &&
+                  seen.find("Content-Length: 5\r\n") != std::string::npos && seen.find("Connection: close\r\n") != std::string::npos &&
+                  seen.size() >= 5 && seen.compare(seen.size() - 5, 5, "admin") == 0,
+              ("the server got the edited request: " + seen).c_str());
+        CHECK(resp.find("{\"ok\":true}") != std::string::npos, "the app got the response");
+        for (int i = 0; i < 100 && !proxy.flows().back().complete; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        const auto flows = proxy.flows();
+        CHECK(!flows.empty() && flows.back().edited && flows.back().path == "/login?edited=1", "the flow is marked edited");
+    }
+    // 2. A held response, edited, then forwarded: the app gets the new body with a matching length.
+    {
+        Socket origin;
+        origin.listenLoopback(0, err);
+        std::string seen;
+        std::thread o = runOrigin(origin, seen);
+        proxy.setIntercept(false, true, "127.0.0.1");
+        std::string resp;
+        std::thread client([&] {
+            Socket c;
+            c.connectLoopback(proxy.port(), 2000, err);
+            c.sendAll("GET http://127.0.0.1:" + std::to_string(origin.localPort()) + "/me HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+            resp = readAllFrom(c);
+        });
+        const TrafficProxy::Held h = waitHeld(proxy, true);
+        CHECK(h.id != 0 && h.raw.rfind("HTTP/1.1 200 OK\r\n", 0) == 0 && h.raw.find("{\"ok\":true}") != std::string::npos,
+              "the response waits at the intercept");
+        proxy.forward(h.id, "HTTP/1.1 200 OK\nContent-Type: application/json\nContent-Length: 11\n\n{\"ok\":true,\"admin\":true}");
+        client.join();
+        o.join();
+        CHECK(resp.find("Content-Length: 24\r\n") != std::string::npos && resp.find("{\"ok\":true,\"admin\":true}") != std::string::npos,
+              ("the app got the edited response: " + resp).c_str());
+    }
+    // 3. Dropped request: the server never sees it, the app's connection closes.
+    {
+        proxy.setIntercept(true, false, "");
+        std::string resp = "x";
+        std::thread client([&] {
+            Socket c;
+            c.connectLoopback(proxy.port(), 2000, err);
+            c.sendAll(std::string("GET http://127.0.0.1:1/never HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
+            resp = readAllFrom(c);
+        });
+        const TrafficProxy::Held h = waitHeld(proxy, false);
+        proxy.drop(h.id);
+        client.join();
+        CHECK(h.id != 0 && resp.empty(), "a dropped request gets no answer");
+        for (int i = 0; i < 100 && !proxy.flows().back().complete; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        TrafficProxy::Flow f;
+        CHECK(proxy.flow(proxy.flows().back().id, f) && f.error == "request dropped at the intercept", "the flow says it was dropped");
+    }
+    // 4. Turning intercept off releases what waits, unchanged; a filter that does not match holds nothing.
+    {
+        Socket origin;
+        origin.listenLoopback(0, err);
+        std::string seen;
+        std::thread o = runOrigin(origin, seen);
+        proxy.setIntercept(true, false, "");
+        std::string resp;
+        std::thread client([&] {
+            Socket c;
+            c.connectLoopback(proxy.port(), 2000, err);
+            c.sendAll("GET http://127.0.0.1:" + std::to_string(origin.localPort()) + "/a HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+            resp = readAllFrom(c);
+        });
+        const TrafficProxy::Held h = waitHeld(proxy, false);
+        proxy.setIntercept(false, false, "");
+        client.join();
+        o.join();
+        CHECK(h.id != 0 && seen.rfind("GET /a HTTP/1.1\r\n", 0) == 0 && resp.find("200 OK") != std::string::npos,
+              "intercept off: the held request goes on unchanged");
+        proxy.setIntercept(true, true, "only-this-host.test");
+        Socket origin2;
+        origin2.listenLoopback(0, err);
+        std::string seen2;
+        std::thread o2 = runOrigin(origin2, seen2);
+        Socket c;
+        c.connectLoopback(proxy.port(), 2000, err);
+        c.sendAll("GET http://127.0.0.1:" + std::to_string(origin2.localPort()) + "/b HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        const std::string r2 = readAllFrom(c);
+        o2.join();
+        CHECK(r2.find("200 OK") != std::string::npos && proxy.heldCount() == 0, "the URL filter lets other traffic through");
+    }
+    // 5. Stopping the proxy releases a held request.
+    {
+        proxy.setIntercept(true, false, "");
+        std::thread client([&] {
+            Socket c;
+            c.connectLoopback(proxy.port(), 2000, err);
+            c.sendAll(std::string("GET http://127.0.0.1:1/x HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
+            readAllFrom(c);
+        });
+        waitHeld(proxy, false);
+        proxy.stop();  // must not hang
+        client.join();
+        CHECK(proxy.heldCount() == 0, "stop releases held messages");
+    }
+}
+
+static void testMatchReplace() {
+    std::printf("== match & replace ==\n");
+    using matchreplace::Rule;
+    using matchreplace::Where;
+    const std::string request = "GET /api/v1/me?debug=0 HTTP/1.1\r\nHost: api.test\r\nUser-Agent: okhttp/4.9\r\nIf-None-Match: \"abc\"\r\n\r\n";
+    matchreplace::RuleSet rules({
+        {true, Where::RequestLine, "debug=0", "debug=1", false, ""},
+        {true, Where::RequestHeader, "^User-Agent:.*$", "User-Agent: ApkSpy", true, ""},
+        {true, Where::RequestHeader, "^If-None-Match:.*$", "", true, ""},
+        {true, Where::RequestHeader, "", "X-Debug: 1", false, ""},
+        {false, Where::RequestHeader, "Host", "Nope", false, "disabled"},
+        {true, Where::ResponseBody, "false", "true", false, "a response rule leaves requests alone"},
+    });
+    std::string raw = request;
+    std::vector<int> hits;
+    const int n = rules.apply(false, raw, &hits);
+    CHECK(n == 4 && raw == "GET /api/v1/me?debug=1 HTTP/1.1\r\nHost: api.test\r\nUser-Agent: ApkSpy\r\nX-Debug: 1\r\n\r\n",
+          ("request rules: " + raw).c_str());
+    CHECK(hits.size() == 6 && hits[0] == 1 && hits[1] == 1 && hits[2] == 1 && hits[3] == 1 && hits[4] == 0 && hits[5] == 0, "hit counts");
+
+    // Body rules see through chunking and gzip, and fix the framing headers.
+    const std::string json = "{\"isPremium\":false,\"name\":\"x\"}";
+    const std::string gz = codec::apply(codec::Op::GzipCompress, json).out;
+    std::string chunked;
+    char size[16];
+    std::snprintf(size, sizeof size, "%zx", gz.size());
+    chunked = std::string(size) + "\r\n" + gz + "\r\n0\r\n\r\n";
+    std::string resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n" + chunked;
+    matchreplace::RuleSet body({{true, Where::ResponseBody, "\"isPremium\":false", "\"isPremium\":true", false, ""},
+                                {true, Where::ResponseHeader, "", "Access-Control-Allow-Origin: *", false, ""}});
+    CHECK(body.apply(true, resp) == 2, "response rules applied");
+    const std::string expectBody = "{\"isPremium\":true,\"name\":\"x\"}";
+    CHECK(resp == "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " +
+                      std::to_string(expectBody.size()) + "\r\n\r\n" + expectBody,
+          ("decoded, replaced, reframed: " + resp).c_str());
+    // A body rule that does not match keeps the original bytes (and framing).
+    std::string untouched = "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: " + std::to_string(gz.size()) + "\r\n\r\n" + gz;
+    const std::string before = untouched;
+    CHECK(matchreplace::RuleSet({{true, Where::ResponseBody, "nothing-like-this", "x", false, ""}}).apply(true, untouched) == 0 &&
+              untouched == before,
+          "no match, no change");
+    // Regex groups, bad regexes, saving.
+    std::string line = "GET /users/42/profile HTTP/1.1\r\nHost: h\r\n\r\n";
+    CHECK(matchreplace::RuleSet({{true, Where::RequestLine, "/users/(\\d+)/", "/users/1/", true, ""}}).apply(false, line) == 1 &&
+              line.rfind("GET /users/1/profile", 0) == 0,
+          "regex replacement");
+    std::string groups = "GET /a?x=1&y=2 HTTP/1.1\r\n\r\n";
+    matchreplace::RuleSet({{true, Where::RequestLine, "x=(\\d)&y=(\\d)", "x=$2&y=$1", true, ""}}).apply(false, groups);
+    CHECK(groups.rfind("GET /a?x=2&y=1", 0) == 0, "regex groups");
+    matchreplace::RuleSet bad({{true, Where::RequestLine, "([", "x", true, ""}});
+    CHECK(!bad.error(0).empty() && !bad.appliesTo(false), "an invalid regex is reported and skipped");
+    const auto back = matchreplace::fromJson(matchreplace::toJson(matchreplace::presets()));
+    CHECK(back.size() == matchreplace::presets().size() && back[0].match == "^User-Agent:.*$" && back[0].regex && !back[0].enabled &&
+              back.back().where == Where::ResponseBody,
+          "rules survive saving");
+
+    // Through the proxy: a request rule rewrites what the server sees, a response rule what the app gets.
+    Socket origin;
+    std::string err;
+    origin.listenLoopback(0, err);
+    std::string seen;
+    std::thread o([&] {
+        Socket c = origin.accept(5000);
+        if (!c.valid()) return;
+        char buf[4096];
+        while (seen.find("\r\n\r\n") == std::string::npos && c.waitReadable(3000)) {
+            const long k = c.recvSome(buf, sizeof buf);
+            if (k <= 0) break;
+            seen.append(buf, static_cast<size_t>(k));
+        }
+        c.sendAll(std::string("HTTP/1.1 200 OK\r\nContent-Length: 18\r\n\r\n{\"isPremium\":false"));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    });
+    TrafficProxy proxy;
+    proxy.start(0, err);
+    proxy.setRules(matchreplace::RuleSet({{true, Where::RequestHeader, "", "X-Debug: 1", false, ""},
+                                          {true, Where::ResponseBody, "false", "true", false, ""}}));
+    Socket c;
+    c.connectLoopback(proxy.port(), 2000, err);
+    c.sendAll("GET http://127.0.0.1:" + std::to_string(origin.localPort()) + "/me HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    const std::string got = readAllFrom(c);
+    o.join();
+    CHECK(seen.find("X-Debug: 1\r\n") != std::string::npos, ("the server got the added header: " + seen).c_str());
+    CHECK(got.find("Content-Length: 17\r\n") != std::string::npos && got.find("{\"isPremium\":true") != std::string::npos,
+          ("the app got the replaced body: " + got).c_str());
+    for (int i = 0; i < 100 && !proxy.flows().back().complete; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK(proxy.flows().back().edited && proxy.ruleHits().size() == 2 && proxy.ruleHits()[0] == 1 && proxy.ruleHits()[1] == 1,
+          "the flow is marked edited and the rules counted");
+    proxy.stop();
+}
+
+static void testTextDiff() {
+    std::printf("== text diff ==\n");
+    using textdiff::Kind;
+    const std::string a = "HTTP/1.1 200 OK\nDate: Mon\nContent-Length: 10\n\n{\"user\":\"alice\",\"admin\":false}\nend\n";
+    const std::string b = "HTTP/1.1 200 OK\nDate: Tue\nContent-Length: 10\nX-New: 1\n\n{\"user\":\"alice\",\"admin\":true}\nend\n";
+    const auto r = textdiff::diff(a, b);
+    CHECK(!r.identical() && r.changed == 2 && r.added == 1 && r.removed == 0 && !r.approximate,
+          ("counts: changed " + std::to_string(r.changed) + " added " + std::to_string(r.added)).c_str());
+    int same = 0;
+    for (const auto& row : r.rows) same += row.kind == Kind::Same;
+    CHECK(same == 4 && r.rows.size() == 7, "rows line up side by side");
+    const textdiff::Row* date = nullptr;
+    for (const auto& row : r.rows)
+        if (row.kind == Kind::Changed && r.a[static_cast<size_t>(row.left)].rfind("Date", 0) == 0) date = &row;
+    CHECK(date && date->leftSpans.size() == 1 && r.a[static_cast<size_t>(date->left)].substr(date->leftSpans[0].begin, 3) == "Mon" &&
+              date->rightSpans.size() == 1 && r.b[static_cast<size_t>(date->right)].substr(date->rightSpans[0].begin, 3) == "Tue",
+          "the changed word is highlighted, not the line");
+    CHECK(textdiff::diff("x\ny\n", "x\ny\n").identical(), "identical texts");
+    const auto onlyAdded = textdiff::diff("", "a\nb");
+    CHECK(onlyAdded.added == 2 && onlyAdded.rows.size() == 2 && onlyAdded.rows[0].kind == Kind::Added, "everything added");
+    // Moved block: the classic Myers case.
+    const auto moved = textdiff::diff("a\nb\nc\nd\n", "c\nd\na\nb\n");
+    int unchanged = 0;
+    for (const auto& row : moved.rows) unchanged += row.kind == Kind::Same;
+    CHECK(unchanged == 2 && moved.changed + moved.removed + moved.added >= 2, "a moved block keeps the longest common run");
+    // Too many differences: a coarse answer instead of an endless one.
+    std::string big1, big2;
+    for (int i = 0; i < 3000; ++i) big1 += "line " + std::to_string(i) + "\n", big2 += "other " + std::to_string(i) + "\n";
+    const auto coarse = textdiff::diff(big1, big2, 200);
+    CHECK(coarse.approximate && coarse.removed == 3000 && coarse.added == 3000, "coarse diff past the edit limit");
 }
 
 static void testLineSplitting() {
@@ -1433,8 +1865,29 @@ static void testMcpToolsEndToEnd() {
     CHECK(structured(callTool(server, d, &ws, "decompile_method", Json::obj({{"method", "LFoo;->bar()V"}}))).get("methods")[0]
                   .get("code").asString().find("    CharSequence v0;") != std::string::npos,
           "the declaration shows the user's type");
-    CHECK(isError(callTool(server, d, &ws, "rename_variable", Json::obj({{"method", "LFoo;->bar()V"}, {"variable", "v0"}, {"type", "int;x"}}))),
-          "a malformed type is refused");
+    // Pseudocode: any one-line text is a type.
+    CHECK(!isError(callTool(server, d, &ws, "rename_variable", Json::obj({{"method", "LFoo;->bar()V"}, {"variable", "v0"}, {"type", "struct conn *"}}))) &&
+              structured(callTool(server, d, &ws, "decompile_method", Json::obj({{"method", "LFoo;->bar()V"}}))).get("methods")[0]
+                      .get("code").asString().find("    struct conn *v0;") != std::string::npos,
+          "a free-form type is accepted and declared");
+    CHECK(isError(callTool(server, d, &ws, "rename_variable", Json::obj({{"method", "LFoo;->bar()V"}, {"variable", "v0"}, {"type", "int\nx"}}))),
+          "a type of several lines is refused");
+    {
+        // The return type is retyped through its own key (Y on the signature line).
+        decompiler::Output o;
+        o.lines = {{"", 0, {}}};
+        o.headerLine = 0;
+        o.headerPrefix = "int64_t sub_10(";
+        o.headerSuffix = ") {";
+        o.returnType = "int64_t";
+        o.returnAt = 0;
+        o.vars.push_back({"x0", "int64_t", "", true});
+        decompiler::applyUserNames(o, {}, {{std::string(decompiler::kReturnKey), "char *"}, {"x0", "struct ctx *"}}, true);
+        CHECK(o.lines[0].text == "char *sub_10(struct ctx *x0) {", ("return and parameter types: " + o.lines[0].text).c_str());
+        CHECK(decompiler::typeOf(o, decompiler::kReturnKey, {}) == "int64_t", "the inferred return type");
+        CHECK(decompiler::checkTypeName("unsigned long long (*)(void *)").empty() && !decompiler::checkTypeName("a\nb").empty(),
+              "type text: anything on one line");
+    }
     CHECK(structured(callTool(server, d, &ws, "rename_variable", Json::obj({{"method", "LFoo;->bar()V"}, {"variable", "v0"}, {"type", ""}})))
                   .get("type_restored").asBool() &&
               structured(callTool(server, d, &ws, "list_annotations", Json::obj({{"kind", "type"}}))).get("annotations").size() == 0,
@@ -1623,6 +2076,11 @@ int main(int argc, char** argv) {
     testScriptRunner();
     testTrafficProxy();
     testLineSplitting();
+    testCodec();
+    testHttpClient();
+    testIntercept();
+    testMatchReplace();
+    testTextDiff();
     testMcpToolsEndToEnd();
     std::printf("\n%d passed, %d failed\n", passes, failures);
     return failures ? 1 : 0;

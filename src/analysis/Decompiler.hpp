@@ -44,6 +44,9 @@ struct Output {
     // the user renames or retypes a variable.
     int headerLine = -1;
     std::string headerPrefix, headerSuffix;
+    // The return type inside headerPrefix (returnAt == npos: none, as for constructors).
+    std::string returnType;
+    size_t returnAt = std::string::npos;
     int declLine = -1;
     std::vector<std::pair<std::string, std::string>> renamed;  // applied renames: shown name -> variable key
     std::vector<std::pair<std::string, std::string>> renamedSymbols;  // applied symbol renames: shown -> original
@@ -79,6 +82,8 @@ inline void applyRenames(Output& out, const std::vector<std::pair<std::string, s
 }
 // Why `type` cannot be a variable type (empty, too long, odd characters), or "" when it can.
 std::string checkTypeName(std::string_view type);
+// The retype key of the function's return type (Y on the signature line).
+inline constexpr std::string_view kReturnKey = "@return";
 // The variable's current type (user's or inferred), or "" when the function has no such variable.
 std::string typeOf(const Output& out, std::string_view key, const std::vector<std::pair<std::string, std::string>>& types);
 // Start offsets of the identifiers of a line (outside strings / comments), for a keyboard cursor.

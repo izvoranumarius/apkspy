@@ -5,87 +5,10 @@
 #include "app/Theme.hpp"
 #include "core/TextUtils.hpp"
 #include "mcp/Json.hpp"
+#include "ui/TrafficCommon.hpp"
 #include "ui/UiUtil.hpp"
 
-namespace {
-
-const ImVec4 kGood(0.45f, 0.8f, 0.45f, 1.f);
-const ImVec4 kWarn(0.95f, 0.65f, 0.35f, 1.f);
-const ImVec4 kError(0.95f, 0.45f, 0.4f, 1.f);
-const ImVec4 kAccent(0.55f, 0.75f, 0.95f, 1.f);
-const ImVec4 kDim(0.6f, 0.6f, 0.6f, 1.f);
-
-ImVec4 statusColor(int status) {
-    if (status >= 500) return kError;
-    if (status >= 400) return kWarn;
-    if (status >= 300) return kAccent;
-    if (status >= 200) return kGood;
-    return kDim;
-}
-
-std::string clock(double unix) {
-    const std::time_t t = static_cast<std::time_t>(unix);
-    std::tm tm{};
-#ifdef _WIN32
-    localtime_s(&tm, &t);
-#else
-    localtime_r(&t, &tm);
-#endif
-    char buf[32];
-    std::snprintf(buf, sizeof buf, "%02d:%02d:%02d.%03d", tm.tm_hour, tm.tm_min, tm.tm_sec,
-                  static_cast<int>((unix - static_cast<double>(t)) * 1000.0));
-    return buf;
-}
-
-std::string humanBytes(uint64_t n) {
-    char buf[32];
-    if (n < 1024) std::snprintf(buf, sizeof buf, "%llu B", static_cast<unsigned long long>(n));
-    else if (n < 1024 * 1024) std::snprintf(buf, sizeof buf, "%.1f KB", static_cast<double>(n) / 1024.0);
-    else std::snprintf(buf, sizeof buf, "%.1f MB", static_cast<double>(n) / (1024.0 * 1024.0));
-    return buf;
-}
-
-// Pretty JSON when the body parses, otherwise the text (or a hex note).
-std::string presentBody(const std::string& body, const std::string& contentType) {
-    if (body.empty()) return {};
-    Json j;
-    if ((contentType.find("json") != std::string::npos || body.front() == '{' || body.front() == '[') &&
-        Json::parse(body, j))
-        return j.dump(true);
-    size_t binary = 0;
-    for (size_t i = 0; i < std::min<size_t>(body.size(), 4096); ++i) {
-        const unsigned char c = static_cast<unsigned char>(body[i]);
-        if (c < 9 || (c > 13 && c < 32)) ++binary;
-    }
-    if (binary > 16) return "(" + std::to_string(body.size()) + " bytes of binary data - " + contentType + ")";
-    return json::sanitizeUtf8(body);
-}
-
-void drawMessage(const char* id, const TrafficProxy::Message& m) {
-    ImGui::PushID(id);
-    ImGui::PushFont(Theme::monoFont());
-    ImGui::PushTextWrapPos(0.f);
-    ImGui::TextColored(kAccent, "%s", m.startLine.c_str());
-    for (const auto& h : m.headers) {
-        ImGui::TextColored(kDim, "%s:", h.first.c_str());
-        ImGui::SameLine();
-        ImGui::TextUnformatted(h.second.c_str());
-    }
-    ImGui::Separator();
-    std::string note;
-    const std::string body = TrafficProxy::decodeBody(m, &note);
-    if (!note.empty()) ImGui::TextDisabled("(%s)", note.c_str());
-    if (m.truncated) ImGui::TextDisabled("(body capped at %zu bytes of %llu)", TrafficProxy::kMaxBody, static_cast<unsigned long long>(m.bodySize));
-    const std::string shown = presentBody(body, m.header("content-type"));
-    if (shown.empty()) ImGui::TextDisabled("(no body)");
-    else ImGui::TextUnformatted(shown.c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::PopFont();
-    if (!body.empty() && ui::smallButton("Copy body")) ImGui::SetClipboardText(body.c_str());
-    ImGui::PopID();
-}
-
-}  // namespace
+using namespace trafficui;
 
 void TrafficPanel::refreshCodeStrings() {
     // URL / path constants of every analysed APK, for the "in code" column.
@@ -134,6 +57,8 @@ bool TrafficPanel::inCode(const std::string& host, const std::string& path) {
 }
 
 void TrafficPanel::drawContents() {
+    loadRules();  // before the first capture: the proxy rewrites from the start
+    for (auto& [label, text] : workspace_.takeComparerRequests()) sendToComparer(std::move(label), std::move(text));
     drawToolbar();
     TrafficProxy& proxy = devices_.traffic();
     // Incremental refresh of the summary rows.
@@ -157,6 +82,35 @@ void TrafficPanel::drawContents() {
         drawEndpoints();
         ImGui::EndTabItem();
     }
+    const size_t waiting = proxy.heldCount();
+    const std::string interceptLabel = waiting ? "Intercept (" + std::to_string(waiting) + " waiting)###intercept" : std::string("Intercept###intercept");
+    if (waiting) ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(Col::Warning));
+    const bool interceptOpen = ImGui::BeginTabItem(interceptLabel.c_str());
+    if (waiting) ImGui::PopStyleColor();
+    if (interceptOpen) {
+        drawIntercept();
+        ImGui::EndTabItem();
+    }
+    const size_t activeRules = std::count_if(rules_.begin(), rules_.end(), [](const auto& r) { return r.enabled; });
+    const std::string rulesLabel = activeRules ? "Match & Replace (" + std::to_string(activeRules) + ")###rules" : std::string("Match & Replace###rules");
+    if (ImGui::BeginTabItem(rulesLabel.c_str())) {
+        drawRules();
+        ImGui::EndTabItem();
+    }
+    const std::string comparerLabel =
+        compareItems_.empty() ? std::string("Comparer###comparer") : "Comparer (" + std::to_string(compareItems_.size()) + ")###comparer";
+    if (ImGui::BeginTabItem(comparerLabel.c_str(), nullptr, showComparer_ ? ImGuiTabItemFlags_SetSelected : 0)) {
+        drawComparer();
+        ImGui::EndTabItem();
+    }
+    showComparer_ = false;
+    const std::string repeaterLabel = repeater_.empty() ? std::string("Repeater###repeater")
+                                                        : "Repeater (" + std::to_string(repeater_.size()) + ")###repeater";
+    if (ImGui::BeginTabItem(repeaterLabel.c_str(), nullptr, showRepeater_ ? ImGuiTabItemFlags_SetSelected : 0)) {
+        drawRepeater();
+        ImGui::EndTabItem();
+    }
+    showRepeater_ = false;
     ImGui::EndTabBar();
 }
 
@@ -215,6 +169,8 @@ void TrafficPanel::drawToolbar() {
         if (ImGui::MenuItem("Clear captured requests")) {
             proxy.clear();
             rows_.clear();
+            marks_.clear();
+            bodyHits_.clear();
             selected_ = detailId_ = 0;
         }
         // Recovery when a crash left the device pointing at a proxy that is gone.
@@ -225,100 +181,6 @@ void TrafficPanel::drawToolbar() {
         ImGui::EndPopup();
     }
     if (!status_.empty()) ui::wrappedColored(kWarn, status_);
-}
-
-void TrafficPanel::drawRequests() {
-    const std::string filter = filter_;
-    std::vector<const TrafficProxy::Flow*> shown;
-    shown.reserve(rows_.size());
-    for (const auto& f : rows_) {
-        if (hideTunnels_ && f.tunnel) continue;
-        if (!filter.empty()) {
-            const std::string hay = f.method + " " + f.host + " " + f.sni + " " + f.path + " " + std::to_string(f.status);
-            if (tex::ciFind(hay, filter) == std::string_view::npos) continue;
-        }
-        shown.push_back(&f);
-    }
-    if (rows_.empty()) {
-        ImGui::PushTextWrapPos(0.f);
-        ImGui::TextDisabled(
-            "Press Start capture, then use the app. HTTP requests appear with headers and bodies; HTTPS connections "
-            "appear with their host and size, and their contents stay encrypted.");
-        ImGui::PopTextWrapPos();
-        return;
-    }
-    const bool hasDetail = selected_ != 0;
-    const float tableH = hasDetail ? ImGui::GetContentRegionAvail().y * 0.5f : 0.f;
-    // The URL is what matters: secondary columns only when there is room
-    // for them next to a readable URL.
-    const bool wide = ImGui::GetContentRegionAvail().x > ui::em(60.f);
-    const int cols = wide ? 7 : 4;
-    if (ImGui::BeginTable("##flows", cols, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
-                                               ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit,
-                          ImVec2(0, tableH))) {
-        ImGui::TableSetupScrollFreeze(0, 1);
-        if (wide) ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, ui::em(5.5f));
-        ImGui::TableSetupColumn("Method", ImGuiTableColumnFlags_WidthFixed, ui::em(4.5f));
-        ImGui::TableSetupColumn("URL", ImGuiTableColumnFlags_WidthStretch, 1.f);
-        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, ui::em(3.f));
-        if (wide) ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, ui::em(8.f));
-        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, ui::em(4.5f));
-        if (wide) ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed, ui::em(3.5f));
-        ImGui::TableHeadersRow();
-        ImGuiListClipper clipper;
-        clipper.Begin(static_cast<int>(shown.size()));
-        while (clipper.Step()) {
-            for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                const TrafficProxy::Flow& f = *shown[static_cast<size_t>(i)];
-                ImGui::PushID(static_cast<int>(f.id));
-                ImGui::TableNextRow();
-                if (wide) {
-                    ImGui::TableNextColumn();
-                    ImGui::TextDisabled("%s", clock(f.startedAt).c_str());
-                }
-                ImGui::TableNextColumn();
-                if (ImGui::Selectable(f.method.c_str(), selected_ == f.id, ImGuiSelectableFlags_SpanAllColumns))
-                    selected_ = f.id;
-                if (ImGui::BeginPopupContextItem("##flowctx")) {
-                    selected_ = f.id;
-                    TrafficProxy::Flow full;
-                    if (ImGui::MenuItem("Copy URL")) ImGui::SetClipboardText(f.url().c_str());
-                    if (!f.tunnel && ImGui::MenuItem("Copy as cURL") && devices_.traffic().flow(f.id, full))
-                        ImGui::SetClipboardText(TrafficProxy::curl(full).c_str());
-                    ImGui::EndPopup();
-                }
-                ImGui::TableNextColumn();
-                const std::string url = f.url();
-                if (f.tunnel) ImGui::TextColored(kDim, "%s  (TLS)", url.c_str());
-                else ImGui::TextUnformatted(url.c_str());
-                if (ImGui::IsItemHovered()) {
-                    std::string type = f.tunnel ? "TLS tunnel" : f.contentType();
-                    ImGui::SetTooltip("%s\n%s  %s  %.0f ms", url.c_str(), clock(f.startedAt).c_str(), type.c_str(),
-                                      f.durationMs);
-                }
-                ImGui::TableNextColumn();
-                if (!f.complete && f.status == 0) ImGui::TextDisabled("...");
-                else if (f.status) ImGui::TextColored(statusColor(f.status), "%d", f.status);
-                else ImGui::TextColored(kError, "err");
-                if (wide) {
-                    ImGui::TableNextColumn();
-                    std::string type = f.tunnel ? "tunnel" : f.contentType();
-                    type = type.substr(0, type.find(';'));
-                    ImGui::TextDisabled("%s", type.c_str());
-                }
-                ImGui::TableNextColumn();
-                ImGui::TextDisabled("%s", humanBytes(f.tunnel ? f.bytesUp + f.bytesDown : f.response.bodySize).c_str());
-                if (wide) {
-                    ImGui::TableNextColumn();
-                    if (f.complete) ImGui::TextDisabled("%.0f", f.durationMs);
-                }
-                ImGui::PopID();
-            }
-        }
-        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - ui::em(2.f)) ImGui::SetScrollHereY(1.f);
-        ImGui::EndTable();
-    }
-    if (hasDetail) drawDetail();
 }
 
 void TrafficPanel::drawDetail() {
@@ -338,7 +200,10 @@ void TrafficPanel::drawDetail() {
     std::snprintf(line, sizeof line, "status %d | %s up, %s down | %.0f ms%s%s", f.status, humanBytes(f.bytesUp).c_str(),
                   humanBytes(f.bytesDown).c_str(), f.durationMs, f.error.empty() ? "" : " | ", f.error.c_str());
     ui::wrappedColored(kDim, line);
-    if (ui::smallButton("Copy URL")) ImGui::SetClipboardText(f.url().c_str());
+    if (ui::smallButton("Send to Repeater")) sendToRepeater(f);
+    if (!f.tunnel && ui::flowSmallButton("Response to Comparer"))
+        sendToComparer(std::to_string(f.status) + " " + f.url(), messageText(f.response));
+    if (ui::flowSmallButton("Copy URL")) ImGui::SetClipboardText(f.url().c_str());
     if (!f.tunnel && ui::flowSmallButton("Copy as cURL")) ImGui::SetClipboardText(TrafficProxy::curl(f).c_str());
     if (ui::flowSmallButton("Close")) selected_ = 0;
     if (f.tunnel) {

@@ -88,13 +88,27 @@ right-click lists what else can be done, and tooltips show the keys.
 - **Breadcrumbs** above a file show its folders; click one to show it in the
   Explorer. Right-click a tab for **Reveal in Explorer**, **Copy Path**, **Keep
   Open** (for a preview tab) and **Close to the Right**.
-- **Terminal** (`` Ctrl+` ``): a real shell (PowerShell on Windows, your login
+- **Terminal** (`` Ctrl+` ``): real shells (PowerShell on Windows, your login
   shell elsewhere) started in the project folder, with the configured adb and
-  jadx first on `PATH`. Drag to select; `Ctrl+C` copies a selection and
-  interrupts otherwise; `Ctrl+V` pastes. The shell is set under
-  **File > Settings > Scripts**. Windows needs version 10 1809 or later.
-- With nothing open, the editor shows a **welcome page** with recent projects
-  and these shortcuts.
+  jadx first on `PATH`. As in VS Code you can have several: **+** or
+  `` Ctrl+Shift+` `` opens another tab, the tab's **x** or the trash button ends
+  it, and double-clicking a tab renames it. Drag to select (double-click selects
+  a word); `Ctrl+C` copies a selection and interrupts otherwise,
+  `Ctrl+Shift+C` copies, `Ctrl+V` pastes; the right-click menu adds Copy All
+  and Select All. The shell is set under **File > Settings > Scripts**. Windows
+  needs version 10 1809 or later.
+- **Decoder** (bottom panel): paste text, press **Smart decode** or add steps
+  (Base64, hex, URL, escapes, charsets such as UTF-16 and Windows-1252, XOR,
+  gzip / zlib, hashes, JWT). Right-click a string anywhere and choose
+  **Send to Decoder** to open it there, already decoded.
+- **Copying text**: the code viewer, decompiler, smali listing and Output
+  select text like an editor (drag, double-click a word, Shift+click, `Ctrl+A`)
+  and copy with `Ctrl+C` or the right-click menu. In lists and tables
+  (Explorer, references, strings, symbols, search hits, Overview) `Ctrl+C`
+  copies the item under the mouse and the right-click menu has **Copy**.
+- With nothing open, the window shows only the **welcome page**, with recent
+  projects and these shortcuts. Opening an APK or project, or asking for a
+  panel or workspace, brings the full workbench back.
 
 ## Keyboard shortcuts
 
@@ -103,6 +117,8 @@ right-click lists what else can be done, and tooltips show the keys.
 | `Ctrl+P` | Go to a file (`>` commands, `@` classes, `:` line) |
 | `Ctrl+Shift+P` | Run a command |
 | `` Ctrl+` `` | Show or hide the terminal |
+| `` Ctrl+Shift+` `` | New terminal |
+| `Ctrl+C` / `Ctrl+A` | Copy / select all in text views |
 | `Ctrl+1` to `Ctrl+5` | Switch workspace |
 | `Ctrl+O` / `Ctrl+S` | Open / save project |
 | `Ctrl+,` | Settings |

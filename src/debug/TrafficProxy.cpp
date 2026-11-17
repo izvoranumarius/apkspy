@@ -7,6 +7,7 @@
 #include <miniz.h>
 #include "core/TextUtils.hpp"
 #include "debug/Adb.hpp"
+#include "debug/HttpClient.hpp"
 
 namespace {
 
@@ -20,6 +21,28 @@ double unixNow() {
 }
 
 bool iequals(const std::string& a, const char* b) { return tex::asciiIEqual(a, b); }
+
+// An edited request still ends its connection after one exchange (the relay
+// reads the response to the end of the stream).
+std::string withConnectionClose(const std::string& raw) {
+    const size_t headEnd = raw.find("\r\n\r\n");
+    if (headEnd == std::string::npos) return raw;
+    std::string out;
+    size_t pos = 0;
+    bool first = true;
+    while (pos < headEnd + 2) {
+        const size_t eol = raw.find("\r\n", pos);
+        const std::string line = raw.substr(pos, eol - pos);
+        pos = eol + 2;
+        const std::string name = tex::asciiLower(line.substr(0, line.find(':')));
+        if (!first && (name == "connection" || name == "keep-alive" || name == "proxy-connection")) continue;
+        out += line + "\r\n";
+        first = false;
+    }
+    out += "Connection: close\r\n\r\n";
+    out.append(raw, headEnd + 4, std::string::npos);
+    return out;
+}
 
 // Reads until "\r\n\r\n"; returns the head (without the blank line) and
 // leaves the bytes after it in `rest`.
@@ -125,6 +148,10 @@ bool TrafficProxy::start(int port, std::string& error) {
 
 void TrafficProxy::stop() {
     if (running_.exchange(false)) listener_.shutdownBoth();
+    {
+        std::lock_guard<std::mutex> lock(interceptMutex_);
+        interceptCv_.notify_all();  // held messages go on unchanged
+    }
     if (acceptThread_.joinable()) acceptThread_.join();
     listener_.close();
     {
@@ -328,18 +355,6 @@ void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::st
         flow->bytesUp = body.size();
     }
 
-    Socket upstream;
-    std::string error;
-    if (!upstream.connectHost(host, port, 15000, error)) {
-        client.sendAll("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            flow->error = error;
-            flow->status = 502;
-        }
-        finish(flow, t0);
-        return;
-    }
     // Origin-form request; hop-by-hop proxy headers dropped, one request per
     // connection (Connection: close) so the response ends with the stream.
     const size_t sp2 = req.startLine.rfind(' ');
@@ -354,11 +369,124 @@ void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::st
     }
     if (!hasHost) out += "Host: " + host + (port == 80 ? "" : ":" + std::to_string(port)) + "\r\n";
     out += "Connection: close\r\n\r\n";
-    if (!upstream.sendAll(out) || (!body.empty() && !upstream.sendAll(body))) {
+    out += body;
+
+    // The request as it goes out, recorded in the flow when match & replace or the intercept changed it.
+    const auto recordRequest = [&] {
+        Message edited;
+        const size_t headEnd = out.find("\r\n\r\n");
+        if (headEnd == std::string::npos || !parseHead(out.substr(0, headEnd + 2), edited)) return;
+        std::lock_guard<std::mutex> lock(mutex_);
+        const size_t s1 = edited.startLine.find(' '), s2 = edited.startLine.rfind(' ');
+        if (s1 != std::string::npos && s2 > s1) {
+            flow->method = method = edited.startLine.substr(0, s1);
+            flow->path = edited.startLine.substr(s1 + 1, s2 - s1 - 1);
+        }
+        flow->request = edited;
+        capture(flow->request, out.data() + headEnd + 4, out.size() - headEnd - 4);
+        flow->bytesUp = out.size() - headEnd - 4;
+        flow->edited = true;
+    };
+    std::shared_ptr<const matchreplace::RuleSet> rules;
+    {
+        std::lock_guard<std::mutex> lock(rulesMutex_);
+        rules = rules_;
+    }
+    if (rules) {
+        std::vector<int> hits;
+        if (rules->apply(false, out, &hits) > 0) {
+            out = withConnectionClose(out);
+            recordRequest();
+            countHits(hits);
+        }
+    }
+
+    // Intercept: the request waits for the user here.
+    const std::string url = "http://" + host + (port == 80 ? "" : ":" + std::to_string(port)) + path;
+    bool holdRequest, holdResponse;
+    {
+        std::lock_guard<std::mutex> lock(interceptMutex_);
+        holdRequest = interceptMatches(false, url);
+        holdResponse = interceptMatches(true, url);
+    }
+    if (holdRequest) {
+        auto w = std::make_shared<Waiter>();
+        w->held = {0, flow->id, false, url, out};
+        if (!hold(w)) {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                flow->error = "request dropped at the intercept";
+            }
+            client.shutdownBoth();
+            finish(flow, t0);
+            return;
+        }
+        if (w->raw != out) {
+            out = withConnectionClose(w->raw);
+            recordRequest();
+        }
+    }
+
+    Socket upstream;
+    std::string error;
+    if (!upstream.connectHost(host, port, 15000, error)) {
+        client.sendAll("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            flow->error = error;
+            flow->status = 502;
+        }
+        finish(flow, t0);
+        return;
+    }
+    if (!upstream.sendAll(out)) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             flow->error = "upstream write failed";
         }
+        finish(flow, t0);
+        return;
+    }
+
+    if (holdResponse || (rules && rules->appliesTo(true))) {
+        // A response to rewrite or to hold: read it whole, apply the rules, let the user see it, send it on.
+        httpclient::Result r;
+        httpclient::readResponse(upstream, method, r, kIdleMs);
+        if (r.response.startLine.empty()) {
+            client.sendAll("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+            std::lock_guard<std::mutex> lock(mutex_);
+            flow->error = r.error.empty() ? "no response" : r.error;
+            flow->status = 502;
+        } else {
+            const std::string received = httpclient::rawMessage(r.response);
+            std::string rewritten = received;
+            if (rules) {
+                std::vector<int> hits;
+                if (rules->apply(true, rewritten, &hits) > 0) countHits(hits);
+            }
+            auto w = std::make_shared<Waiter>();
+            w->held = {0, flow->id, true, url, rewritten};
+            const bool forwarded = holdResponse ? hold(w) : (w->raw = rewritten, true);
+            std::string sent = forwarded ? w->raw : std::string();
+            if (forwarded) client.sendAll(sent);
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!forwarded) {
+                flow->error = "response dropped at the intercept";
+                flow->response = r.response;
+                flow->status = r.status;
+            } else {
+                Message resp;
+                const size_t headEnd = sent.find("\r\n\r\n");
+                if (headEnd != std::string::npos && parseHead(sent.substr(0, headEnd + 2), resp)) {
+                    flow->response = resp;
+                    capture(flow->response, sent.data() + headEnd + 4, sent.size() - headEnd - 4);
+                    flow->status = std::atoi(resp.startLine.c_str() + std::min<size_t>(9, resp.startLine.size()));
+                }
+                flow->edited = flow->edited || sent != received;
+                flow->bytesDown = sent.size();
+            }
+        }
+        client.shutdownBoth();
         finish(flow, t0);
         return;
     }
@@ -414,6 +542,91 @@ void TrafficProxy::serveHttp(Socket& client, std::shared_ptr<Flow> flow, std::st
     finish(flow, t0);
 }
 
+// ---------------------------------------------------------------------------
+// Intercept
+// ---------------------------------------------------------------------------
+
+void TrafficProxy::setRules(matchreplace::RuleSet rules) {
+    std::lock_guard<std::mutex> lock(rulesMutex_);
+    ruleHits_.assign(rules.rules().size(), 0);
+    rules_ = std::make_shared<const matchreplace::RuleSet>(std::move(rules));
+}
+
+std::vector<int> TrafficProxy::ruleHits() const {
+    std::lock_guard<std::mutex> lock(rulesMutex_);
+    return ruleHits_;
+}
+
+void TrafficProxy::countHits(const std::vector<int>& hits) {
+    std::lock_guard<std::mutex> lock(rulesMutex_);
+    for (size_t i = 0; i < hits.size() && i < ruleHits_.size(); ++i) ruleHits_[i] += hits[i];
+}
+
+void TrafficProxy::setIntercept(bool requests, bool responses, const std::string& filter) {
+    std::lock_guard<std::mutex> lock(interceptMutex_);
+    interceptRequests_ = requests;
+    interceptResponses_ = responses;
+    interceptFilter_ = filter;
+    interceptCv_.notify_all();  // a kind turned off: what waits for it goes on
+}
+
+bool TrafficProxy::interceptMatches(bool response, const std::string& url) const {
+    if (!(response ? interceptResponses_ : interceptRequests_)) return false;
+    return interceptFilter_.empty() || tex::ciFind(url, interceptFilter_) != std::string_view::npos;
+}
+
+bool TrafficProxy::hold(const std::shared_ptr<Waiter>& w) {
+    std::unique_lock<std::mutex> lock(interceptMutex_);
+    w->held.id = nextHeldId_++;
+    waiting_.push_back(w);
+    interceptCv_.wait(lock, [&] {
+        return w->decided || !running_.load() || !(w->held.response ? interceptResponses_ : interceptRequests_);
+    });
+    waiting_.erase(std::remove(waiting_.begin(), waiting_.end(), w), waiting_.end());
+    if (!w->decided) w->raw = w->held.raw;  // released (intercept off, proxy stopping): unchanged
+    return !w->dropped;
+}
+
+std::vector<TrafficProxy::Held> TrafficProxy::held() const {
+    std::lock_guard<std::mutex> lock(interceptMutex_);
+    std::vector<Held> out;
+    for (const auto& w : waiting_)
+        if (!w->decided) out.push_back(w->held);
+    return out;
+}
+
+size_t TrafficProxy::heldCount() const {
+    std::lock_guard<std::mutex> lock(interceptMutex_);
+    size_t n = 0;
+    for (const auto& w : waiting_) n += !w->decided;
+    return n;
+}
+
+void TrafficProxy::forward(uint64_t heldId, const std::string& edited) {
+    std::lock_guard<std::mutex> lock(interceptMutex_);
+    for (const auto& w : waiting_)
+        if (w->held.id == heldId && !w->decided) {
+            w->decided = true;
+            w->raw = edited.empty() ? w->held.raw : httpclient::prepare(edited, true);
+            if (w->raw.empty()) w->raw = w->held.raw;
+        }
+    interceptCv_.notify_all();
+}
+
+void TrafficProxy::drop(uint64_t heldId) {
+    std::lock_guard<std::mutex> lock(interceptMutex_);
+    for (const auto& w : waiting_)
+        if (w->held.id == heldId && !w->decided) w->decided = w->dropped = true;
+    interceptCv_.notify_all();
+}
+
+void TrafficProxy::forwardAll() {
+    std::lock_guard<std::mutex> lock(interceptMutex_);
+    for (const auto& w : waiting_)
+        if (!w->decided) w->decided = true, w->raw = w->held.raw;
+    interceptCv_.notify_all();
+}
+
 std::vector<TrafficProxy::Flow> TrafficProxy::flows(uint64_t sinceId, size_t limit) const {
     std::vector<Flow> out;
     std::lock_guard<std::mutex> lock(mutex_);
@@ -425,6 +638,7 @@ std::vector<TrafficProxy::Flow> TrafficProxy::flows(uint64_t sinceId, size_t lim
         copy.durationMs = f->durationMs;
         copy.tunnel = f->tunnel;
         copy.complete = f->complete;
+        copy.edited = f->edited;
         copy.method = f->method;
         copy.host = f->host;
         copy.port = f->port;
@@ -440,6 +654,36 @@ std::vector<TrafficProxy::Flow> TrafficProxy::flows(uint64_t sinceId, size_t lim
         out.push_back(std::move(copy));
     }
     if (out.size() > limit) out.erase(out.begin(), out.begin() + static_cast<ptrdiff_t>(out.size() - limit));
+    return out;
+}
+
+std::vector<uint64_t> TrafficProxy::searchFlows(const std::string& text, uint64_t sinceId) const {
+    std::vector<uint64_t> out;
+    if (text.empty()) return out;
+    std::vector<std::shared_ptr<Flow>> all;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& f : flows_)
+            if (f->id > sinceId) all.push_back(f);
+    }
+    // One flow copied at a time, decoded outside the lock: the relay is not held up.
+    const auto contains = [&](const Message& m) {
+        if (tex::ciFind(m.startLine, text) != std::string_view::npos) return true;
+        for (const auto& [name, value] : m.headers)
+            if (tex::ciFind(name + ": " + value, text) != std::string_view::npos) return true;
+        return !m.body.empty() && tex::ciFind(decodeBody(m, nullptr), text) != std::string_view::npos;
+    };
+    for (const auto& f : all) {
+        Message req, resp;
+        std::string url;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            req = f->request;
+            resp = f->response;
+            url = f->url();
+        }
+        if (tex::ciFind(url, text) != std::string_view::npos || contains(req) || contains(resp)) out.push_back(f->id);
+    }
     return out;
 }
 

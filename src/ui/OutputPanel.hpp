@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include "ui/Panel.hpp"
+#include "ui/TextSelect.hpp"
 #include "ui/UiUtil.hpp"
 
 class OutputPanel : public Panel {
@@ -21,5 +22,5 @@ private:
     std::vector<int> index_;       // log line indices matching the filter
     std::vector<char> severities_; // classified severity per line (cache)
     size_t classifiedCount_ = 0;   // how many lines severities_ covers
-    ui::RowSelection selection_;   // rows of index_ (reset when the index is rebuilt)
+    ui::TextSelect selection_;     // over the rows of index_ (reset when the index is rebuilt)
 };

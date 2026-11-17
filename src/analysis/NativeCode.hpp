@@ -79,6 +79,10 @@ public:
     std::vector<Ref> refsFrom(const Function& f, size_t limit) const;  // calls / data refs made by f
     // Printable C string at a virtual address ("" when it does not look like one).
     std::string cStringAt(uint64_t vaddr) const;
+    // The same for a UTF-16LE string (Windows / Java style wide text), as UTF-8.
+    std::string wideStringAt(uint64_t vaddr) const;
+    // A C string, else a UTF-16LE one (*wide = true); "" when neither.
+    std::string stringAt(uint64_t vaddr, bool* wide = nullptr) const;
     std::vector<StringRef> stringRefs(const std::string& filter, size_t limit) const;
 
 private:

@@ -115,12 +115,7 @@ void OutputPanel::drawContents() {
     while (clipper.Step()) {
         for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; ++r) {
             const size_t i = static_cast<size_t>(index_[static_cast<size_t>(r)]);
-            const ImVec2 rowPos = ImGui::GetCursorPos();
-            ImGui::PushID(r);
-            ImGui::Selectable("##row", selection_.contains(r), ImGuiSelectableFlags_AllowOverlap, ImVec2(0, rowH));
-            selection_.handleRow(r);
-            ImGui::PopID();
-            ImGui::SetCursorPos(rowPos);
+            selection_.row(r, lines[i], ImGui::GetCursorScreenPos(), ImGui::GetTextLineHeightWithSpacing());
             switch (static_cast<LogSeverity>(severities_[i])) {
             case LogSeverity::Warn:
                 ImGui::PushStyleColor(ImGuiCol_Text, theme::u32(Col::Warning));
@@ -145,9 +140,12 @@ void OutputPanel::drawContents() {
         }
     }
     ImGui::PopFont();
-    const std::string copied = selection_.handleCommands(
-        static_cast<int>(index_.size()), [&](int r) { return lines[static_cast<size_t>(index_[static_cast<size_t>(r)])]; }, "##outputCtx");
-    if (!copied.empty()) ImGui::SetClipboardText(copied.c_str());
+    const ui::TextSelect::LineFn rowText = [&](int r) { return std::string(lines[static_cast<size_t>(index_[static_cast<size_t>(r)])]); };
+    selection_.finish(static_cast<int>(index_.size()), rowText, rowH);
+    if (ImGui::BeginPopupContextWindow("##outputCtx")) {
+        selection_.menuItems(static_cast<int>(index_.size()), rowText, [this](std::string s) { workspace_.sendToDecoder(std::move(s)); });
+        ImGui::EndPopup();
+    }
     // Each workspace has its own Output window, so each follows the end by
     // itself: lines that arrived while it was hidden count as new when it
     // returns. A window scrolled up to read older lines stays where it is.

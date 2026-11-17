@@ -12,7 +12,7 @@ The **Code** workspace is where you read an APK.
 - Single-click a file to open it in a **preview tab**; clicking another file replaces the preview.
 - Double-click a file (or use *Open in New Tab*) to open a **permanent tab** that stays open.
 - Double-clicking a preview tab promotes it to a permanent tab.
-- Right-click any item for **Open**, **Open in New Tab** and **Copy Path**; APK roots also offer **Remove from Project**.
+- Right-click any item for **Open**, **Open in New Tab**, **Copy Name** (also `Ctrl+C`) and **Copy Path**; APK roots also offer **Remove from Project**.
 - Right-click files for **Export Raw...** / **Export Decoded...** (compiled Android XML becomes readable XML) and folders for **Export Folder (raw/decoded)...**; the export progress and a Cancel button appear at the bottom of the panel. Names coming from archive content are sanitised (zip-slip safe).
 - Click selects a row, Ctrl+click toggles rows, Shift+click and click-drag
   select a range; Ctrl+C copies the selected names. Rows are
@@ -47,8 +47,9 @@ One window for everything the app reports. Each line starts with its source, in
 its own colour: `[app]`, `[jadx]`, `[analysis]`, `[scripts]`, `[mcp]` or
 `[debug]`. Warnings are yellow and errors red.
 
-The two dropdowns filter by level and by source. Lines are selectable (click,
-Shift+click, drag, Ctrl+A) and copy with Ctrl+C or the context menu. The view
+The two dropdowns filter by level and by source. Text is selectable like in an
+editor (drag, double-click a word, Shift+click, Ctrl+A) and copies with Ctrl+C
+or the context menu (Copy, Copy All, Select All). The view
 follows new lines unless you have scrolled up to read. Output keeps the last
 50,000 lines.
 

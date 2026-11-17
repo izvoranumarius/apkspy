@@ -16,6 +16,8 @@
 #include "ui/AnnotationUi.hpp"
 #include "ui/GraphView.hpp"
 #include "ui/Panel.hpp"
+#include "ui/StringHints.hpp"
+#include "ui/TextSelect.hpp"
 
 // Analysis workspace, in the layout of JADX, Ghidra and Binary Ninja:
 //  - Analysis (this panel): the navigator. Classes as a package tree with
@@ -212,6 +214,7 @@ private:
     // Decompiler (see AnalysisDecompiler.cpp)
     void decompilerFollowCall(const decompiler::Line& line);
     void decompilerRenamePopup();
+    static std::string nativeLineText(const NativeCode::Line& l);
     decompiler::Output decompRaw_;        // as decompiled
     decompiler::Output decomp_;           // with the user's variable names
     uint64_t decompNotesVersion_ = 0;     // annotations version the names come from
@@ -235,6 +238,9 @@ private:
     uint64_t decompSynced_ = UINT64_MAX;  // last listing address followed
     bool decompScroll_ = false;
     int decompLine_ = -1;
+    std::vector<std::string> decompNotes_;  // per line: what an encoded string literal decodes to ("" for none)
+    ui::TextSelect decompSel_;            // text selection (drag, double-click, Ctrl+A / Ctrl+C)
+    ui::TextSelect listingSel_;           // the same over the smali listing
 
     // Resources
     int resType_ = 0;  // index into resTypes_ (0 = all)

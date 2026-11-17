@@ -429,6 +429,8 @@ void EditorPanel::drawCode(Document& doc) {
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", a->text.c_str());
     };
     const bool viewHovered = ImGui::IsWindowHovered();
+    ui::TextSelect& sel = textSel_[&doc];
+    const ui::TextSelect::LineFn lineText = [&lines](int k) { return std::string(lines[static_cast<size_t>(k)]); };
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(lines.size()), lineHeight);
     while (clipper.Step()) {
@@ -478,6 +480,10 @@ void EditorPanel::drawCode(Document& doc) {
             }
             bool inBlock = doc.blockStateAt(static_cast<size_t>(i));
             const std::string_view line = lines[static_cast<size_t>(i)];
+            sel.row(i, line, ImGui::GetCursorScreenPos(), lineHeight, !io.KeyCtrl);  // Ctrl+click navigates instead
+            // An encoded string literal under the mouse: what it decodes to.
+            if (viewHovered && !io.KeyCtrl && !sel.dragging() && io.MousePos.y >= rowPos.y && io.MousePos.y < rowPos.y + lineHeight)
+                ui::literalTooltip(line, ImGui::GetCursorScreenPos().x, io.MousePos.x);
             SyntaxHighlighter::tokenize(line, doc.language(), inBlock, spans);
             if (spans.empty()) {
                 ImGui::TextUnformatted("");
@@ -513,6 +519,7 @@ void EditorPanel::drawCode(Document& doc) {
             drawNote(i);
         }
     }
+    sel.finish(static_cast<int>(lines.size()), lineText, lineHeight);
     drawLineMenu(doc);
 }
 
@@ -536,6 +543,16 @@ bool EditorPanel::annotationAt(const Document& doc, int line, Annotation& out) c
 
 void EditorPanel::drawLineMenu(Document& doc) {
     if (!ImGui::BeginPopup("##lineMenu")) return;
+    const auto& lines = doc.lines();
+    const ui::TextSelect::LineFn lineText = [&lines](int k) { return std::string(lines[static_cast<size_t>(k)]); };
+    textSel_[&doc].menuItems(static_cast<int>(lines.size()), lineText, [this](std::string s) { workspace_.sendToDecoder(std::move(s)); });
+    if (std::string lit; lineDoc_ == &doc && line_ >= 0 && line_ < static_cast<int>(lines.size()) &&
+                         ui::literalForMenu(lines[static_cast<size_t>(line_)], std::string::npos, lit) &&
+                         ImGui::MenuItem("Send string to Decoder"))
+        workspace_.sendToDecoder(lit);
+    if (lineDoc_ == &doc && line_ >= 0 && line_ < static_cast<int>(lines.size()) && ImGui::MenuItem("Copy Line"))
+        ImGui::SetClipboardText(lineText(line_).c_str());
+    ImGui::Separator();
     Annotation here;
     Annotations& notes = workspace_.annotations();
     if (lineDoc_ == &doc && annotationAt(doc, line_, here)) {
@@ -882,6 +899,7 @@ void EditorPanel::sweepFindStates() {
     for (auto it = fonts_.begin(); it != fonts_.end();) it = alive(it->first) ? std::next(it) : fonts_.erase(it);
     for (auto it = videos_.begin(); it != videos_.end();) it = alive(it->first) ? std::next(it) : videos_.erase(it);
     for (auto it = find_.begin(); it != find_.end();) it = alive(it->first) ? std::next(it) : find_.erase(it);
+    for (auto it = textSel_.begin(); it != textSel_.end();) it = alive(it->first) ? std::next(it) : textSel_.erase(it);
 }
 
 float EditorPanel::columnToX(std::string_view line, int col) const {
