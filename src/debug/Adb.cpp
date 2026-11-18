@@ -402,6 +402,23 @@ bool Adb::setGlobalHttpProxy(const std::string& serial, const std::string& value
     return error.empty();
 }
 
+bool Adb::clearGlobalHttpProxy(const std::string& serial, std::string& error) const {
+    if (!validSerial(serial)) {
+        error = "invalid serial";
+        return false;
+    }
+    for (const char* key : {"http_proxy", "global_http_proxy_host", "global_http_proxy_port", "global_http_proxy_exclusion_list",
+                            "global_proxy_pac_url"}) {
+        std::vector<std::string> argv = base(serial);
+        for (const char* a : {"shell", "settings", "delete", "global"}) argv.push_back(a);
+        argv.push_back(key);
+        std::string err;
+        run(argv, err);
+        if (!err.empty() && error.empty()) error = err;
+    }
+    return error.empty();
+}
+
 std::string Adb::backtrace(const std::string& serial, int pid, std::string& error) const {
     if (!validSerial(serial) || pid <= 0) {
         error = "invalid serial or pid";

@@ -45,7 +45,7 @@ whitelists.
 
 **Start capture** runs a local proxy (127.0.0.1 only) and routes the device
 through it (`adb reverse` + the device's global HTTP proxy setting); **Stop
-capture** undoes both. Plain HTTP requests are captured with headers and bodies
+capture** undoes both by deleting the proxy setting. Plain HTTP requests are captured with headers and bodies
 (chunked / gzip decoded, JSON pretty-printed, copy as cURL); HTTPS connections
 appear with host, TLS server name, timing and sizes, and their contents stay
 encrypted. The **Endpoints** view groups requests into an API map

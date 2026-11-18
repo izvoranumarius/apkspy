@@ -85,8 +85,11 @@ public:
     // the device's traffic into the sniffer on 127.0.0.1.
     bool reverse(const std::string& serial, int port, std::string& error) const;
     void removeReverse(const std::string& serial, int port, std::string& error) const;
-    // `settings put global http_proxy <value>` ("host:port", or ":0" to clear).
+    // `settings put global http_proxy <value>` ("host:port"); clear it with clearGlobalHttpProxy.
     bool setGlobalHttpProxy(const std::string& serial, const std::string& value, std::string& error) const;
+    // Removes the global proxy settings. Deleting them is the only reliable reset:
+    // ":0" means "no proxy" to Android's own stack but a broken proxy to Chrome / WebView.
+    bool clearGlobalHttpProxy(const std::string& serial, std::string& error) const;
     // Native + Java backtraces through debuggerd (requires a debuggable app
     // or a rooted device); returns the raw text.
     std::string backtrace(const std::string& serial, int pid, std::string& error) const;

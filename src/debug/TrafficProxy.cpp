@@ -870,7 +870,7 @@ bool TrafficProxy::routeDevice(adb::Adb& adb, const std::string& serial, std::st
 }
 
 bool TrafficProxy::restoreDevice(adb::Adb& adb, const std::string& serial, std::string& error) {
-    const bool ok = adb.setGlobalHttpProxy(serial, ":0", error);
+    const bool ok = adb.clearGlobalHttpProxy(serial, error);
     std::string ignored;
     if (port_) adb.removeReverse(serial, port_, ignored);
     if (ok && serial == routedSerial_) routedSerial_.clear();

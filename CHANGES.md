@@ -2,6 +2,9 @@
 
 ## Terminals, copying and free retyping
 
+- Fixed: stopping a capture (or Reset device proxy) left the device's proxy set
+  to `:0`, which Chrome and WebView apps read as a broken proxy ("No internet",
+  ERR_PROXY_CONNECTION_FAILED). The proxy settings are now deleted.
 - **Request history** in the Network workspace, as in Burp: filters by method,
   status, content type, static files, edited, parameters, highlighted and
   hosts; a search that can look inside decoded bodies; sortable columns;
