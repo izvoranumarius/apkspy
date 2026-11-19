@@ -1,4 +1,5 @@
 #include "debug/DeviceService.hpp"
+#include "core/Paths.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -760,6 +761,37 @@ void DebugSession::onEvent(const JdwpClient::Event& e) {
 // ---------------------------------------------------------------------------
 
 DeviceService::DeviceService() : debugger_(adb_) {}
+
+bool DeviceService::setTlsInterception(bool enabled, std::string& error) {
+    if (enabled) return enableTlsInterception(error);
+    ca_.reset();
+    traffic_.setCa(nullptr);  // CONNECTs go back to blind tunnels
+    return true;
+}
+
+bool DeviceService::enableTlsInterception(std::string& error) {
+    auto store = std::make_shared<ca::Store>();
+    if (!store->loadOrGenerate(pathutil::configDir().string(), error)) return false;
+    ca_ = store;
+    traffic_.setCa(store);
+    return true;
+}
+
+bool DeviceService::regenerateCa(std::string& error) {
+    if (!ca_) return error = "the CA is not loaded", false;
+    if (!ca_->regenerate(error)) return false;
+    traffic_.setCa(ca_);  // in-flight tunnels keep the old leaves; new ones use the new CA
+    return true;
+}
+
+void DeviceService::setUpstreamVerification(bool verify) {
+    std::shared_ptr<tls::TrustStore> roots;
+    if (verify) {
+        std::string error;
+        roots = tls::defaultTrustStore(error);  // empty store: surfaced per flow, never skipped silently
+    }
+    traffic_.setUpstreamTrust(roots, verify);
+}
 
 void DeviceService::stopTraffic() {
     // Never leave a device pointing at a proxy that no longer exists: its

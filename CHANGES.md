@@ -1,5 +1,120 @@
 # Changelog
 
+## Proxy tools (mitmproxy-style)
+
+- **Proxy modes** (File > Settings > Network): *Regular* (HTTP proxy +
+  CONNECT; SOCKS5 clients are recognised on the same port), *Reverse* (every
+  request goes to one configured `http(s)://` server with its Host header
+  rewritten; Start capture then only adds the adb reverse mapping), and an
+  optional **upstream proxy** that chains every outgoing connection through
+  another HTTP proxy (CONNECT for tunnels / HTTPS, absolute form for plain
+  HTTP, optional Basic credentials).
+- **Content views** for request and response bodies, chosen per pane: Auto,
+  Text, JSON, XML / HTML (indented), URL-encoded form, multipart form,
+  schema-less protobuf, gRPC (framed messages, gzip-compressed ones
+  inflated), MessagePack, image facts (PNG / JPEG / GIF / WebP / BMP / ICO /
+  SVG) and hex. A view that cannot read the bytes falls back to hex.
+- **Filter expressions** in mitmproxy syntax in the Requests filter box:
+  `~u ~d ~m ~c ~t ~tq ~ts ~h ~hq ~hs ~b ~bq ~bs ~q ~s ~e ~a ~http ~tcp
+  ~websocket ~modified ~marked ~comment ~all` with `! & |`, grouping, quoted
+  values and case-insensitive regexes (`?` shows the syntax). Header and body
+  filters run on full flows off the UI thread. Plain text still searches as
+  before.
+- **Sessions as HAR 1.2**: save all or only the shown requests, and open HAR
+  files from ApkSpy, browsers, Burp, mitmproxy or Charles. ApkSpy's own files
+  keep raw bodies, TLS / tunnel details, errors and WebSocket frames, so a
+  saved session reopens unchanged.
+- **Traffic scripts** (new Scripts tab): a Python file with
+  `request(flow)` / `response(flow)` hooks (or an `addons` list) can change
+  requests and responses, answer a request itself
+  (`flow.response = Response.make(...)`) or drop it (`flow.kill()`), with a
+  mitmproxy-like API (headers, `content` / `text`, `query`, `url`...). It runs
+  in the configured Python as a child process, reloads when saved, logs to the
+  tab, and a slow (10 s) or crashed script lets traffic through unchanged. An
+  edited Host header now re-routes plain HTTP (scripts and the intercept).
+- Tests: content views, filter parsing / matching, HAR round trips and
+  foreign HAR import, SOCKS5 (HTTP and raw), upstream chaining (plain and
+  CONNECT, with credentials), reverse mode, proxy hooks, and the Python
+  script host end to end.
+
+### More protocol and tool support
+
+- **Brotli and zstd bodies** are decoded (vendored brotli 1.1.0 and zstd 1.5.6
+  decoders).
+- **WebSockets**: whole payloads are kept (up to 256 KB per frame, 32 MB per
+  connection); messages can be **held at the intercept** (new "WebSocket
+  messages" switch), edited or dropped; **Send message** injects text or binary
+  messages into a live connection either way, and frames can be resent; frames
+  get the content views. Compression (permessage-deflate) is no longer offered
+  upstream, so frames stay readable. Fixed: upgrades went upstream with
+  `Connection: close` instead of `Connection: Upgrade`, which real servers refuse.
+- **Map & Replay** tab: ignore / allow host lists (ignored hosts are relayed
+  as blind tunnels), **map local** (answer URLs from a file or directory),
+  **map remote** (send a URL prefix elsewhere), **server replay** (answer from
+  the captured requests or a HAR file; reuse, ignore-query and 404-unmatched
+  options), and **network conditions** (latency, bandwidth caps, failing
+  connections; presets from Fast 3G to Offline-ish).
+- **Replay** a request or every shown request again (the answers join the list),
+  **Copy as** cURL, HTTPie, Python requests, JavaScript fetch, PowerShell or raw
+  HTTP, and highlights / comments are saved in HAR sessions.
+- **Content views**: JWT (claims and expiry), GraphQL, CBOR, DNS, and protobuf
+  / gRPC **with field names** from `.proto` files (... > Load .proto files);
+  cookie and query tables and decoded JWTs under each message's headers.
+- **Scripts**: several at once (hooks run in order), plus
+  `websocket_message(flow)` and `error(flow)` hooks.
+- **Raw TCP** streams (non-TLS tunnels) keep their bytes; **SOCKS5 UDP
+  ASSOCIATE** relays datagrams (each destination a flow, DNS decoded);
+  **plain-text HTTP/2 (h2c)** in reverse mode or inside tunnels is relayed
+  unchanged and each stream listed as a request (gRPC included). New
+  filters `~udp` and `~dns`.
+- **Capture limits** (requests kept, KB per body) in Settings > Network.
+- **Start proxy without a device**: with nothing connected the button starts
+  the proxy alone (HTTP and SOCKS5 on 127.0.0.1) for clients set up by hand.
+- Fixed: WebSocket, h2c and other upgraded connections were closed after 60 s
+  of silence in one direction (push-only sockets dropped); scripts reloaded on
+  save came back empty; raw TCP / UDP / DNS rows showed an "err" status and a
+  broken URL.
+
+## HTTPS interception
+
+- **HTTPS is decrypted now.** CONNECT tunnels are terminated in the proxy with
+  a per-host certificate signed by ApkSpy's own CA (generated on first run,
+  managed in File > Settings > Network and the Traffic panel's **HTTPS &
+  certificates** dialog): TLS 1.2 / 1.3 with the app, a verified TLS 1.2/1.3
+  connection to the real server, and the decrypted requests and responses in
+  the existing Requests / Endpoints / Intercept / Match & replace / Repeater /
+  Comparer pipeline. A protocol column distinguishes `http`, `https`, `ws` and
+  `wss`. TLS runs on the bundled mbedTLS 3.5.2 (Apache-2.0, vendored in
+  `include/mbedtls` + `lib/mbedtls`); upstream servers are verified against
+  the bundled Mozilla root bundle.
+- **Certificates on the device**: the certificate dialog installs the CA for
+  the user store (with the steps Android needs), checks what the device
+  actually trusts, and - on rooted devices / `adb root` emulators - installs
+  into or removes it from the system store (both the Android 13- directory
+  layout and the Android 14+ Conscrypt APEX overlay, reversible, with
+  confirmation). App compatibility is diagnosed from the opened APKs: target
+  SDK (user-CA trust), `debuggable`, and the manifest's network security
+  config. QUIC / HTTP3 bypass is called out with the command that forces apps
+  back onto TCP.
+- **When an app refuses the proxy** (certificate pinning, an untrusted CA, a
+  TLS version or protocol mismatch), the failed handshake is recorded on a
+  flow with the likely reason instead of a silent "success"; an h2 preface on
+  an intercepted connection is diagnosed the same way.
+- **WebSockets** are captured: 101 upgrades (plain and `wss`) relay with their
+  frames recorded on the flow - direction, opcode, size and payload preview -
+  in a WebSocket tab.
+- **The Repeater sends HTTPS on every platform now** (it went through
+  WinHTTP on Windows only before): mbedTLS with certificate verification, and
+  the per-send "ignore certificate errors" option scoped to that one send
+  (unverified sends use TLS 1.2 - mbedTLS 3.5's TLS 1.3 client always
+  verifies).
+- Tests: CA generation / signing / expiry, TLS 1.2 + 1.3 handshakes,
+  HTTPS GET / POST, persistent sessions, gzip and chunked bodies, concurrent
+  connections, untrusted / expired upstream certificates, rejected
+  certificates, intercept edits over TLS, match & replace over TLS, WebSocket
+  capture, and the Repeater's HTTPS send - plus `tests/testapp/`, a small
+  Android app to verify the whole workflow on a real device.
+
 ## Terminals, copying and free retyping
 
 - Fixed: stopping a capture (or Reset device proxy) left the device's proxy set

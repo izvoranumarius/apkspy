@@ -1,6 +1,348 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <Filter Include="mbedTLS">
+      <UniqueIdentifier>{9c1a2b3d-0000-4000-8000-0000000000aa}</UniqueIdentifier>
+    </Filter>
+    <ClInclude Include="src\debug\Tls.hpp">
+      <Filter>debug</Filter>
+    </ClInclude>
+    <ClInclude Include="src\debug\Stream.hpp">
+      <Filter>debug</Filter>
+    </ClInclude>
+    <ClInclude Include="src\debug\CertInstaller.hpp">
+      <Filter>debug</Filter>
+    </ClInclude>
+    <ClInclude Include="src\debug\CaStore.hpp">
+      <Filter>debug</Filter>
+    </ClInclude>
+    <ClCompile Include="lib\mbedtls\x509write_csr.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\x509write_crt.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\x509write.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\x509_csr.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\x509_crt.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\x509_crl.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\x509_create.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\x509.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\version_features.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\version.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\timing.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\threading.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_tls13_server.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_tls13_keys.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_tls13_generic.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_tls13_client.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_tls12_server.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_tls12_client.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_tls.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_ticket.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_msg.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_debug_helpers_generated.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_cookie.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_client.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_ciphersuites.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ssl_cache.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\sha512.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\sha3.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\sha256.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\sha1.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\rsa_alt_helpers.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\rsa.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ripemd160.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_util.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_its_file.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto_storage.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto_slot_management.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto_se.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto_rsa.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto_pake.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto_mac.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto_hash.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto_ffdh.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto_ecp.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto_driver_wrappers_no_static.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto_client.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto_cipher.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto_aead.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\psa_crypto.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\poly1305.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\platform_util.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\platform.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\pkwrite.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\pkparse.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\pkcs7.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\pkcs5.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\pkcs12.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\pk_wrap.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\pk.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\pem.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\padlock.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\oid.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\nist_kw.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\mps_trace.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\mps_reader.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\memory_buffer_alloc.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\md5.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\md.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\lms.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\lmots.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\hmac_drbg.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\hkdf.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\gcm.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\error.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\entropy_poll.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\entropy.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ecp_curves_new.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ecp_curves.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ecp.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ecjpake.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ecdsa.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ecdh.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\dhm.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\des.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\debug.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ctr_drbg.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\constant_time.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\cmac.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\cipher_wrap.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\cipher.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\chachapoly.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\chacha20.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\ccm.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\camellia.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\bignum_mod_raw.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\bignum_mod.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\bignum_core.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\bignum.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\base64.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\asn1write.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\asn1parse.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\aria.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\aesni.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\aesce.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\mbedtls\aes.c">
+      <Filter>mbedTLS</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\TrafficCerts.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\Tls.cpp">
+      <Filter>debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\CertInstaller.cpp">
+      <Filter>debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\CaStore.cpp">
+      <Filter>debug</Filter>
+    </ClCompile>
     <Filter Include="Header Files">
       <UniqueIdentifier>{2583FC02-470D-4CB0-BE7D-F82433D8A980}</UniqueIdentifier>
     </Filter>
@@ -175,6 +517,18 @@
       <Filter>Header Files\debug</Filter>
     </ClInclude>
     <ClInclude Include="src\debug\MatchReplace.hpp">
+      <Filter>Header Files\debug</Filter>
+    </ClInclude>
+    <ClInclude Include="src\debug\ContentView.hpp">
+      <Filter>Header Files\debug</Filter>
+    </ClInclude>
+    <ClInclude Include="src\debug\FlowFilter.hpp">
+      <Filter>Header Files\debug</Filter>
+    </ClInclude>
+    <ClInclude Include="src\debug\FlowArchive.hpp">
+      <Filter>Header Files\debug</Filter>
+    </ClInclude>
+    <ClInclude Include="src\debug\TrafficScript.hpp">
       <Filter>Header Files\debug</Filter>
     </ClInclude>
     <ClInclude Include="src\core\WorkerSet.hpp">
@@ -446,6 +800,12 @@
     <ClCompile Include="src\ui\TrafficRules.cpp">
       <Filter>Source Files\ui</Filter>
     </ClCompile>
+    <ClCompile Include="src\ui\TrafficTools.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\TrafficRouting.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
     <ClCompile Include="src\ui\TrafficComparer.cpp">
       <Filter>Source Files\ui</Filter>
     </ClCompile>
@@ -459,6 +819,24 @@
       <Filter>Source Files\debug</Filter>
     </ClCompile>
     <ClCompile Include="src\debug\MatchReplace.cpp">
+      <Filter>Source Files\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\ContentView.cpp">
+      <Filter>Source Files\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\FlowFilter.cpp">
+      <Filter>Source Files\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\FlowArchive.cpp">
+      <Filter>Source Files\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\TrafficScript.cpp">
+      <Filter>Source Files\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\ProtoSchema.cpp">
+      <Filter>Source Files\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="src\debug\Http2.cpp">
       <Filter>Source Files\debug</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\McpSettings.cpp">
@@ -634,6 +1012,72 @@
     </ClCompile>
     <ClCompile Include="lib\imgui\backends\imgui_impl_opengl3.cpp">
       <Filter>Libraries\imgui\backends</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\brotli\common\constants.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\brotli\common\context.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\brotli\common\dictionary.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\brotli\common\platform.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\brotli\common\shared_dictionary.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\brotli\common\transform.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\brotli\dec\bit_reader.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\brotli\dec\decode.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\brotli\dec\huffman.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\brotli\dec\state.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\zstd\common\debug.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\zstd\common\entropy_common.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\zstd\common\error_private.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\zstd\common\fse_decompress.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\zstd\common\pool.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\zstd\common\threading.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\zstd\common\xxhash.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\zstd\common\zstd_common.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\zstd\decompress\huf_decompress.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\zstd\decompress\zstd_ddict.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\zstd\decompress\zstd_decompress.c">
+      <Filter>Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="lib\zstd\decompress\zstd_decompress_block.c">
+      <Filter>Libraries</Filter>
     </ClCompile>
     <ClCompile Include="lib\miniz\miniz.c">
       <Filter>Libraries\miniz</Filter>

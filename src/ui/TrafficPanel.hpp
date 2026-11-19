@@ -12,7 +12,10 @@
 #include "debug/DeviceService.hpp"
 #include "debug/HttpClient.hpp"
 #include "core/TextDiff.hpp"
+#include "debug/FlowFilter.hpp"
 #include "debug/MatchReplace.hpp"
+#include "debug/TrafficScript.hpp"
+#include "ui/FileBrowser.hpp"
 #include "ui/Panel.hpp"
 
 // "Traffic": network sniffer. Starts the local proxy, routes the selected
@@ -29,6 +32,7 @@ class TrafficPanel : public Panel {
 public:
     TrafficPanel(Workspace& workspace, DeviceService& devices, Settings& settings)
         : Panel(workspace, "Traffic"), devices_(devices), settings_(settings) {}
+    ~TrafficPanel() override;
 
     // A captured request in a new Repeater tab (HTTPS connections get a request to fill in).
     void sendToRepeater(const TrafficProxy::Flow& flow);
@@ -74,19 +78,61 @@ private:
     RepeaterTab& newRepeaterTab(const httpclient::Target& target, std::string request);
 
     void drawToolbar();
+    void drawSessionDialogs();  // HAR save / open (file browsers)
+    void drawScripts();         // the Scripts tab
+    void drawRouting();         // the Map & Replay tab
+    // Batch replay: sends the requests again (Repeater engine); the answers
+    // join the list as new flows.
+    void startBatchReplay(const std::vector<uint64_t>& ids);
+    void pollBatchReplay();
+    void copyAsMenu(uint64_t flowId);  // "Copy as" submenu items
+    void loadRouting();         // from the settings, once (applied to the proxy)
+    void applyRouting();        // to the proxy and the settings
+    void pollScript();          // start job, log, auto-reload
+    void loadScripts(std::vector<std::string> paths);  // by value: a reload passes the running host's own list
+    std::vector<std::string> scriptPathList() const;
+    // Filter expressions (mitmproxy syntax) typed into the filter box.
+    void updateExpression(const std::string& text);
+    void drawFilterHelp();
     void drawRequests();
     void drawFilterPopup();
     void updateBodySearch(const std::string& text);
     bool passes(const TrafficProxy::Flow& f) const;
     void drawDetail();
+    void drawDetailTls(const TrafficProxy::Flow& f);   // version / cipher / cert failure line
+    void drawDetailWebSockets(const TrafficProxy::Flow& f);  // recorded frames
     void drawEndpoints();
     bool inCode(const std::string& host, const std::string& path);
     void refreshCodeStrings();
+
+    // The "HTTPS & certificates" dialog: ApkSpy's CA, exporting it, and
+    // installing / checking it on the connected device.
+    void drawCertDialog();
+    void refreshCertInfo();
 
     DeviceService& devices_;
     Settings& settings_;
     char filter_[256] = {};
     bool hideTunnels_ = false;
+    // Certificates dialog state
+    bool showCerts_ = false;
+    bool certInfoBusy_ = false;                  // an inspect job is running
+    std::string certStatus_;                     // last action's outcome
+    std::string certExportPath_;                 // where the CA was exported last
+    struct CertInfo {
+        bool valid = false;
+        std::string subject, issuer, serial, fingerprint, notBefore, notAfter;
+        long long secondsLeft = 0;
+        // device side (filled by the async inspect)
+        bool ran = false;
+        std::string deviceSerial, deviceModel, androidRelease;
+        int sdk = 0;
+        bool adbdRoot = false, suAvailable = false;
+        bool userStoreReadable = false, caUserInstalled = false, caSystemInstalled = false, overlayMounted = false;
+        std::string notes;
+    };
+    CertInfo certInfo_;
+    std::future<CertInfo> certInfoJob_;
     bool devicesRequested_ = false;
     std::vector<TrafficProxy::Flow> rows_;
     uint64_t rowsHead_ = 0;
@@ -107,6 +153,14 @@ private:
     // Intercept
     bool interceptRequests_ = false;
     bool interceptResponses_ = false;
+    bool interceptWs_ = false;
+    // WebSocket tab: the selected frame, and the Send message box.
+    int wsSelected_ = -1;
+    uint64_t wsSelectedFlow_ = 0;
+    std::string wsSendText_;
+    int wsSendToServer_ = 1;
+    bool wsSendHex_ = false;
+    std::string wsStatus_;
     char interceptFilter_[256] = {};
     uint64_t selectedHeld_ = 0;
     std::map<uint64_t, std::string> heldEdits_;  // held id -> the text being edited
@@ -136,6 +190,50 @@ private:
     uint64_t commentFor_ = 0;
     char commentBuf_[256] = {};
     bool openComment_ = false;
+    // Filter expression state: parsed from filter_ when it uses ~filters.
+    std::shared_ptr<const flowfilter::Filter> expr_;
+    std::string exprText_;
+    std::string exprError_;
+    std::future<std::vector<uint64_t>> exprJob_;  // content filters run on full flows off the UI thread
+    std::unordered_set<uint64_t> exprHits_;
+    uint64_t exprHead_ = 0;
+    std::string exprJobFor_;  // the expression the running job evaluates
+    // Sessions (HAR)
+    FileBrowser harSaver_;
+    FileBrowser harOpener_;
+    FileBrowser protoOpener_;
+    bool protoLoaded_ = false;
+    void loadProtoDir(const std::string& dir, bool report);
+    bool harSaveFiltered_ = false;
+    std::vector<uint64_t> shownIds_;  // what the Requests table shows (for "save filtered")
+    struct BatchReplay {
+        std::future<std::vector<TrafficProxy::Flow>> job;
+        std::shared_ptr<std::atomic<bool>> cancel;
+        std::shared_ptr<std::atomic<int>> done;
+        int total = 0;
+    };
+    BatchReplay batch_;
+    // Map & Replay
+    TrafficProxy::Routing routing_;
+    bool routingLoaded_ = false;
+    char ignoreHosts_[4096] = {};
+    char allowHosts_[4096] = {};
+    TrafficProxy::ReplayOptions replayOptions_;
+    TrafficProxy::Conditions conditions_;
+    std::string replayStatus_;
+    FileBrowser replayOpener_;
+    FileBrowser mapLocalBrowser_;
+    int mapLocalBrowseRow_ = -1;
+    // Scripts
+    std::shared_ptr<trafficscript::Host> script_;
+    std::future<std::pair<std::shared_ptr<trafficscript::Host>, std::string>> scriptJob_;
+    char scriptPaths_[4096] = {};  // one script per line
+    std::vector<std::string> scriptLog_;
+    bool scriptAutoReload_ = true;
+    long long scriptMtime_ = 0;
+    int scriptCheckFrame_ = 0;
+    FileBrowser scriptOpener_;
+    FileBrowser scriptSaver_;
     bool searchBodies_ = false;
     std::future<std::vector<uint64_t>> bodySearchJob_;
     std::string bodySearchText_;

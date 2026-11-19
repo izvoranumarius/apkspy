@@ -59,6 +59,8 @@ public:
             if (const std::string* v = attrValue(attrs, "android:icon", "icon")) info_.appIcon = *v;
             info_.debuggable = attrBool(attrs, "android:debuggable", "debuggable");
             info_.allowBackup = attrBool(attrs, "android:allowBackup", "allowBackup");
+            if (const std::string* v = attrValue(attrs, "android:networkSecurityConfig", "networkSecurityConfig"))
+                info_.networkSecurityConfig = *v;
         } else if (isComponentType(name)) {
             ApkComponent c;
             c.type = name;

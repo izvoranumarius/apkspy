@@ -85,6 +85,15 @@ public:
     // the device's traffic into the sniffer on 127.0.0.1.
     bool reverse(const std::string& serial, int port, std::string& error) const;
     void removeReverse(const std::string& serial, int port, std::string& error) const;
+    // Runs one fixed remote shell command (the command must be a literal at
+    // the call site, never text from a project file or an MCP client; the
+    // serial is validated as everywhere). For the certificate installer's
+    // root operations.
+    std::string shell(const std::string& serial, const std::string& command, std::string& error, int timeoutMs = 10000) const;
+    // adb push (local file must exist; the remote path is restricted to
+    // [A-Za-z0-9._/-] so it cannot smuggle shell characters).
+    bool push(const std::string& serial, const std::string& localPath, const std::string& remotePath,
+              std::string& error) const;
     // `settings put global http_proxy <value>` ("host:port"); clear it with clearGlobalHttpProxy.
     bool setGlobalHttpProxy(const std::string& serial, const std::string& value, std::string& error) const;
     // Removes the global proxy settings. Deleting them is the only reliable reset:

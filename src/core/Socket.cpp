@@ -298,3 +298,70 @@ void Socket::setRecvTimeout(int ms) {
     setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
 #endif
 }
+
+// ---- UdpSocket ----------------------------------------------------------------
+
+void UdpSocket::close() {
+    if (fd_ != kInvalid) APKSPY_CLOSESOCK(static_cast<decltype(fd_)>(fd_));
+    fd_ = kInvalid;
+}
+
+bool UdpSocket::bind(bool loopback, int port, std::string& error) {
+    Socket::initNetworking();
+    close();
+    fd_ = static_cast<Fd>(::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP));
+    if (fd_ == kInvalid) {
+        error = "cannot create a UDP socket";
+        return false;
+    }
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_port = htons(static_cast<uint16_t>(port));
+    a.sin_addr.s_addr = htonl(loopback ? INADDR_LOOPBACK : INADDR_ANY);
+    if (::bind(static_cast<decltype(fd_)>(fd_), reinterpret_cast<sockaddr*>(&a), sizeof a) != 0) {
+        error = "cannot bind a UDP socket";
+        close();
+        return false;
+    }
+    return true;
+}
+
+int UdpSocket::localPort() const {
+    sockaddr_in a{};
+    socklen_type len = sizeof a;
+    if (fd_ == kInvalid || getsockname(static_cast<decltype(fd_)>(fd_), reinterpret_cast<sockaddr*>(&a), &len) != 0) return 0;
+    return ntohs(a.sin_port);
+}
+
+bool UdpSocket::sendTo(const std::string& host, int port, const void* data, size_t len, std::string& error) {
+    if (fd_ == kInvalid) return error = "socket closed", false;
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    addrinfo* list = nullptr;
+    if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &list) != 0 || !list) {
+        error = "cannot resolve " + host + " (IPv4)";
+        return false;
+    }
+    const auto sent = ::sendto(static_cast<decltype(fd_)>(fd_), static_cast<const char*>(data), static_cast<int>(len), 0,
+                               list->ai_addr, static_cast<socklen_type>(list->ai_addrlen));
+    freeaddrinfo(list);
+    if (sent < 0) return error = "UDP send failed", false;
+    return true;
+}
+
+long UdpSocket::recvFrom(void* buf, size_t len, std::string& fromHost, int& fromPort) {
+    if (fd_ == kInvalid) return -1;
+    sockaddr_in a{};
+    socklen_type alen = sizeof a;
+    const auto n = ::recvfrom(static_cast<decltype(fd_)>(fd_), static_cast<char*>(buf), static_cast<int>(len), 0,
+                              reinterpret_cast<sockaddr*>(&a), &alen);
+    if (n < 0) return -1;
+    char text[INET_ADDRSTRLEN] = {};
+    inet_ntop(AF_INET, &a.sin_addr, text, sizeof text);
+    fromHost = text;
+    fromPort = ntohs(a.sin_port);
+    return static_cast<long>(n);
+}
+
+bool UdpSocket::waitReadable(int timeoutMs) { return fd_ != kInvalid && waitFor(static_cast<uintptr_t>(fd_), false, timeoutMs); }

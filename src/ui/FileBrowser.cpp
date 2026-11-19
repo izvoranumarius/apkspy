@@ -97,6 +97,7 @@ const char* FileBrowser::popupTitle() const {
     case Mode::SaveProject: return "Save Project As";
     case Mode::SaveFile: return "Export File";
     case Mode::SelectFolder: return "Export Folder";
+    case Mode::OpenFile: return "Open File";
     default: return "Select jadx Executable";
     }
 }
@@ -232,7 +233,7 @@ void FileBrowser::render() {
     }
     ImGui::SameLine();
     const char* acceptLabel = multi      ? "Add"
-                              : mode_ == Mode::OpenProject ? "Open"
+                              : mode_ == Mode::OpenProject || mode_ == Mode::OpenFile ? "Open"
                               : mode_ == Mode::SelectFolder ? "Select Folder"
                                                             : "Save";
     if (ImGui::Button(acceptLabel, ImVec2(buttonW, 0))) pendingAccept = true;
@@ -245,6 +246,12 @@ void FileBrowser::render() {
     if (!pendingDir.empty()) {
         goTo(pathutil::toUtf8(pathutil::fromUtf8(currentDir_) / pendingDir));
         selectedFile_.clear();
+    }
+    // A folder typed into the path field counts even without Enter.
+    if (pendingAccept && pathBuffer_[0] && currentDir_ != pathBuffer_) {
+        std::error_code ec;
+        const fs::path typed = pathutil::fromUtf8(pathBuffer_).lexically_normal();
+        if (fs::is_directory(typed, ec)) currentDir_ = pathutil::toUtf8(typed);
     }
     if (pendingAccept) {
         if (multi) {

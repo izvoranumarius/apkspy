@@ -61,10 +61,18 @@ void TrafficPanel::sendToRepeater(const TrafficProxy::Flow& f) {
         newRepeaterTab(t, req);
         return;
     }
-    t.host = f.host;
+    // Plain HTTP and decrypted HTTPS alike: the captured request, as sent.
+    t.host = f.sni.empty() ? f.host : f.sni;
     t.port = f.port;
-    t.https = false;
-    newRepeaterTab(t, httpclient::editableRequest(f));
+    t.https = f.https;
+    std::string request = httpclient::editableRequest(f);
+    if (f.https) {
+        // The editable text keeps the original Host header; the target is the
+        // interception's host so the send goes where the app went.
+        httpclient::Target fromHost;
+        if (httpclient::targetFromRequest(request, fromHost)) t.host = fromHost.host, t.port = fromHost.port;
+    }
+    newRepeaterTab(t, std::move(request));
 }
 
 void TrafficPanel::sendRepeater(RepeaterTab& tab) {
@@ -270,8 +278,9 @@ void TrafficPanel::drawRepeaterTab(RepeaterTab& tab) {
         ImGui::PopFont();
     } else {
         ImGui::PushTextWrapPos(0.f);
-        ImGui::TextDisabled("Edit the request and press Send (Ctrl+Enter). Plain HTTP goes out exactly as typed; HTTPS goes "
-                            "through Windows' HTTP stack. Redirects are not followed and no cookies are kept.");
+        ImGui::TextDisabled("Edit the request and press Send (Ctrl+Enter). Plain HTTP and HTTPS both go out exactly as "
+                            "typed, over a socket or a verified TLS connection (mbedTLS). Redirects are not followed "
+                            "and no cookies are kept.");
         ImGui::PopTextWrapPos();
     }
     ImGui::EndChild();

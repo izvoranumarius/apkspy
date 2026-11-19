@@ -15,9 +15,10 @@ UNAME := $(shell uname -s)
 # On Linux/macOS GLFW comes from the system (pkg-config); the bundled headers
 # in include/glfw are for the MSVC build.
 INCLUDES := -Isrc -Iinclude -Iinclude/imgui -Iinclude/imgui/backends \
-            -Iinclude/miniz -Iinclude/libwebp -Iinclude/glfw
+            -Iinclude/miniz -Iinclude/libwebp -Iinclude/glfw -Iinclude/mbedtls \
+            -Iinclude/brotli -Iinclude/zstd
 CXXFLAGS := -std=c++23 -O2 -Wall -Wextra -Wno-unused-parameter $(INCLUDES) $(shell pkg-config --cflags glfw3 2>/dev/null)
-CFLAGS := -O2 -w $(INCLUDES)
+CFLAGS := -O2 -w -DZSTD_DISABLE_ASM -DZSTD_MULTITHREAD=0 $(INCLUDES)
 LDLIBS := $(shell pkg-config --libs glfw3 2>/dev/null) -lpthread -lm
 # miniaudio loads the platform audio libraries at run time.
 ifneq ($(UNAME),Darwin)
@@ -34,8 +35,12 @@ APP_SRC := $(shell find src -name '*.cpp')
 IMGUI_SRC := $(LIB)/imgui/imgui.cpp $(LIB)/imgui/imgui_draw.cpp $(LIB)/imgui/imgui_tables.cpp \
              $(LIB)/imgui/imgui_widgets.cpp $(LIB)/imgui/backends/imgui_impl_glfw.cpp \
              $(LIB)/imgui/backends/imgui_impl_opengl3.cpp
+DECOMP_SRC := $(wildcard lib/brotli/common/*.c) $(wildcard lib/brotli/dec/*.c) \
+              $(wildcard lib/zstd/common/*.c) $(wildcard lib/zstd/decompress/*.c)
 C_SRC := $(wildcard $(LIB)/miniz/*.c) $(wildcard $(LIB)/libwebp/src/dec/*.c) \
-         $(wildcard $(LIB)/libwebp/src/dsp/*.c) $(wildcard $(LIB)/libwebp/src/utils/*.c)
+         $(wildcard $(LIB)/libwebp/src/dsp/*.c) $(wildcard $(LIB)/libwebp/src/utils/*.c) \
+         $(filter-out $(LIB)/mbedtls/net_sockets.c,$(wildcard $(LIB)/mbedtls/*.c)) \
+         $(DECOMP_SRC)
 
 # Headless tests link the core (no GLFW/OpenGL needed): everything except
 # the UI panels, the app shell and the GL-backed image code; Texture and
@@ -43,13 +48,18 @@ C_SRC := $(wildcard $(LIB)/miniz/*.c) $(wildcard $(LIB)/libwebp/src/dec/*.c) \
 UI_SRC := src/app/Application.cpp src/app/Theme.cpp src/app/ThemePresets.cpp src/app/WindowFrame.cpp src/app/main.cpp \
           src/ui/EditorPanel.cpp src/ui/ExplorerPanel.cpp src/ui/OutputPanel.cpp src/ui/SearchPanel.cpp \
           src/ui/SettingsDialog.cpp src/ui/TitleBar.cpp src/ui/FileBrowser.cpp src/ui/ImageViewer.cpp \
-          src/ui/OverviewPanel.cpp src/ui/AnalysisPanel.cpp src/ui/AnalysisNative.cpp src/ui/AnalysisDecompiler.cpp src/ui/BookmarksPanel.cpp src/ui/GraphView.cpp src/ui/ScriptPanel.cpp src/ui/DevicePanels.cpp src/ui/McpSettings.cpp src/ui/TrafficPanel.cpp src/ui/TrafficRepeater.cpp src/ui/TrafficIntercept.cpp src/ui/TrafficRules.cpp src/ui/TrafficComparer.cpp src/ui/TrafficHistory.cpp \
+          src/ui/OverviewPanel.cpp src/ui/AnalysisPanel.cpp src/ui/AnalysisNative.cpp src/ui/AnalysisDecompiler.cpp src/ui/BookmarksPanel.cpp src/ui/GraphView.cpp src/ui/ScriptPanel.cpp src/ui/DevicePanels.cpp src/ui/McpSettings.cpp src/ui/TrafficPanel.cpp src/ui/TrafficRepeater.cpp src/ui/TrafficIntercept.cpp src/ui/TrafficRules.cpp src/ui/TrafficComparer.cpp src/ui/TrafficHistory.cpp src/ui/TrafficCerts.cpp src/ui/TrafficTools.cpp src/ui/TrafficRouting.cpp \
           src/ui/ShellIcons.cpp src/ui/HexView.cpp src/ui/AudioPlayer.cpp src/ui/AudioCodecs.cpp src/ui/VideoPlayer.cpp src/ui/MediaViews.cpp src/ui/TerminalPanel.cpp src/ui/DecoderPanel.cpp src/ui/CommandPalette.cpp src/core/Pty.cpp src/image/Texture.cpp src/image/ImageDecoder.cpp src/app/HeadlessMcp.cpp
 CORE_SRC := $(filter-out $(UI_SRC),$(APP_SRC))
 
-# miniz must be compiled as C (gcc), not C++.
+# miniz and mbedTLS must be compiled as C (gcc), not C++. mbedTLS's own
+# network layer is excluded: the proxy runs TLS over its own Socket class.
 MINIZ_SRC := lib/miniz/miniz.c lib/miniz/miniz_tinfl.c lib/miniz/miniz_tdef.c lib/miniz/miniz_zip.c
 MINIZ_OBJ := $(patsubst lib/miniz/%.c,$(BUILD)/test_%.o,$(MINIZ_SRC))
+MBEDTLS_SRC := $(filter-out lib/mbedtls/net_sockets.c,$(wildcard lib/mbedtls/*.c))
+MBEDTLS_OBJ := $(patsubst lib/mbedtls/%.c,$(BUILD)/test_mbedtls_%.o,$(MBEDTLS_SRC))
+# Body decoders (decompression only): brotli and zstd.
+DECOMP_OBJ := $(patsubst lib/%.c,$(BUILD)/test_decomp/%.o,$(DECOMP_SRC))
 
 CXX_OBJ := $(patsubst %.cpp,$(OBJ)/%.o,$(APP_SRC) $(IMGUI_SRC))
 C_OBJ := $(patsubst %.c,$(OBJ)/%.o,$(C_SRC))
@@ -80,18 +90,26 @@ $(BUILD)/test_%.o: lib/miniz/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(TEST): tests/apkspy_core_test.cpp $(CORE_SRC) $(MINIZ_OBJ) $(wildcard src/*.hpp src/*/*.hpp)
+$(BUILD)/test_decomp/%.o: lib/%.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/test_mbedtls_%.o: lib/mbedtls/%.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -Iinclude/mbedtls -Ilib/mbedtls -c $< -o $@
+
+$(TEST): tests/apkspy_core_test.cpp $(CORE_SRC) $(MINIZ_OBJ) $(MBEDTLS_OBJ) $(DECOMP_OBJ) $(wildcard src/*.hpp src/*/*.hpp)
 	@mkdir -p $(@D)
 	$(CXX) -std=c++23 -O1 -g -Wall -Wextra -Wno-unused-parameter $(INCLUDES) \
-            tests/apkspy_core_test.cpp $(CORE_SRC) $(MINIZ_OBJ) \
+            tests/apkspy_core_test.cpp $(CORE_SRC) $(MINIZ_OBJ) $(MBEDTLS_OBJ) $(DECOMP_OBJ) \
             -o $@ -lpthread
 
 # Portable suite (analysis engine, MCP server, device tooling); also built on
 # Windows by tests/ApkSpyTests.vcxproj.
-$(PLATFORM_TEST): tests/apkspy_platform_test.cpp $(CORE_SRC) $(MINIZ_OBJ) $(wildcard src/*/*.hpp)
+$(PLATFORM_TEST): tests/apkspy_platform_test.cpp $(CORE_SRC) $(MINIZ_OBJ) $(MBEDTLS_OBJ) $(DECOMP_OBJ) $(wildcard src/*/*.hpp)
 	@mkdir -p $(@D)
 	$(CXX) -std=c++23 -O1 -g -Wall -Wextra -Wno-unused-parameter $(INCLUDES) \
-            tests/apkspy_platform_test.cpp $(CORE_SRC) $(MINIZ_OBJ) \
+            tests/apkspy_platform_test.cpp $(CORE_SRC) $(MINIZ_OBJ) $(MBEDTLS_OBJ) $(DECOMP_OBJ) \
             -o $@ -lpthread
 
 $(IMGUI_TEST): tests/imgui_editor_test.cpp $(LIB)/imgui/imgui.cpp $(LIB)/imgui/imgui_draw.cpp \

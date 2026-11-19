@@ -113,7 +113,7 @@ void TrafficPanel::drawFilterPopup() {
     ImGui::Checkbox("Edited (intercept, match & replace)", &h.onlyEdited);
     ImGui::Checkbox("With parameters (query or body)", &h.onlyParams);
     ImGui::Checkbox("Highlighted or commented", &h.onlyMarked);
-    ImGui::Checkbox("Hide HTTPS connections", &hideTunnels_);
+    ImGui::Checkbox("Hide un-decrypted tunnels", &hideTunnels_);
     ImGui::SeparatorText("Search");
     ImGui::Checkbox("Search inside bodies and headers too", &searchBodies_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("The filter text also matches decoded request and response bodies");
@@ -168,12 +168,25 @@ void TrafficPanel::updateBodySearch(const std::string& text) {
 
 void TrafficPanel::drawRequests() {
     const std::string filter = filter_;
-    updateBodySearch(filter);
+    // Text with a ~filter is an expression; anything else is a plain search.
+    const bool isExpr = flowfilter::looksLikeExpression(filter);
+    updateExpression(isExpr ? filter : std::string());
+    updateBodySearch(isExpr ? std::string() : filter);
+    flowfilter::Context ctx;
+    ctx.marked = [this](uint64_t id) { return marks_.count(id) > 0; };
+    ctx.comment = [this](uint64_t id) {
+        const auto it = marks_.find(id);
+        return it == marks_.end() ? std::string() : it->second.comment;
+    };
     std::vector<const TrafficProxy::Flow*> shown;
     shown.reserve(rows_.size());
     for (const auto& f : rows_) {
         if (!passes(f)) continue;
-        if (!filter.empty()) {
+        if (isExpr) {
+            // An expression that does not parse filters nothing (the box turns red).
+            if (expr_ && expr_->needsContent() && !exprHits_.count(f.id)) continue;
+            if (expr_ && !expr_->needsContent() && !expr_->match(f, &ctx)) continue;
+        } else if (!filter.empty()) {
             const auto mark = marks_.find(f.id);
             const std::string hay = f.method + " " + f.host + " " + f.sni + " " + f.path + " " + std::to_string(f.status) + " " +
                                     (mark == marks_.end() ? std::string() : mark->second.comment);
@@ -181,11 +194,14 @@ void TrafficPanel::drawRequests() {
         }
         shown.push_back(&f);
     }
+    shownIds_.clear();
+    for (const auto* f : shown) shownIds_.push_back(f->id);
     if (rows_.empty()) {
         ImGui::PushTextWrapPos(0.f);
         ImGui::TextDisabled(
-            "Press Start capture, then use the app. HTTP requests appear with headers and bodies; HTTPS connections "
-            "appear with their host and size, and their contents stay encrypted.");
+            "Press Start capture, then use the app. HTTP and (intercepted) HTTPS requests appear with headers and "
+            "bodies; HTTPS connections the proxy could not decrypt appear as tunnels with their host and size. "
+            "For HTTPS, install ApkSpy's CA on the device (HTTPS & certificates).");
         ImGui::PopTextWrapPos();
         return;
     }
@@ -200,9 +216,13 @@ void TrafficPanel::drawRequests() {
     ImGui::SameLine();
     if (filtered) ImGui::TextColored(kWarn, "Showing %zu of %zu", shown.size(), rows_.size());
     else ImGui::TextDisabled("%zu requests", rows_.size());
-    if (bodySearchJob_.valid()) {
+    if (bodySearchJob_.valid() || exprJob_.valid()) {
         ImGui::SameLine();
         ImGui::TextDisabled("searching bodies...");
+    }
+    if (isExpr && !exprError_.empty()) {
+        ImGui::SameLine();
+        ImGui::TextColored(kError, "expression: %s", exprError_.c_str());
     }
     if (filtered) {
         ImGui::SameLine();
@@ -217,8 +237,8 @@ void TrafficPanel::drawRequests() {
     const float tableH = hasDetail ? ImGui::GetContentRegionAvail().y * 0.5f : 0.f;
     // The URL is what matters: secondary columns only when there is room for them next to a readable URL.
     const bool wide = ImGui::GetContentRegionAvail().x > ui::em(60.f);
-    enum ColumnId { kTime, kMethod, kUrl, kStatus, kType, kSize, kMs, kNote };
-    const int cols = wide ? 8 : 4;
+    enum ColumnId { kTime, kMethod, kProto, kUrl, kStatus, kType, kSize, kMs, kNote };
+    const int cols = wide ? 9 : 4;
     if (ImGui::BeginTable("##flows", cols, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
                                                ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Sortable |
                                                ImGuiTableFlags_SortTristate,
@@ -226,6 +246,7 @@ void TrafficPanel::drawRequests() {
         ImGui::TableSetupScrollFreeze(0, 1);
         if (wide) ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort, ui::em(5.5f), kTime);
         ImGui::TableSetupColumn("Method", ImGuiTableColumnFlags_WidthFixed, ui::em(4.5f), kMethod);
+        if (wide) ImGui::TableSetupColumn("Proto", ImGuiTableColumnFlags_WidthFixed, ui::em(3.6f), kProto);
         ImGui::TableSetupColumn("URL", ImGuiTableColumnFlags_WidthStretch, 1.f, kUrl);
         ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, ui::em(3.f), kStatus);
         if (wide) ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, ui::em(8.f), kType);
@@ -240,7 +261,7 @@ void TrafficPanel::drawRequests() {
             const ImGuiTableColumnSortSpecs& s = specs->Specs[0];
             const bool desc = s.SortDirection == ImGuiSortDirection_Descending;
             byArrival = s.ColumnUserID == kTime && !desc;
-            const auto size = [](const TrafficProxy::Flow* f) { return f->tunnel ? f->bytesUp + f->bytesDown : f->response.bodySize; };
+            const auto size = [](const TrafficProxy::Flow* f) { return f->tunnel || !f->transport.empty() ? f->bytesUp + f->bytesDown : f->response.bodySize; };
             const auto note = [&](const TrafficProxy::Flow* f) {
                 auto it = marks_.find(f->id);
                 return it == marks_.end() ? std::string() : it->second.comment;
@@ -309,13 +330,26 @@ void TrafficPanel::drawRequests() {
                     if (ImGui::MenuItem(("Hide " + host).c_str())) filter2_.hiddenHosts.push_back(host);
                     ImGui::Separator();
                     if (ImGui::MenuItem("Copy URL")) ImGui::SetClipboardText(f.url().c_str());
-                    if (!f.tunnel && ImGui::MenuItem("Copy as cURL") && devices_.traffic().flow(f.id, full))
-                        ImGui::SetClipboardText(TrafficProxy::curl(full).c_str());
+                    if (!f.tunnel && ImGui::BeginMenu("Copy as")) {
+                        copyAsMenu(f.id);
+                        ImGui::EndMenu();
+                    }
+                    if (!f.tunnel && ImGui::MenuItem("Replay")) startBatchReplay({f.id});
                     ImGui::EndPopup();
+                }
+                if (wide) {
+                    ImGui::TableNextColumn();
+                    const char* proto = f.method == "DNS" ? "dns"
+                                       : !f.transport.empty() ? f.transport.c_str()
+                                       : f.alpn == "h2c" ? "h2c"
+                                       : f.tunnel ? "(tunnel)"
+                                       : f.websocket ? (f.https ? "wss" : "ws")
+                                       : f.https ? "https" : "http";
+                    ImGui::TextDisabled("%s", proto);
                 }
                 ImGui::TableNextColumn();
                 const std::string url = f.url();
-                if (f.tunnel) ImGui::TextColored(kDim, "%s  (TLS)", url.c_str());
+                if (f.tunnel) ImGui::TextColored(kDim, "%s  (tunnel)", url.c_str());
                 else if (f.edited) ImGui::TextColored(kWarn, "%s  (edited)", url.c_str());
                 else ImGui::TextUnformatted(url.c_str());
                 if (ImGui::IsItemHovered()) {
@@ -326,7 +360,8 @@ void TrafficPanel::drawRequests() {
                 ImGui::TableNextColumn();
                 if (!f.complete && f.status == 0) ImGui::TextDisabled("...");
                 else if (f.status) ImGui::TextColored(statusColor(f.status), "%d", f.status);
-                else ImGui::TextColored(kError, "err");
+                else if (!f.error.empty() || !f.tlsError.empty()) ImGui::TextColored(kError, "err");
+                else ImGui::TextDisabled("-");  // no HTTP status (raw TCP / UDP, an h2c connection)
                 if (wide) {
                     ImGui::TableNextColumn();
                     std::string type = f.tunnel ? "tunnel" : f.contentType();
@@ -334,7 +369,7 @@ void TrafficPanel::drawRequests() {
                     ImGui::TextDisabled("%s", type.c_str());
                 }
                 ImGui::TableNextColumn();
-                ImGui::TextDisabled("%s", humanBytes(f.tunnel ? f.bytesUp + f.bytesDown : f.response.bodySize).c_str());
+                ImGui::TextDisabled("%s", humanBytes(f.tunnel || !f.transport.empty() ? f.bytesUp + f.bytesDown : f.response.bodySize).c_str());
                 if (wide) {
                     ImGui::TableNextColumn();
                     if (f.complete) ImGui::TextDisabled("%.0f", f.durationMs);

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <set>
 #include <sstream>
+#include "core/Paths.hpp"
 #include "core/Process.hpp"
 #include "core/Socket.hpp"
 
@@ -385,6 +386,42 @@ void Adb::removeReverse(const std::string& serial, int port, std::string& error)
     argv.push_back("--remove");
     argv.push_back("tcp:" + std::to_string(port));
     run(argv, error, 5000);
+}
+
+std::string Adb::shell(const std::string& serial, const std::string& command, std::string& error, int timeoutMs) const {
+    if (!validSerial(serial)) {
+        error = "invalid device serial";
+        return {};
+    }
+    std::vector<std::string> argv = base(serial);
+    argv.push_back("shell");
+    argv.push_back(command);
+    return run(argv, error, timeoutMs);
+}
+
+bool Adb::push(const std::string& serial, const std::string& localPath, const std::string& remotePath,
+               std::string& error) const {
+    if (!validSerial(serial)) {
+        error = "invalid device serial";
+        return false;
+    }
+    if (remotePath.empty() || remotePath.size() > 512 ||
+        remotePath.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-") !=
+            std::string::npos) {
+        error = "invalid remote path";
+        return false;
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(pathutil::fromUtf8(localPath), ec)) {
+        error = "local file not found: " + localPath;
+        return false;
+    }
+    std::vector<std::string> argv = base(serial);
+    argv.push_back("push");
+    argv.push_back(localPath);
+    argv.push_back(remotePath);
+    run(argv, error, 20000);
+    return error.empty();
 }
 
 bool Adb::setGlobalHttpProxy(const std::string& serial, const std::string& value, std::string& error) const {

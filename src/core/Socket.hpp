@@ -55,3 +55,33 @@ private:
     explicit Socket(Fd fd) : fd_(fd) {}
     Fd fd_ = kInvalid;
 };
+
+// A UDP socket (IPv4), for the traffic proxy's SOCKS5 UDP relay.
+class UdpSocket {
+public:
+    UdpSocket() = default;
+    ~UdpSocket() { close(); }
+    UdpSocket(const UdpSocket&) = delete;
+    UdpSocket& operator=(const UdpSocket&) = delete;
+
+    // 127.0.0.1:port (0 = ephemeral) when `loopback`, else any address.
+    bool bind(bool loopback, int port, std::string& error);
+    int localPort() const;
+    // Resolves `host` (IPv4) and sends one datagram.
+    bool sendTo(const std::string& host, int port, const void* data, size_t len, std::string& error);
+    // One datagram (<= 0 on error); `fromHost` is the sender's IPv4 address.
+    long recvFrom(void* buf, size_t len, std::string& fromHost, int& fromPort);
+    bool waitReadable(int timeoutMs);
+    bool valid() const { return fd_ != kInvalid; }
+    void close();
+
+private:
+#ifdef _WIN32
+    using Fd = uintptr_t;
+    static constexpr Fd kInvalid = ~static_cast<uintptr_t>(0);
+#else
+    using Fd = int;
+    static constexpr Fd kInvalid = -1;
+#endif
+    Fd fd_ = kInvalid;
+};

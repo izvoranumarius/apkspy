@@ -19,6 +19,7 @@
 #include "ui/BookmarksPanel.hpp"
 #include "ui/ScriptPanel.hpp"
 #include "ui/TrafficPanel.hpp"
+#include "ui/TrafficCommon.hpp"
 #include "ui/OutputPanel.hpp"
 #include "ui/OverviewPanel.hpp"
 #include "ui/SearchPanel.hpp"
@@ -243,6 +244,23 @@ void Application::loadSettings() {
     workspace_.setJadxPath(settings_.getString(Settings::kJadxPath, "jadx"));
     workspace_.setJadxArgs(settings_.getString(Settings::kJadxArgs, ""));
     devices_.setAdbPath(settings_.getString(Settings::kAdbPath, "adb"));
+    // HTTPS interception: load (first run: generate) ApkSpy's CA. A failure
+    // is not fatal - the proxy then relays tunnels blind, as it always did.
+    if (settings_.getBool(Settings::kTrafficInterceptHttps, true)) {
+        std::string caError;
+        if (devices_.enableTlsInterception(caError))
+            devices_.setUpstreamVerification(settings_.getBool(Settings::kTrafficVerifyUpstream, true));
+        else
+            workspace_.log("HTTPS interception is off: " + caError);
+    }
+    {
+        TrafficProxy::Mode mode;
+        std::string modeError;
+        if (trafficui::modeFromSettings(settings_, mode, modeError)) devices_.traffic().setMode(mode);
+        else workspace_.log("Traffic proxy mode not applied: " + modeError);
+        devices_.traffic().setLimits(static_cast<size_t>(settings_.getInt(Settings::kTrafficMaxFlows, 5000)),
+                                     static_cast<size_t>(settings_.getInt(Settings::kTrafficMaxBodyKb, 2048)) * 1024);
+    }
     mcpSettings_->loadSettings();  // before restoreSession(), which saves the settings
     // A new layout version resets the docks, so it also resets which panels they hold.
     const bool newLayout = settings_.getInt(Settings::kLayoutVersion, 1) < kLayoutVersion;

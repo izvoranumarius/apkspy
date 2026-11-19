@@ -45,13 +45,53 @@ whitelists.
 
 **Start capture** runs a local proxy (127.0.0.1 only) and routes the device
 through it (`adb reverse` + the device's global HTTP proxy setting); **Stop
-capture** undoes both by deleting the proxy setting. Plain HTTP requests are captured with headers and bodies
-(chunked / gzip decoded, JSON pretty-printed, copy as cURL); HTTPS connections
-appear with host, TLS server name, timing and sizes, and their contents stay
-encrypted. The **Endpoints** view groups requests into an API map
-(`/users/{id}`) and marks endpoints whose host or path also appears in the
-app's code. The **...** menu has **Reset device proxy** for a device left routed
-after a crash. The port is under File > Settings > Android.
+capture** undoes both by deleting the proxy setting. Plain HTTP and
+intercepted HTTPS requests are captured with headers and bodies (chunked /
+gzip decoded, JSON pretty-printed, copy as cURL). The **Endpoints** view
+groups requests into an API map (`/users/{id}`) and marks endpoints whose host
+or path also appears in the app's code. The **...** menu has **Reset device
+proxy** for a device left routed after a crash. The port is under File >
+Settings > Android.
+
+### HTTPS interception
+
+HTTPS (CONNECT) is decrypted in the proxy, as in Burp or mitmproxy: ApkSpy
+generates its own certificate authority on first run (kept in the user config
+directory), signs a per-host leaf certificate for every connection, and
+presents it to the app. The app's TLS ends inside ApkSpy; the request is
+decrypted, runs through the same pipeline as plain HTTP (capture, match &
+replace, intercept, Repeater, Comparer, search), and is re-encrypted to the
+real server - whose certificate is verified against the bundled Mozilla root
+store (`assets/cacert.pem`). TLS 1.2 and 1.3 are supported; HTTP/1.1 is
+decoded (the proxy negotiates `http/1.1` in ALPN; an app that still speaks
+HTTP/2 over the connection is diagnosed instead of hung).
+
+- Decrypted requests appear in the **Requests** list like any other, with a
+  protocol column (`http` / `https` / `ws` / `wss`) and the negotiated TLS
+  version and cipher in the detail view.
+- **HTTPS & certificates** (Traffic toolbar) is the whole certificate story in
+  one dialog: the CA's fingerprint, subject and expiry, PEM / CER export, regeneration, installing it on the connected device, and trust diagnostics.
+- Apps that refuse the certificate (pinning, a network security config that
+  excludes user CAs, an untrusted CA) do not silently "work": the failed
+  handshake is recorded on a flow with the likely reason, so the Requests
+  list explains what an app rejected.
+- QUIC / HTTP3 traffic (UDP 443) bypasses the TCP proxy; the certificate
+  dialog shows how to force apps back onto TCP on rooted devices.
+- Without a CA (Settings > Network), HTTPS connections go back to being
+  relayed as blind tunnels with host, SNI, timing and sizes.
+
+### Certificates on the device
+
+The **HTTPS & certificates** dialog copies the CA to the device and opens the
+security settings for the **user store** install (Android has no adb command
+for it; the dialog lists the steps). Apps targeting Android 7+ do not trust
+user-installed CAs unless their network security config says so - the dialog
+shows the opened APKs' target SDK, `debuggable` flag and network security
+config to predict that. On rooted devices (or `adb root` emulators) it can
+install into the **system store**: the classic
+`/system/etc/security/cacerts/<hash>.0` layout on Android 13-, the Conscrypt
+APEX tmpfs-overlay on Android 14+, both reversible, both with explicit
+confirmation. **Re-check** verifies what the device actually trusts.
 
 ### Request history
 

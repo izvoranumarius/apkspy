@@ -12,7 +12,7 @@ through bytecode and native libraries, and debug it live on a device.
 - **Native libraries**: ELF details, an AArch64 disassembler and function graphs.
 - **Live debugging**: attach to a debuggable app over JDWP, with breakpoints,
   stepping and object inspection, plus Logcat and a process monitor.
-- **Traffic capture**: map an app's HTTP API from a device or emulator.
+- **Traffic capture**: map an app's HTTP API from a device or emulator, with full HTTPS interception (own CA, per-host certificates) as in Burp or mitmproxy.
 - **Python scripting** and an **MCP server** for AI assistants.
 - **VS Code-style workbench**: quick open and command palette (`Ctrl+P`,
   `Ctrl+Shift+P`), an integrated terminal (`` Ctrl+` ``), breadcrumbs and a

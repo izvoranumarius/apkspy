@@ -2,13 +2,15 @@
 #include <atomic>
 #include <string>
 #include <string_view>
+#include "debug/Stream.hpp"
 #include "debug/TrafficProxy.hpp"
 
 class Socket;
 
 // Sends one hand-edited HTTP request and reads the whole answer: the engine of
 // the Repeater (as in Burp). Plain HTTP goes out over a socket exactly as
-// typed; HTTPS goes through the system's HTTP stack (WinHTTP on Windows).
+// typed; HTTPS goes out over the bundled mbedTLS (verified against the root
+// bundle, or unverified when explicitly asked - for this one send only).
 // No proxy, no redirects followed, no cookies kept: each send stands alone.
 namespace httpclient {
 
@@ -22,6 +24,8 @@ struct Target {
 struct Options {
     bool fixContentLength = true;   // set Content-Length to the body's size
     bool ignoreCertErrors = false;  // HTTPS: accept self-signed, expired or mismatched certificates
+                                    // (scoped to this one send, never a global default)
+    const tls::TrustStore* roots = nullptr;  // HTTPS verification roots; null = the default bundle
     int timeoutMs = 30000;
 };
 
@@ -49,9 +53,10 @@ std::string editableRequest(const TrafficProxy::Flow& f);
 
 Result send(const Target& target, std::string_view typed, const Options& options, const std::atomic<bool>* cancel = nullptr);
 
-// Reads one whole response from a connected socket (head, then the body by
+// Reads one whole response from a connected stream (head, then the body by
 // Content-Length, chunked framing or the end of the stream); the proxy uses it
-// to hold responses at the intercept.
+// to hold responses at the intercept, over plain sockets and TLS alike.
+bool readResponse(net::Stream& s, const std::string& method, Result& r, int timeoutMs, const std::atomic<bool>* cancel = nullptr);
 bool readResponse(Socket& s, const std::string& method, Result& r, int timeoutMs, const std::atomic<bool>* cancel = nullptr);
 // A response or request as raw bytes: start line, headers, blank line, body.
 std::string rawMessage(const TrafficProxy::Message& m);

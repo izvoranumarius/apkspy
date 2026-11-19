@@ -2043,6 +2043,2131 @@ static void testMcpToolsEndToEnd() {
     fs::remove_all(dir, ec);
 }
 
+// ---------------------------------------------------------------------------
+// HTTPS interception (mbedTLS): CA management, TLS handshakes, the proxy
+// decrypting CONNECT tunnels, intercept / match & replace over TLS, WebSocket
+// capture, and the Repeater's HTTPS send.
+// ---------------------------------------------------------------------------
+
+#include <cctype>
+#include <cmath>
+#include "core/Paths.hpp"
+#include "debug/CaStore.hpp"
+#include "debug/CertInstaller.hpp"
+#include "debug/Stream.hpp"
+#include "debug/Tls.hpp"
+
+namespace {
+
+// A local HTTPS origin: accepts connections until stopped, terminates TLS
+// with `cert`, answers every request through `respond`.
+struct TlsOrigin {
+    std::shared_ptr<const tls::Identity> cert;
+    std::function<std::string(const std::string& request)> respond = [](const std::string&) { return std::string(); };
+    std::string lastRequest;
+    std::atomic<int> served{0};
+    std::atomic<bool> stopping{false};
+    int port = 0;
+
+    void run(Socket& listener) {
+        port = listener.localPort();
+        while (!stopping.load()) {
+            Socket c = listener.accept(250);
+            if (!c.valid()) continue;
+            tls::Connection tls;
+            std::string error, note;
+            if (!tls.accept(c, *cert, 10000, error, note)) continue;
+            net::TlsStream stream(c, tls);
+            std::string req;
+            char buf[8192];
+            while (req.find("\r\n\r\n") == std::string::npos && stream.waitReadable(3000)) {
+                const long n = stream.recvSome(buf, sizeof buf);
+                if (n <= 0) break;
+                req.append(buf, static_cast<size_t>(n));
+            }
+            // The body (Content-Length) when there is one.
+            const size_t headEnd = req.find("\r\n\r\n");
+            if (headEnd != std::string::npos) {
+                const size_t colon = req.find("Content-Length:");
+                if (colon != std::string::npos && colon < headEnd) {
+                    const size_t want = static_cast<size_t>(std::strtoull(req.c_str() + colon + 15, nullptr, 10));
+                    while (req.size() < headEnd + 4 + want && stream.waitReadable(3000)) {
+                        const long n = stream.recvSome(buf, sizeof buf);
+                        if (n <= 0) break;
+                        req.append(buf, static_cast<size_t>(n));
+                    }
+                }
+            }
+            lastRequest = req;
+            stream.sendAll(respond(req));
+            ++served;
+            tls.close();
+            c.shutdownBoth();
+        }
+    }
+};
+
+// A client that goes through the proxy: CONNECT + TLS (trusting `roots`).
+struct ProxyTlsClient {
+    Socket sock;
+    tls::Connection tls;
+    std::unique_ptr<net::TlsStream> stream;
+
+    bool connect(int proxyPort, const std::string& connectHost, int port, const std::string& sni,
+                 tls::TrustStore* roots, std::string& error, bool tls12Only = false) {
+        if (!sock.connectLoopback(proxyPort, 3000, error)) return false;
+        sock.sendAll("CONNECT " + connectHost + ":" + std::to_string(port) + " HTTP/1.1\r\nHost: x\r\n\r\n");
+        char buf[256];
+        const long n = sock.waitReadable(3000) ? sock.recvSome(buf, sizeof buf) : 0;
+        if (n <= 0 || std::string(buf, static_cast<size_t>(n)).find("200") == std::string::npos) {
+            error = "CONNECT failed";
+            return false;
+        }
+        if (tls12Only) tls.setMaxTls12();
+        if (!tls.connect(sock, sni, roots, true, 10000, error)) return false;
+        stream = std::make_unique<net::TlsStream>(sock, tls);
+        return true;
+    }
+    std::string exchange(const std::string& raw) {
+        if (!stream || !stream->sendAll(raw)) return {};
+        std::string resp;
+        char buf[8192];
+        while (stream->waitReadable(3000)) {
+            const long n = stream->recvSome(buf, sizeof buf);
+            if (n <= 0) break;
+            resp.append(buf, static_cast<size_t>(n));
+        }
+        return resp;
+    }
+};
+
+void waitFlows(const TrafficProxy& proxy, size_t count, int tries = 300) {
+    for (int i = 0; i < tries && proxy.flows().size() < count; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+}
+
+std::string gzipBytes(const std::string& plain) {
+    size_t outLen = 0;
+    void* deflated = tdefl_compress_mem_to_heap(plain.data(), plain.size(), &outLen, 0);
+    std::string gz = std::string("\x1f\x8b\x08\0\0\0\0\0\0\x03", 10) + std::string((const char*)deflated, outLen) +
+                     std::string(8, '\0');
+    mz_free(deflated);
+    return gz;
+}
+
+}  // namespace
+
+static void testCaAndCertificates() {
+    std::printf("== CA and certificates ==\n");
+    CHECK(tls::init(), "TLS subsystem initialises");
+    const fs::path dir = fs::temp_directory_path() / "apkspy-test-ca";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+
+    // Generation, persistence, reload.
+    {
+        ca::Store store;
+        std::string error;
+        CHECK(store.loadOrGenerate(dir.string(), error), ("CA generates: " + error).c_str());
+        CHECK(store.ready() && store.ca()->isCa(), "the CA is a CA");
+        CHECK(store.ca()->secondsUntilExpiry() > 9ll * 365 * 24 * 3600, "10 year validity");
+        const std::string fp = store.ca()->sha256Fingerprint();
+        CHECK(fp.size() == 95 && fp.find(':') != std::string::npos, "SHA-256 fingerprint format");
+        CHECK(store.ca()->subject().find("CN=ApkSpy CA") == 0, "subject name");
+        CHECK(fs::exists(dir / "apkspy-ca.pem") && fs::exists(dir / "apkspy-ca.key"), "CA files on disk");
+        ca::Store reloaded;
+        CHECK(reloaded.loadOrGenerate(dir.string(), error) && reloaded.ca()->sha256Fingerprint() == fp,
+              "CA reloads with the same fingerprint");
+        // The PEM on disk must not contain any private key block.
+        std::ifstream pem(dir / "apkspy-ca.pem");
+        std::string pemText((std::istreambuf_iterator<char>(pem)), std::istreambuf_iterator<char>());
+        CHECK(pemText.find("PRIVATE KEY") == std::string::npos, "the exported PEM has no private key");
+
+        // Leaf signing + verification, cached per host.
+        std::shared_ptr<const tls::Identity> leaf = store.leafFor("api.example.com", error);
+        CHECK(leaf != nullptr, ("leaf signs: " + error).c_str());
+        CHECK(!leaf->isCa(), "the leaf is not a CA");
+        CHECK(store.leafFor("api.example.com", error).get() == leaf.get(), "leaf cached per host");
+        CHECK(store.leafCount() == 1, "leaf count");
+
+        // A certificate for an IP literal (SAN iPAddress).
+        std::shared_ptr<const tls::Identity> ipLeaf = store.leafFor("10.1.2.3", error);
+        CHECK(ipLeaf != nullptr, ("leaf for an IP: " + error).c_str());
+
+        // An expired leaf (years = -1): verification rejects it downstream.
+        tls::Identity expired;
+        CHECK(tls::makeLeaf(*store.ca(), "expired.test", -1, expired, error), ("expired leaf signs: " + error).c_str());
+        CHECK(expired.secondsUntilExpiry() < 0, "the leaf is expired");
+
+        // Regeneration: a new key, a new fingerprint, an empty leaf cache.
+        const std::string oldFp = store.ca()->sha256Fingerprint();
+        CHECK(store.regenerate(error), ("regenerate: " + error).c_str());
+        CHECK(store.ca()->sha256Fingerprint() != oldFp, "regeneration makes a new CA");
+        CHECK(store.leafCount() == 0, "leaf cache cleared on regeneration");
+
+        // The Android store file name: 8 hex digits + ".0".
+        const std::string name = store.androidFileName();
+        CHECK(name.size() == 10 && name[8] == '.' && name[9] == '0', "Android file name shape");
+        for (int i = 0; i < 8; ++i) CHECK(isxdigit((unsigned char)name[i]), "Android file name is hex");
+    }
+
+    // TrustStore: parse the bundled PEM bundle, reject garbage.
+    {
+        tls::TrustStore roots;
+        std::string error;
+        std::string anyCert;
+        {
+            ca::Store store;
+            store.loadOrGenerate((fs::temp_directory_path() / "apkspy-test-ca2").string(), error);
+            anyCert = store.caPem();
+        }
+        CHECK(roots.loadPem(anyCert, error) && roots.count() >= 1, "trust store loads a PEM");
+        CHECK(!roots.loadPem("not a certificate", error) || roots.count() == 0, "trust store rejects garbage");
+        std::string rootsErr;
+        const std::string bundle = pathutil::assetsFile("cacert.pem");
+        if (!bundle.empty()) {
+            tls::TrustStore mozilla;
+            CHECK(mozilla.loadPemFile(bundle, error) && mozilla.count() >= 100, "bundled Mozilla roots parse");
+        }
+    }
+}
+
+static void testTlsHandshake() {
+    std::printf("== TLS handshakes ==\n");
+    std::string error;
+    ca::Store store;
+    const fs::path dir = fs::temp_directory_path() / "apkspy-test-ca3";
+    fs::remove_all(dir);
+    store.loadOrGenerate(dir.string(), error);
+    auto cert = store.leafFor("handshake.test", error);
+    CHECK(cert != nullptr, "handshake leaf");
+
+    tls::TrustStore roots;
+    std::string anyCert = store.caPem();
+    roots.loadPem(anyCert, error);
+
+    for (int mode = 0; mode < 2; ++mode) {
+        Socket listener;
+        CHECK(listener.listenLoopback(0, error), "listener");
+        std::thread server([&] {
+            Socket c = listener.accept(5000);
+            if (!c.valid()) return;
+            tls::Connection tls;
+            if (mode == 1) tls.setMaxTls12();
+            std::string err, note;
+            if (tls.accept(c, *cert, 10000, err, note)) {
+                net::TlsStream stream(c, tls);
+                char buf[64];
+                const int n = stream.recvSome(buf, sizeof buf);
+                if (n > 0) stream.sendAll(std::string(buf, static_cast<size_t>(n)));
+                tls.close();
+            }
+            c.shutdownBoth();
+        });
+        Socket s;
+        CHECK(s.connectLoopback(listener.localPort(), 3000, error), "client connects");
+        tls::Connection tls;
+        if (mode == 1) tls.setMaxTls12();
+        CHECK(tls.connect(s, "handshake.test", &roots, true, 10000, error), ("client handshake: " + error).c_str());
+        CHECK(std::string(tls.version()) == (mode == 1 ? "TLSv1.2" : "TLSv1.3"),
+              ("negotiated version is " + std::string(tls.version())).c_str());
+        CHECK(std::string(tls.alpn()) == "http/1.1", "ALPN always offers http/1.1");
+        net::TlsStream stream(s, tls);
+        CHECK(stream.sendAll("ping"), "send");
+        char buf[64] = {};
+        const long n = stream.recvSome(buf, sizeof buf);
+        CHECK(n == 4 && std::string(buf, 4) == "ping", "echo round trip");
+        tls.close();
+        s.shutdownBoth();
+        server.join();
+    }
+
+    // Hostname mismatch: the certificate is for handshake.test.
+    {
+        Socket listener;
+        listener.listenLoopback(0, error);
+        std::thread server([&] {
+            Socket c = listener.accept(5000);
+            if (c.valid()) {
+                tls::Connection tls;
+                std::string err, note;
+                tls.accept(c, *cert, 10000, err, note);
+                c.shutdownBoth();
+            }
+        });
+        Socket s;
+        s.connectLoopback(listener.localPort(), 3000, error);
+        tls::Connection tls;
+        const bool ok = tls.connect(s, "other.test", &roots, true, 10000, error);
+        CHECK(!ok && error.find("host name") != std::string::npos,
+              ("wrong host rejected: " + error).c_str());
+        s.shutdownBoth();
+        server.join();
+    }
+}
+
+static void testHttpsInterception() {
+    std::printf("== HTTPS interception ==\n");
+    std::string error;
+    const fs::path caDir = fs::temp_directory_path() / "apkspy-test-ca4";
+    fs::remove_all(caDir);
+    auto caStore = std::make_shared<ca::Store>();
+    CHECK(caStore->loadOrGenerate(caDir.string(), error), "proxy CA");
+
+    // The origin's certificate is signed by the same CA (it plays the real
+    // server); the proxy verifies upstreams against it.
+    tls::TrustStore roots;
+    roots.loadPem(caStore->caPem(), error);
+
+    TrafficProxy proxy;
+    proxy.setCa(caStore);
+    auto proxyRoots = std::make_shared<tls::TrustStore>();
+    proxyRoots->loadPem(caStore->caPem(), error);
+    proxy.setUpstreamTrust(proxyRoots, true);
+    CHECK(proxy.start(0, error) && proxy.interceptingHttps(), "proxy starts with interception");
+
+    TlsOrigin origin;
+    origin.cert = caStore->leafFor("origin.test", error);
+    origin.respond = [](const std::string& req) {
+        const std::string body = "{\"hello\":\"world\"}";
+        return "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) +
+               "\r\n\r\n" + body;
+    };
+    Socket originListener;
+    originListener.listenLoopback(0, error);
+    std::thread originThread([&] { origin.run(originListener); });
+    while (origin.port == 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    // GET over TLS 1.3 through the proxy.
+    {
+        ProxyTlsClient client;
+        CHECK(client.connect(proxy.port(), "127.0.0.1", origin.port, "origin.test", &roots, error),
+              ("CONNECT + TLS: " + error).c_str());
+        const std::string resp = client.exchange("GET /api/data?x=1 HTTP/1.1\r\nHost: origin.test\r\n\r\n");
+        CHECK(resp.find("200 OK") != std::string::npos && resp.find("{\"hello\":\"world\"}") != std::string::npos,
+              "HTTPS GET relayed");
+        client.tls.close();
+        client.sock.shutdownBoth();
+    }
+    waitFlows(proxy, 1);
+    {
+        auto flows = proxy.flows();
+        CHECK(flows.size() == 1, "one flow");
+        TrafficProxy::Flow full;
+        CHECK(proxy.flow(flows[0].id, full), "flow detail");
+        CHECK(full.https && !full.tunnel && full.sni == "origin.test" && full.method == "GET" &&
+                  full.path == "/api/data?x=1" && full.status == 200,
+              "the flow is decrypted: method, path, status");
+        CHECK(full.url().rfind("https://origin.test", 0) == 0, "https url");
+        CHECK(full.request.header("host") == "origin.test", "request headers captured");
+        CHECK(TrafficProxy::decodeBody(full.response, nullptr) == "{\"hello\":\"world\"}", "response body captured");
+        CHECK(std::string(full.tlsVersion) == "TLSv1.3" || std::string(full.tlsVersion) == "TLSv1.2", "tls version");
+        CHECK(full.alpn == "http/1.1", "alpn negotiated");
+        CHECK(origin.lastRequest.rfind("GET /api/data?x=1 HTTP/1.1", 0) == 0, "origin saw the request");
+    }
+
+    // POST with a body, over TLS 1.2.
+    const std::string body = "name=alice&token=abc";
+    {
+        ProxyTlsClient client;
+        CHECK(client.connect(proxy.port(), "127.0.0.1", origin.port, "origin.test", &roots, error, true),
+              ("TLS 1.2 client: " + error).c_str());
+        const std::string resp = client.exchange("POST /api/login HTTP/1.1\r\nHost: origin.test\r\n"
+                                                 "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: " +
+                                                 std::to_string(body.size()) + "\r\n\r\n" + body);
+        CHECK(resp.find("200 OK") != std::string::npos, "HTTPS POST relayed");
+        client.tls.close();
+        client.sock.shutdownBoth();
+    }
+    waitFlows(proxy, 2);
+    {
+        TrafficProxy::Flow full;
+        CHECK(proxy.flow(proxy.flows()[1].id, full) && full.method == "POST" && full.request.body == body,
+              "POST body captured");
+        CHECK(std::string(full.tlsVersion) == "TLSv1.2", "TLS 1.2 negotiated when capped");
+    }
+
+    // Two requests over one persistent TLS session.
+    {
+        ProxyTlsClient client;
+        CHECK(client.connect(proxy.port(), "127.0.0.1", origin.port, "origin.test", &roots, error),
+              "persistent session opens");
+        const std::string first = client.exchange("GET /one HTTP/1.1\r\nHost: origin.test\r\n\r\n");
+        const std::string second = client.exchange("GET /two HTTP/1.1\r\nHost: origin.test\r\n\r\n");
+        CHECK(first.find("200") != std::string::npos && second.find("200") != std::string::npos,
+              "both requests on one session answered");
+        client.tls.close();
+        client.sock.shutdownBoth();
+    }
+    waitFlows(proxy, 4);
+    {
+        auto flows = proxy.flows();
+        CHECK(flows.size() == 4 && flows[2].path == "/one" && flows[3].path == "/two",
+              "each request is its own flow");
+    }
+
+    // gzip and chunked responses through TLS.
+    {
+        TlsOrigin coded;
+        coded.cert = caStore->leafFor("coded.test", error);
+        const std::string plain = "{\"gzip\":true,\"chunked\":false}";
+        coded.respond = [&](const std::string& req) {
+            if (req.find("/gz") != std::string::npos) {
+                const std::string gz = gzipBytes(plain);
+                return "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\n"
+                       "Content-Length: " +
+                       std::to_string(gz.size()) + "\r\n\r\n" + gz;
+            }
+            return std::string("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n") +
+                   "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+        };
+        Socket codedListener;
+        codedListener.listenLoopback(0, error);
+        std::thread codedThread([&] { coded.run(codedListener); });
+        while (coded.port == 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        ProxyTlsClient gz, chunked;
+        CHECK(gz.connect(proxy.port(), "127.0.0.1", coded.port, "coded.test", &roots, error), "gzip client");
+        const std::string gzResp = gz.exchange("GET /gz HTTP/1.1\r\nHost: coded.test\r\n\r\n");
+        CHECK(gzResp.find("200") != std::string::npos, "gzip response relayed");
+        CHECK(chunked.connect(proxy.port(), "127.0.0.1", coded.port, "coded.test", &roots, error), "chunked client");
+        const std::string chResp = chunked.exchange("GET /chunked HTTP/1.1\r\nHost: coded.test\r\n\r\n");
+        CHECK(chResp.find("hello") != std::string::npos && chResp.find(" world") != std::string::npos &&
+                  chResp.find("5\r\n") != std::string::npos,
+              "chunked response relayed (framing preserved)");
+        gz.tls.close(), gz.sock.shutdownBoth();
+        chunked.tls.close(), chunked.sock.shutdownBoth();
+        coded.stopping = true;
+        codedThread.join();
+        waitFlows(proxy, 6);
+        TrafficProxy::Flow gzFlow, chFlow;
+        CHECK(proxy.flow(proxy.flows()[4].id, gzFlow) && TrafficProxy::decodeBody(gzFlow.response, nullptr) == plain,
+              "gzip body decoded in the flow");
+        CHECK(proxy.flow(proxy.flows()[5].id, chFlow) && TrafficProxy::decodeBody(chFlow.response, nullptr) == "hello world",
+              "chunked body decoded in the flow");
+    }
+
+    // Concurrency: several HTTPS clients at once.
+    {
+        std::vector<std::thread> clients;
+        std::atomic<int> okCount{0};
+        for (int i = 0; i < 6; ++i) {
+            clients.emplace_back([&, i] {
+                ProxyTlsClient client;
+                if (!client.connect(proxy.port(), "127.0.0.1", origin.port, "origin.test", &roots, error)) return;
+                const std::string resp = client.exchange("GET /c" + std::to_string(i) + " HTTP/1.1\r\nHost: origin.test\r\n\r\n");
+                if (resp.find("200") != std::string::npos) ++okCount;
+                client.tls.close();
+                client.sock.shutdownBoth();
+            });
+        }
+        for (auto& t : clients) t.join();
+        CHECK(okCount == 6, "concurrent HTTPS exchanges");
+    }
+
+    // An app that does not trust the CA: the handshake fails and the flow
+    // explains why instead of silently "succeeding".
+    {
+        ca::Store otherCa;
+        otherCa.loadOrGenerate((fs::temp_directory_path() / "apkspy-test-other").string(), error);
+        tls::TrustStore otherRoots;
+        otherRoots.loadPem(otherCa.caPem(), error);
+        ProxyTlsClient client;
+        std::string err;
+        const bool ok = client.connect(proxy.port(), "127.0.0.1", origin.port, "origin.test", &otherRoots, err);
+        CHECK(!ok, "untrusting client cannot complete the handshake");
+        waitFlows(proxy, proxy.flows().size() + 1);
+        TrafficProxy::Flow rejection;
+        bool found = false;
+        for (const auto& f : proxy.flows())
+            if (f.https && !f.tlsError.empty() && f.error.find("handshake with the app") != std::string::npos)
+                rejection = f, found = true;
+        CHECK(found && (rejection.tlsError.find("alert") != std::string::npos ||
+                    rejection.tlsError.find("rejected the TLS handshake") != std::string::npos),
+              "the rejection is recorded with its reason");
+    }
+
+    // Upstream with an untrusted certificate: the proxy refuses and says so.
+    {
+        ca::Store evilCa;
+        evilCa.loadOrGenerate((fs::temp_directory_path() / "apkspy-test-evil").string(), error);
+        TlsOrigin evil;
+        evil.cert = evilCa.leafFor("origin.test", error);
+        evil.respond = [](const std::string&) { return "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"; };
+        Socket evilListener;
+        evilListener.listenLoopback(0, error);
+        std::thread evilThread([&] { evil.run(evilListener); });
+        while (evil.port == 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        ProxyTlsClient client;
+        CHECK(client.connect(proxy.port(), "127.0.0.1", evil.port, "origin.test", &roots, error), "client side ok");
+        const std::string resp = client.exchange("GET / HTTP/1.1\r\nHost: origin.test\r\n\r\n");
+        CHECK(resp.find("502") != std::string::npos, "untrusted upstream: 502 to the client");
+        waitFlows(proxy, proxy.flows().size() + 1);
+        bool explained = false;
+        for (const auto& f : proxy.flows())
+            if (f.status == 502 && f.error.find("upstream TLS") != std::string::npos &&
+                f.error.find("not signed by a root") != std::string::npos)
+                explained = true;
+        CHECK(explained, "the flow explains the verification failure");
+        client.tls.close();
+        client.sock.shutdownBoth();
+        evil.stopping = true;
+        evilThread.join();
+    }
+
+    // Upstream with an expired certificate.
+    {
+        tls::Identity expiredCert;
+        CHECK(tls::makeLeaf(*caStore->ca(), "origin.test", -1, expiredCert, error), "expired upstream cert");
+        TlsOrigin expired;
+        expired.cert = std::make_shared<tls::Identity>(std::move(expiredCert));
+        expired.respond = [](const std::string&) { return "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"; };
+        Socket expiredListener;
+        expiredListener.listenLoopback(0, error);
+        std::thread expiredThread([&] { expired.run(expiredListener); });
+        while (expired.port == 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        ProxyTlsClient client;
+        CHECK(client.connect(proxy.port(), "127.0.0.1", expired.port, "origin.test", &roots, error), "client side ok");
+        const std::string resp = client.exchange("GET / HTTP/1.1\r\nHost: origin.test\r\n\r\n");
+        CHECK(resp.find("502") != std::string::npos, "expired upstream: 502 to the client");
+        waitFlows(proxy, proxy.flows().size() + 1);
+        bool explained = false;
+        for (const auto& f : proxy.flows())
+            if (f.status == 502 && f.error.find("expired") != std::string::npos) explained = true;
+        CHECK(explained, "the flow explains the expired certificate");
+        client.tls.close();
+        client.sock.shutdownBoth();
+        expired.stopping = true;
+        expiredThread.join();
+    }
+
+    // The HTTP/2 preface through an intercepted session is diagnosed, not hung.
+    {
+        ProxyTlsClient client;
+        CHECK(client.connect(proxy.port(), "127.0.0.1", origin.port, "origin.test", &roots, error), "h2 client opens");
+        client.exchange("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+        client.tls.close();
+        client.sock.shutdownBoth();
+        waitFlows(proxy, proxy.flows().size() + 1);
+        bool diagnosed = false;
+        for (const auto& f : proxy.flows())
+            if (f.error.find("HTTP/2") != std::string::npos) diagnosed = true;
+        CHECK(diagnosed, "HTTP/2 preface diagnosed");
+    }
+
+    origin.stopping = true;
+    originThread.join();
+    proxy.stop();
+
+    // Without a CA, CONNECTs go back to blind tunnels.
+    {
+        TrafficProxy plain;
+        CHECK(plain.start(0, error) && !plain.interceptingHttps(), "proxy without a CA");
+        Socket echo;
+        echo.listenLoopback(0, error);
+        std::thread echoThread([&] {
+            Socket c = echo.accept(5000);
+            if (!c.valid()) return;
+            char buf[4096];
+            while (c.waitReadable(2000)) {
+                const long n = c.recvSome(buf, sizeof buf);
+                if (n <= 0 || !c.sendAll(buf, static_cast<size_t>(n))) break;
+            }
+        });
+        Socket client;
+        client.connectLoopback(plain.port(), 2000, error);
+        client.sendAll("CONNECT 127.0.0.1:" + std::to_string(echo.localPort()) + " HTTP/1.1\r\nHost: x\r\n\r\n");
+        char buf[256];
+        const long n = client.waitReadable(3000) ? client.recvSome(buf, sizeof buf) : 0;
+        const std::string hello = clientHello("tunnel.example.org");
+        client.sendAll(hello);
+        std::string echoed;
+        while (echoed.size() < hello.size() && client.waitReadable(3000)) {
+            const long r = client.recvSome(buf, sizeof buf);
+            if (r <= 0) break;
+            echoed.append(buf, static_cast<size_t>(r));
+        }
+        CHECK(n > 0 && echoed == hello, "without a CA the tunnel relays blindly");
+        waitFlows(plain, 1);
+        CHECK(plain.flows().size() == 1 && plain.flows()[0].tunnel && !plain.flows()[0].https,
+              "the flow is a tunnel again");
+        client.shutdownBoth();
+        echoThread.join();
+        plain.stop();
+    }
+}
+
+static void testHttpsInterceptAndRules() {
+    std::printf("== intercept and match & replace over HTTPS ==\n");
+    std::string error;
+    const fs::path caDir = fs::temp_directory_path() / "apkspy-test-ca5";
+    fs::remove_all(caDir);
+    auto caStore = std::make_shared<ca::Store>();
+    caStore->loadOrGenerate(caDir.string(), error);
+    tls::TrustStore roots;
+    roots.loadPem(caStore->caPem(), error);
+
+    TlsOrigin origin;
+    origin.cert = caStore->leafFor("edit.test", error);
+    origin.respond = [](const std::string&) {
+        const std::string body = "{\"role\":\"user\"}";
+        return "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) +
+               "\r\n\r\n" + body;
+    };
+    Socket originListener;
+    originListener.listenLoopback(0, error);
+    std::thread originThread([&] { origin.run(originListener); });
+    while (origin.port == 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    TrafficProxy proxy;
+    proxy.setCa(caStore);
+    auto rootCopy = std::make_shared<tls::TrustStore>();
+    std::string anyPem = caStore->caPem();
+    rootCopy->loadPem(anyPem, error);
+    proxy.setUpstreamTrust(rootCopy, true);
+    proxy.start(0, error);
+
+    // Intercept: the request is held, edited, forwarded; the response too.
+    proxy.setIntercept(true, true, "");
+    ProxyTlsClient client;
+    CHECK(client.connect(proxy.port(), "127.0.0.1", origin.port, "edit.test", &roots, error), "intercept client");
+    // The exchange runs on its own thread: it blocks while the message waits.
+    std::thread exchange([&] {
+        client.exchange("GET /api/profile?id=7 HTTP/1.1\r\nHost: edit.test\r\n\r\n");
+    });
+    auto heldWait = [&] {
+        for (int i = 0; i < 300 && proxy.heldCount() == 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    };
+    heldWait();
+    {
+        auto held = proxy.held();
+        CHECK(held.size() == 1 && !held[0].response && held[0].url.find("https://") == 0,
+              "the HTTPS request is held");
+        // Edit: change the path (Content-Length is fixed by forward()).
+        std::string edited = held[0].raw;
+        edited.replace(edited.find("/api/profile?id=7"), strlen("/api/profile?id=7"), "/api/profile?id=8");
+        proxy.forward(held[0].id, edited);
+    }
+    heldWait();
+    {
+        auto held = proxy.held();
+        CHECK(held.size() == 1 && held[0].response, "the HTTPS response is held");
+        std::string edited = held[0].raw;
+        CHECK(edited.find("\"role\":\"user\"") != std::string::npos, "held response is decrypted");
+        edited.replace(edited.find("\"user\""), 6, "\"admin\"");
+        proxy.forward(held[0].id, edited);
+    }
+    exchange.join();
+    {
+        auto flows = proxy.flows();
+        TrafficProxy::Flow full;
+        CHECK(!flows.empty() && proxy.flow(flows.back().id, full), "edited flow");
+        CHECK(full.edited && full.path == "/api/profile?id=8", "the request edit went through");
+        CHECK(TrafficProxy::decodeBody(full.response, nullptr).find("admin") != std::string::npos,
+              "the response edit went through");
+        CHECK(origin.lastRequest.find("/api/profile?id=8") != std::string::npos, "the origin saw the edited path");
+    }
+    client.tls.close();
+    client.sock.shutdownBoth();
+
+    // Match & replace over HTTPS: one rule each for request and response.
+    {
+        std::vector<matchreplace::Rule> rules;
+        matchreplace::Rule r1;
+        r1.where = matchreplace::Where::RequestLine;
+        r1.match = "/api/";
+        r1.replace = "/v2/";
+        rules.push_back(r1);
+        matchreplace::Rule r2;
+        r2.where = matchreplace::Where::ResponseBody;
+        r2.match = "user";
+        r2.replace = "REDACTED";
+        rules.push_back(r2);
+        proxy.setRules(matchreplace::RuleSet(rules));
+        proxy.setIntercept(false, false, "");
+        ProxyTlsClient c2;
+        CHECK(c2.connect(proxy.port(), "127.0.0.1", origin.port, "edit.test", &roots, error), "rules client");
+        const std::string resp = c2.exchange("GET /api/profile HTTP/1.1\r\nHost: edit.test\r\n\r\n");
+        CHECK(resp.find("REDACTED") != std::string::npos, "response rule applied inside TLS");
+        CHECK(origin.lastRequest.find("GET /v2/profile") == 0, "request rule applied inside TLS");
+        TrafficProxy::Flow full;
+        proxy.flow(proxy.flows().back().id, full);
+        CHECK(full.edited && TrafficProxy::decodeBody(full.response, nullptr).find("REDACTED") != std::string::npos,
+              "rewritten response recorded as edited");
+        c2.tls.close();
+        c2.sock.shutdownBoth();
+    }
+
+    origin.stopping = true;
+    originThread.join();
+    proxy.stop();
+}
+
+static void testWebSocketCapture() {
+    std::printf("== WebSocket capture ==\n");
+    std::string error;
+
+    // A WebSocket-capable origin over TLS (wss through the proxy) and plain.
+    auto wsHandshake = [](const std::string& req, const std::string& acceptKey) {
+        return "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " +
+               acceptKey + "\r\n\r\n";
+    };
+    TlsOrigin origin;
+    const fs::path caDir = fs::temp_directory_path() / "apkspy-test-ca6";
+    fs::remove_all(caDir);
+    auto caStore = std::make_shared<ca::Store>();
+    caStore->loadOrGenerate(caDir.string(), error);
+    origin.cert = caStore->leafFor("ws.test", error);
+    std::atomic<bool> wsDone{false};
+    origin.respond = [&](const std::string&) { return wsHandshake("", "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="); };
+
+    // The wss case: after the 101 the origin speaks frames.
+    Socket originListener;
+    originListener.listenLoopback(0, error);
+    // Serve one connection manually: 101, then echo frames until close.
+    int port = 0;
+    std::thread originThread([&] {
+        port = originListener.localPort();
+        while (!wsDone.load()) {
+            Socket c = originListener.accept(250);
+            if (!c.valid()) continue;
+            tls::Connection tls;
+            std::string err, note;
+            if (!tls.accept(c, *origin.cert, 10000, err, note)) continue;
+            net::TlsStream stream(c, tls);
+            std::string req;
+            char buf[4096];
+            while (req.find("\r\n\r\n") == std::string::npos && stream.waitReadable(3000)) {
+                const long n = stream.recvSome(buf, sizeof buf);
+                if (n <= 0) break;
+                req.append(buf, static_cast<size_t>(n));
+            }
+            stream.sendAll(wsHandshake(req, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="));
+            // Server greeting, then echo until the client closes.
+            const std::string greeting = "\x81\x0dHello, client";  // text, 12 bytes, unmasked
+            stream.sendAll(greeting);
+            for (;;) {
+                if (!stream.waitReadable(5000)) break;
+                const long n = stream.recvSome(buf, sizeof buf);
+                if (n <= 0) break;
+                if (!stream.sendAll(buf, static_cast<size_t>(n))) break;
+            }
+            tls.close();
+            c.shutdownBoth();
+        }
+    });
+
+    TrafficProxy proxy;
+    proxy.setCa(caStore);
+    tls::TrustStore roots;
+    roots.loadPem(caStore->caPem(), error);
+    auto rootsCopy = std::make_shared<tls::TrustStore>();
+    rootsCopy->loadPem(caStore->caPem(), error);
+    proxy.setUpstreamTrust(rootsCopy, true);
+    proxy.start(0, error);
+
+    {
+        ProxyTlsClient client;
+        CHECK(client.connect(proxy.port(), "127.0.0.1", port, "ws.test", &roots, error), "wss client");
+        const std::string resp = client.exchange("GET /chat HTTP/1.1\r\nHost: ws.test\r\nUpgrade: websocket\r\n"
+                                                 "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                                                 "Sec-WebSocket-Version: 13\r\n\r\n");
+        CHECK(resp.find("101") != std::string::npos, "upgrade relayed");
+        // The greeting frame arrives together with the 101.
+        CHECK(resp.find("Hello, client") != std::string::npos, "server greeting received");
+        // Two masked client frames + a close.
+        const std::string hello = std::string("\x81\x85\x01\x02\x03\x04", 6) + std::string("hello", 5);
+        const std::string binary = std::string("\x82\x83\x00\x00\x00\x00", 6) + std::string("abc", 3);
+        client.stream->sendAll(hello);
+        client.stream->sendAll(binary);
+        client.stream->sendAll(std::string("\x88\x80\x01\x02\x03\x04", 6));  // close
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        client.tls.close();
+        client.sock.shutdownBoth();
+
+        waitFlows(proxy, 1);
+        TrafficProxy::Flow full;
+        CHECK(proxy.flow(proxy.flows()[0].id, full), "ws flow");
+        CHECK(full.websocket && full.status == 101, "the flow is a WebSocket upgrade");
+        CHECK(full.wsFrames.size() >= 4, "frames recorded (greeting, hello, binary, close)");
+        bool sawText = false, sawBinary = false, sawClose = false;
+        for (const auto& f : full.wsFrames) {
+            if (f.opcode == 1 && !f.fromClient && f.preview.find("Hello, client") != std::string::npos) sawText = true;
+            if (f.opcode == 2 && f.fromClient && f.preview == "abc") sawBinary = true;
+            if (f.opcode == 8) sawClose = true;
+        }
+        CHECK(sawText, "server text frame captured with payload");
+        CHECK(sawBinary, "client binary frame captured, unmasked");
+        CHECK(sawClose, "close frame captured");
+    }
+    wsDone = true;
+    originThread.join();
+    proxy.stop();
+
+    // The plain ws case over HTTP.
+    {
+        TrafficProxy plain;
+        plain.start(0, error);
+        Socket wsListener;
+        wsListener.listenLoopback(0, error);
+        std::thread wsThread([&] {
+            Socket c = wsListener.accept(5000);
+            if (!c.valid()) return;
+            std::string req;
+            char buf[4096];
+            while (req.find("\r\n\r\n") == std::string::npos && c.waitReadable(3000)) {
+                const long n = c.recvSome(buf, sizeof buf);
+                if (n <= 0) break;
+                req.append(buf, static_cast<size_t>(n));
+            }
+            c.sendAll("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+            c.sendAll(std::string("\x81\x05ready", 7));
+            // Longer than the client's 3 s read: the server must not close before the client's frame arrives.
+            while (c.waitReadable(6000)) {
+                const long n = c.recvSome(buf, sizeof buf);
+                if (n <= 0 || !c.sendAll(buf, static_cast<size_t>(n))) break;
+            }
+        });
+        Socket client;
+        client.connectLoopback(plain.port(), 2000, error);
+        client.sendAll("GET http://127.0.0.1:" + std::to_string(wsListener.localPort()) +
+                       "/ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+        const std::string resp = readAllFrom(client);
+        CHECK(resp.find("101") != std::string::npos && resp.find("ready") != std::string::npos, "plain ws upgraded");
+        client.sendAll(std::string("\x81\x83\x01\x02\x03\x04", 6) + std::string("abc", 3));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        client.shutdownBoth();
+        wsThread.join();
+        waitFlows(plain, 1);
+        TrafficProxy::Flow full;
+        CHECK(plain.flow(plain.flows()[0].id, full) && full.websocket && full.wsFrames.size() >= 2,
+              "plain ws frames recorded");
+        plain.stop();
+    }
+}
+
+static void testRepeaterHttps() {
+    std::printf("== Repeater HTTPS (httpclient) ==\n");
+    std::string error;
+    const fs::path caDir = fs::temp_directory_path() / "apkspy-test-ca7";
+    fs::remove_all(caDir);
+    auto caStore = std::make_shared<ca::Store>();
+    caStore->loadOrGenerate(caDir.string(), error);
+    TlsOrigin origin;
+    origin.cert = caStore->leafFor("127.0.0.1", error);  // an iPAddress SAN
+    origin.respond = [](const std::string&) {
+        const std::string body = "{\"ok\":true}";
+        return "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) +
+               "\r\n\r\n" + body;
+    };
+    Socket originListener;
+    originListener.listenLoopback(0, error);
+    std::thread originThread([&] { origin.run(originListener); });
+    while (origin.port == 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    tls::TrustStore roots;
+    roots.loadPem(caStore->caPem(), error);
+    httpclient::Options o;
+    o.roots = &roots;
+    httpclient::Target t;
+    t.host = "127.0.0.1";
+    t.port = origin.port;
+    t.https = true;
+
+    // A verified send.
+    httpclient::Result r = httpclient::send(t, "POST /api/x HTTP/1.1\nHost: 127.0.0.1\nContent-Length: 3\n\nabc", o);
+    CHECK(r.ok && r.status == 200 && TrafficProxy::decodeBody(r.response, nullptr) == "{\"ok\":true}",
+          "Repeater sends HTTPS and reads the response");
+    CHECK(r.response.header("content-type").find("json") != std::string::npos, "response headers parsed");
+
+    // A wrong host name must fail verification, and the ignore flag (scoped to
+    // this one send) must make it pass. "localhost" resolves to the same
+    // loopback but matches neither the IP SAN nor the CN.
+    httpclient::Target wrong;
+    wrong.host = "localhost";
+    wrong.port = origin.port;
+    wrong.https = true;
+    httpclient::Result rejected = httpclient::send(wrong, "GET / HTTP/1.1\nHost: localhost\n\n", o);
+    CHECK(!rejected.ok && rejected.error.find("host name") != std::string::npos,
+          ("certificate mismatch rejected: " + rejected.error).c_str());
+    httpclient::Options ignoring;
+    ignoring.ignoreCertErrors = true;
+    httpclient::Result forced = httpclient::send(wrong, "GET / HTTP/1.1\nHost: localhost\n\n", ignoring);
+    CHECK(forced.ok && forced.status == 200, "ignore-certificate-errors is scoped to the single send");
+
+    origin.stopping = true;
+    originThread.join();
+}
+
+// ---------------------------------------------------------------------------
+// Proxy tools: content views, filter expressions, HAR, modes, hooks, scripts
+// ---------------------------------------------------------------------------
+#include "debug/ContentView.hpp"
+#include "debug/FlowArchive.hpp"
+#include "debug/FlowFilter.hpp"
+#include "debug/TrafficScript.hpp"
+namespace {
+
+static void testContentViews() {
+    std::printf("== content views ==\n");
+    using contentview::View;
+    // protobuf: 1: 150, 2: "testing", 3: {1: 1}
+    const std::string pb("\x08\x96\x01\x12\x07testing\x1a\x02\x08\x01", 16);
+    std::string out;
+    CHECK(contentview::protobuf(pb, out) && out.find("1: 150") != std::string::npos &&
+              out.find("2: \"testing\"") != std::string::npos && out.find("3: {") != std::string::npos &&
+              out.find("  1: 1") != std::string::npos,
+          ("schema-less protobuf: " + out).c_str());
+    CHECK(!contentview::protobuf("not protobuf at all \xff\xff", out), "garbage is not protobuf");
+    // gRPC: one uncompressed message.
+    std::string grpc = std::string("\x00\x00\x00\x00", 4) + static_cast<char>(pb.size()) + pb;
+    CHECK(contentview::grpc(grpc, out) && out.find("message 1") != std::string::npos && out.find("1: 150") != std::string::npos,
+          "gRPC framing decoded");
+    // MessagePack: {"a": 1, "b": [true, null], "c": -3, "d": 1.5}
+    const std::string mp("\x84\xa1" "a\x01\xa1" "b\x92\xc3\xc0\xa1" "c\xfd\xa1" "d\xcb\x3f\xf8\x00\x00\x00\x00\x00\x00", 23);
+    CHECK(contentview::msgpack(mp, out) && out.find("\"a\": 1") != std::string::npos && out.find("true") != std::string::npos &&
+              out.find("null") != std::string::npos && out.find("\"c\": -3") != std::string::npos && out.find("1.5") != std::string::npos,
+          ("msgpack decoded: " + out).c_str());
+    CHECK(!contentview::msgpack(std::string("\xc1", 1), out), "invalid msgpack rejected");
+    CHECK(contentview::formFields("a=1&b=hello+world%21&empty=", out) && out.find("b: hello world!") != std::string::npos &&
+              out.find("empty: ") != std::string::npos,
+          "url-encoded form");
+    const std::string mpBody = "--XyZ\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nvalue1\r\n--XyZ\r\n"
+                               "Content-Disposition: form-data; name=\"file\"; filename=\"a.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+                               "\x01\x02\x03\x00\x05\x06\x07\x08\x09\r\n--XyZ--\r\n";
+    CHECK(contentview::multipart(mpBody, "multipart/form-data; boundary=XyZ", out) && out.find("part 1") != std::string::npos &&
+              out.find("value1") != std::string::npos && out.find("filename=\"a.bin\"") != std::string::npos,
+          ("multipart parts: " + out).c_str());
+    CHECK(contentview::prettyXml("<a><b>x</b><c/><d k=\"1>2\"><e/></d></a>") ==
+              "<a>\n  <b>x</b>\n  <c/>\n  <d k=\"1>2\">\n    <e/>\n  </d>\n</a>\n",
+          ("xml indented: " + contentview::prettyXml("<a><b>x</b><c/><d k=\"1>2\"><e/></d></a>")).c_str());
+    const std::string png = std::string("\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x02\x80\x00\x00\x01\xe0\x08\x06", 26);
+    CHECK(contentview::imageInfo(png, out) && out.find("640 x 480") != std::string::npos, "PNG dimensions");
+    CHECK(contentview::detect(grpc, "application/grpc+proto") == View::Grpc, "gRPC detected by type");
+    CHECK(contentview::detect("{\"x\":1}", "text/plain") == View::Json, "JSON sniffed");
+    CHECK(contentview::detect(pb, "application/octet-stream") == View::Protobuf, "protobuf sniffed in binary");
+    CHECK(contentview::detect("<html><body>x</body></html>", "") == View::Xml, "markup sniffed");
+    const auto r = contentview::render(View::Json, "not json", "");
+    CHECK(r.view == View::Hex && r.note.find("not readable as JSON") != std::string::npos, "failed view falls back to hex");
+    CHECK(contentview::hexDump("ABC").find("41 42 43") != std::string::npos, "hex dump");
+}
+
+static TrafficProxy::Flow makeFlow(uint64_t id, const std::string& method, const std::string& host, const std::string& path,
+                                   int status, const std::string& respType, const std::string& respBody) {
+    TrafficProxy::Flow f;
+    f.id = id;
+    f.method = method;
+    f.host = host;
+    f.port = 80;
+    f.path = path;
+    f.status = status;
+    f.complete = true;
+    f.request.startLine = method + " " + path + " HTTP/1.1";
+    f.request.headers = {{"Host", host}, {"Authorization", "Bearer x"}};
+    if (status) {
+        f.response.startLine = "HTTP/1.1 " + std::to_string(status) + " X";
+        f.response.headers = {{"Content-Type", respType}};
+        f.response.body = respBody;
+        f.response.bodySize = respBody.size();
+    }
+    return f;
+}
+
+static void testFlowFilters() {
+    std::printf("== flow filter expressions ==\n");
+    const auto f1 = makeFlow(1, "GET", "api.example.com", "/users/7", 200, "application/json", "{\"token\":\"abc\"}");
+    auto f2 = makeFlow(2, "POST", "auth.example.org", "/login", 500, "text/html", "<b>oops</b>");
+    f2.error = "boom";
+    TrafficProxy::Flow f3;
+    f3.id = 3;
+    f3.tunnel = true;
+    f3.method = "CONNECT";
+    f3.host = "1.2.3.4";
+    f3.sni = "cdn.example.net";
+    const auto m = [](const std::string& expr, const TrafficProxy::Flow& f, const flowfilter::Context* ctx = nullptr) {
+        std::string err;
+        auto filter = flowfilter::Filter::parse(expr, err);
+        return filter && filter->match(f, ctx);
+    };
+    CHECK(m("~d api & ~m GET", f1) && !m("~d api & ~m GET", f2), "domain and method");
+    CHECK(m("~d api ~m GET", f1), "juxtaposition means and");
+    CHECK(m("~c 500 | ~e", f2) && !m("~c 500 | ~e", f1), "status or error");
+    CHECK(!m("!~tcp", f3) && m("!~tcp", f1) && m("~tcp", f3), "not / tunnels");
+    CHECK(m("~d cdn.example", f3), "domain matches the TLS server name");
+    CHECK(m("~u \"/users/[0-9]+$\"", f1) && !m("~u \"/users/[0-9]+$\"", f2), "quoted regex");
+    CHECK(m("login", f2) && !m("login", f1), "a bare word matches the URL");
+    CHECK(m("~ts json & !~a", f1) && m("~t HTML", f2), "content types, case-insensitive");
+    CHECK(m("~bs token", f1) && !m("~bq token", f1) && m("~hq \"^authorization: bearer\"", f1), "bodies and headers");
+    CHECK(m("(~m POST | ~m PUT) & ~d example.org", f2) && !m("(~m POST | ~m PUT) & ~d example.org", f1), "grouping");
+    std::string err;
+    CHECK(flowfilter::Filter::parse("~bs token", err)->needsContent() && !flowfilter::Filter::parse("~d x & ~c 200", err)->needsContent(),
+          "content filters are flagged");
+    CHECK(!flowfilter::Filter::parse("~zz x", err) && err.find("unknown filter") != std::string::npos, "unknown filter reported");
+    CHECK(!flowfilter::Filter::parse("(~m GET", err) && err.find(")") != std::string::npos, "missing parenthesis reported");
+    CHECK(!flowfilter::Filter::parse("~c abc", err), "status code must be a number");
+    CHECK(!flowfilter::Filter::parse("~u \"(\"", err) && err.find("regex") != std::string::npos, "bad regex reported");
+    CHECK(flowfilter::looksLikeExpression("~d x") && flowfilter::looksLikeExpression("!~a") &&
+              !flowfilter::looksLikeExpression("a~b") && !flowfilter::looksLikeExpression("plain text"),
+          "expression detection");
+    flowfilter::Context ctx;
+    ctx.marked = [](uint64_t id) { return id == 2; };
+    ctx.comment = [](uint64_t id) { return id == 2 ? std::string("check later") : std::string(); };
+    CHECK(m("~marked", f2, &ctx) && !m("~marked", f1, &ctx) && m("~comment later", f2, &ctx), "marks and comments");
+}
+
+static void testFlowArchive() {
+    std::printf("== HAR sessions ==\n");
+    CHECK(flowarchive::isoTime(1700000000.25) == "2023-11-14T22:13:20.250Z", "ISO time written");
+    CHECK(std::fabs(flowarchive::parseIsoTime("2023-11-14T22:13:20.250Z") - 1700000000.25) < 0.001 &&
+              std::fabs(flowarchive::parseIsoTime("2023-11-15T00:13:20.250+02:00") - 1700000000.25) < 0.001,
+          "ISO time read (with zone offsets)");
+    // A gzip response must survive the round trip byte for byte.
+    std::string gz;
+    {
+        size_t n = 0;
+        const std::string plain = "{\"hello\":\"world\"}";
+        void* c = tdefl_compress_mem_to_heap(plain.data(), plain.size(), &n, TDEFL_WRITE_ZLIB_HEADER);
+        gz.assign(static_cast<const char*>(c), n);
+        mz_free(c);
+    }
+    auto f = makeFlow(9, "POST", "api.example.com", "/v1/x?q=1&r=two%20words", 201, "application/json", gz);
+    f.response.headers.push_back({"Content-Encoding", "deflate"});
+    f.request.body = "a=1";
+    f.request.bodySize = 3;
+    f.durationMs = 42.5;
+    f.startedAt = 1700000000.0;
+    f.websocket = true;
+    f.wsFrames.push_back({true, 1, 5, "hello", 1700000001.0});
+    f.wsFrames.push_back({false, 2, 3, std::string("\x00\x01\x02", 3), 1700000002.0});
+    TrafficProxy::Flow t;
+    t.id = 10;
+    t.tunnel = true;
+    t.method = "CONNECT";
+    t.host = "10.0.0.1";
+    t.port = 443;
+    t.sni = "secure.example.com";
+    t.tlsError = "pinned";
+    t.complete = true;
+    const std::string har = flowarchive::toHar({f, t});
+    Json parsed;
+    CHECK(Json::parse(har, parsed) && parsed.get("log").get("version").asString("") == "1.2" &&
+              parsed.get("log").get("entries").size() == 2,
+          "HAR 1.2 written");
+    const Json& e0 = parsed.get("log").get("entries")[0];
+    CHECK(e0.get("response").get("content").get("text").asString("") == "{\"hello\":\"world\"}",
+          "standard content.text is the decoded body");
+    CHECK(e0.get("request").get("queryString").size() == 2 &&
+              e0.get("request").get("queryString")[1].get("value").asString("") == "two words",
+          "query string listed");
+    std::vector<TrafficProxy::Flow> back;
+    std::string err;
+    CHECK(flowarchive::fromHar(har, back, err) && back.size() == 2, ("HAR read back: " + err).c_str());
+    if (back.size() == 2) {
+        const auto& b = back[0];
+        CHECK(b.method == "POST" && b.host == "api.example.com" && b.path == "/v1/x?q=1&r=two%20words" && b.status == 201 &&
+                  b.response.body == gz && b.response.header("content-encoding") == "deflate" && b.request.body == "a=1" &&
+                  std::fabs(b.durationMs - 42.5) < 0.01 && std::fabs(b.startedAt - 1700000000.0) < 0.01,
+              "ApkSpy flows round-trip unchanged (raw bodies kept)");
+        CHECK(b.websocket && b.wsFrames.size() == 2 && b.wsFrames[0].preview == "hello" && b.wsFrames[0].fromClient &&
+                  b.wsFrames[1].preview == std::string("\x00\x01\x02", 3) && !b.wsFrames[1].fromClient,
+              "WebSocket frames round-trip");
+        CHECK(back[1].tunnel && back[1].sni == "secure.example.com" && back[1].tlsError == "pinned" && back[1].port == 443,
+              "tunnel details round-trip");
+    }
+    // A HAR from another tool: decoded bodies, so encodings are dropped.
+    const std::string foreign = R"({"log":{"version":"1.2","entries":[{"startedDateTime":"2024-01-02T03:04:05.000Z","time":12,
+        "request":{"method":"GET","url":"https://shop.example.com:8443/api?id=3","httpVersion":"HTTP/2","headers":[
+          {"name":":authority","value":"shop.example.com"},{"name":"Accept","value":"*/*"}]},
+        "response":{"status":200,"statusText":"OK","httpVersion":"HTTP/2","headers":[{"name":"Content-Encoding","value":"br"},
+          {"name":"Content-Type","value":"application/json"}],"content":{"size":9,"mimeType":"application/json","text":"eyJhIjoxfQ==","encoding":"base64"}}}]}})";
+    back.clear();
+    CHECK(flowarchive::fromHar(foreign, back, err) && back.size() == 1, "foreign HAR read");
+    if (back.size() == 1) {
+        const auto& b = back[0];
+        CHECK(b.https && b.host == "shop.example.com" && b.port == 8443 && b.path == "/api?id=3" &&
+                  b.response.header("content-encoding").empty() && b.response.body == "{\"a\":1}" &&
+                  b.request.header(":authority").empty() && b.request.header("accept") == "*/*",
+              "foreign bodies readable; encodings and pseudo-headers dropped");
+        CHECK(TrafficProxy::decodeBody(b.response, nullptr) == "{\"a\":1}", "imported body decodes as is");
+    }
+    CHECK(!flowarchive::fromHar("{\"nope\":1}", back, err) && err.find("HAR") != std::string::npos, "non-HAR rejected");
+    // Imported flows join the proxy's list with fresh ids.
+    TrafficProxy proxy;
+    std::vector<TrafficProxy::Flow> two = {f, t};
+    CHECK(proxy.importFlows(two) == 2 && proxy.flows().size() == 2 && proxy.flows()[0].id == 1 && proxy.flows()[1].id == 2,
+          "flows imported with fresh ids");
+    CHECK(proxy.selectFlows([](const TrafficProxy::Flow& x) { return x.tunnel; }).size() == 1 &&
+              proxy.fullFlows({1, 2, 99}).size() == 2,
+          "select / full copies of flows");
+}
+
+// A tiny HTTP origin: answers `count` requests (one per connection) with
+// "ok:<path>" and records each request head.
+struct MiniOrigin {
+    Socket listener;
+    int port = 0;
+    std::vector<std::string> seen;
+    std::thread thread;
+    void start(int count) {
+        std::string err;
+        listener.listenLoopback(0, err);
+        port = listener.localPort();
+        thread = std::thread([this, count] {
+            for (int i = 0; i < count; ++i) {
+                Socket c = listener.accept(5000);
+                if (!c.valid()) return;
+                std::string req;
+                char buf[4096];
+                while (req.find("\r\n\r\n") == std::string::npos && c.waitReadable(3000)) {
+                    const long n = c.recvSome(buf, sizeof buf);
+                    if (n <= 0) break;
+                    req.append(buf, (size_t)n);
+                }
+                seen.push_back(req);
+                const size_t sp1 = req.find(' '), sp2 = req.find(' ', sp1 + 1);
+                const std::string body = "ok:" + (sp1 == std::string::npos ? std::string() : req.substr(sp1 + 1, sp2 - sp1 - 1));
+                c.sendAll("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " + std::to_string(body.size()) +
+                          "\r\n\r\n" + body);
+            }
+        });
+    }
+    void join() {
+        if (thread.joinable()) thread.join();
+    }
+};
+
+static bool waitFlows(TrafficProxy& p, size_t n) {
+    for (int i = 0; i < 300; ++i) {
+        auto fl = p.flows();
+        if (fl.size() >= n && fl.back().complete) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
+static void testProxyModes() {
+    std::printf("== proxy modes: SOCKS5, upstream, reverse ==\n");
+    std::string err;
+    TrafficProxy::Mode mode;
+    CHECK(TrafficProxy::parseReverseTarget("https://api.example.com:8443/", mode, err) && mode.reverse() && mode.reverseTls &&
+              mode.reverseHost == "api.example.com" && mode.reversePort == 8443,
+          "reverse target parsed");
+    CHECK(!TrafficProxy::parseReverseTarget("api.example.com", mode, err) && !TrafficProxy::parseReverseTarget("http://x/path", mode, err),
+          "bad reverse targets rejected");
+    CHECK(TrafficProxy::parseUpstream("http://10.0.0.2:3128", mode, err) && mode.chained() && mode.upstreamPort == 3128 &&
+              TrafficProxy::parseUpstream("", mode, err) && !mode.chained() && !TrafficProxy::parseUpstream("nohost", mode, err),
+          "upstream proxy parsed");
+
+    // SOCKS5 -> plain HTTP request.
+    {
+        MiniOrigin origin;
+        origin.start(1);
+        TrafficProxy proxy;
+        CHECK(proxy.start(0, err), "proxy starts");
+        Socket c;
+        c.connectLoopback(proxy.port(), 2000, err);
+        c.sendAll(std::string("\x05\x01\x00", 3));
+        char buf[64];
+        long n = c.waitReadable(3000) ? c.recvSome(buf, 2) : 0;
+        CHECK(n == 2 && buf[0] == 5 && buf[1] == 0, "SOCKS5 greeting accepted (no auth)");
+        std::string req("\x05\x01\x00\x01\x7f\x00\x00\x01", 8);
+        req += static_cast<char>(origin.port >> 8);
+        req += static_cast<char>(origin.port & 0xff);
+        c.sendAll(req);
+        std::string rep;
+        while (rep.size() < 10 && c.waitReadable(3000)) {
+            n = c.recvSome(buf, sizeof buf);
+            if (n <= 0) break;
+            rep.append(buf, (size_t)n);
+        }
+        CHECK(rep.size() == 10 && rep[1] == 0, "SOCKS5 CONNECT succeeded");
+        c.sendAll("GET /via-socks HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(origin.port) + "\r\n\r\n");
+        const std::string resp = readAllFrom(c);
+        CHECK(resp.find("ok:/via-socks") != std::string::npos, "HTTP over SOCKS5 relayed");
+        origin.join();
+        CHECK(waitFlows(proxy, 1) && proxy.flows()[0].path == "/via-socks" && proxy.flows()[0].status == 200,
+              "HTTP over SOCKS5 recorded as a flow");
+        // SOCKS5 with a domain name, carrying a non-HTTP protocol: blind relay.
+        Socket echo;
+        echo.listenLoopback(0, err);
+        const int echoPort = echo.localPort();
+        std::thread echoThread([&] {
+            Socket e = echo.accept(5000);
+            char b[256];
+            if (e.valid() && e.waitReadable(3000)) {
+                const long k = e.recvSome(b, sizeof b);
+                if (k > 0) e.sendAll(b, (size_t)k);
+            }
+        });
+        Socket d;
+        d.connectLoopback(proxy.port(), 2000, err);
+        std::string hello("\x05\x01\x00", 3);
+        std::string r2("\x05\x01\x00\x03\x09" "127.0.0.1", 14);
+        r2 += static_cast<char>(echoPort >> 8);
+        r2 += static_cast<char>(echoPort & 0xff);
+        d.sendAll(hello + r2);  // greeting and request in one write
+        std::string got;
+        while (got.size() < 12 && d.waitReadable(3000)) {
+            n = d.recvSome(buf, sizeof buf);
+            if (n <= 0) break;
+            got.append(buf, (size_t)n);
+        }
+        CHECK(got.size() == 12 && got[3] == 0, "SOCKS5 domain CONNECT (pipelined) succeeded");
+        d.sendAll(std::string("\x01\x02raw", 5));
+        got.clear();
+        while (got.size() < 5 && d.waitReadable(3000)) {
+            n = d.recvSome(buf, sizeof buf);
+            if (n <= 0) break;
+            got.append(buf, (size_t)n);
+        }
+        CHECK(got == std::string("\x01\x02raw", 5), "non-HTTP SOCKS traffic relayed blind");
+        d.shutdownBoth();
+        echoThread.join();
+        CHECK(waitFlows(proxy, 2) && proxy.flows()[1].method == "SOCKS" && proxy.flows()[1].tunnel, "SOCKS tunnel recorded");
+        proxy.stop();
+    }
+
+    // Upstream chaining: client -> A -> B -> origin (plain HTTP and CONNECT).
+    {
+        MiniOrigin origin;
+        origin.start(1);
+        TrafficProxy b, a;
+        CHECK(b.start(0, err) && a.start(0, err), "both proxies start");
+        TrafficProxy::Mode chain;
+        TrafficProxy::parseUpstream("127.0.0.1:" + std::to_string(b.port()), chain, err);
+        a.setMode(chain);
+        Socket c;
+        c.connectLoopback(a.port(), 2000, err);
+        c.sendAll("GET http://127.0.0.1:" + std::to_string(origin.port) + "/chained HTTP/1.1\r\nHost: 127.0.0.1:" +
+                  std::to_string(origin.port) + "\r\n\r\n");
+        const std::string resp = readAllFrom(c);
+        origin.join();
+        CHECK(resp.find("ok:/chained") != std::string::npos, "plain HTTP through an upstream proxy");
+        CHECK(waitFlows(a, 1) && waitFlows(b, 1) && b.flows()[0].path == "/chained", "both proxies recorded the request");
+        CHECK(!origin.seen.empty() && origin.seen[0].rfind("GET /chained HTTP/1.1", 0) == 0, "origin got origin-form");
+        // CONNECT through the chain: B sees the tunnel.
+        Socket echo;
+        echo.listenLoopback(0, err);
+        const int echoPort = echo.localPort();
+        std::thread echoThread([&] {
+            Socket e = echo.accept(5000);
+            char buf2[256];
+            if (e.valid() && e.waitReadable(3000)) {
+                const long k = e.recvSome(buf2, sizeof buf2);
+                if (k > 0) e.sendAll(buf2, (size_t)k);
+            }
+        });
+        Socket t;
+        t.connectLoopback(a.port(), 2000, err);
+        t.sendAll("CONNECT 127.0.0.1:" + std::to_string(echoPort) + " HTTP/1.1\r\nHost: x\r\n\r\n");
+        char buf[256];
+        long n = t.waitReadable(3000) ? t.recvSome(buf, sizeof buf) : 0;
+        CHECK(n > 0 && std::string(buf, (size_t)n).find("200") != std::string::npos, "CONNECT through the chain");
+        t.sendAll("ping!");
+        std::string got;
+        while (got.size() < 5 && t.waitReadable(3000)) {
+            n = t.recvSome(buf, sizeof buf);
+            if (n <= 0) break;
+            got.append(buf, (size_t)n);
+        }
+        CHECK(got == "ping!", "tunnel bytes pass the chain");
+        t.shutdownBoth();
+        echoThread.join();
+        CHECK(waitFlows(b, 2) && b.flows()[1].tunnel && b.flows()[1].port == echoPort, "upstream saw the CONNECT");
+        a.stop();
+        b.stop();
+    }
+
+    // Upstream credentials and absolute-form, seen by a fake upstream proxy.
+    {
+        Socket fake;
+        fake.listenLoopback(0, err);
+        const int fakePort = fake.localPort();
+        std::string seen;
+        std::thread fakeThread([&] {
+            Socket c = fake.accept(5000);
+            char buf[4096];
+            while (c.valid() && seen.find("\r\n\r\n") == std::string::npos && c.waitReadable(3000)) {
+                const long n = c.recvSome(buf, sizeof buf);
+                if (n <= 0) break;
+                seen.append(buf, (size_t)n);
+            }
+            c.sendAll("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi");
+        });
+        TrafficProxy a;
+        a.start(0, err);
+        TrafficProxy::Mode m2;
+        TrafficProxy::parseUpstream("127.0.0.1:" + std::to_string(fakePort), m2, err);
+        m2.upstreamAuth = "user:pass";
+        a.setMode(m2);
+        Socket c;
+        c.connectLoopback(a.port(), 2000, err);
+        c.sendAll("GET http://example.invalid:8080/x?y=1 HTTP/1.1\r\nHost: example.invalid:8080\r\n\r\n");
+        const std::string resp = readAllFrom(c);
+        fakeThread.join();
+        CHECK(resp.find("hi") != std::string::npos, "answer from the upstream proxy relayed");
+        CHECK(seen.rfind("GET http://example.invalid:8080/x?y=1 HTTP/1.1\r\n", 0) == 0 &&
+                  seen.find("Proxy-Authorization: Basic dXNlcjpwYXNz") != std::string::npos,
+              ("absolute form + credentials sent upstream: " + seen.substr(0, 120)).c_str());
+        a.stop();
+    }
+
+    // Reverse proxy: the request goes to the fixed target, Host rewritten.
+    {
+        MiniOrigin origin;
+        origin.start(1);
+        TrafficProxy r;
+        r.start(0, err);
+        TrafficProxy::Mode rev;
+        CHECK(TrafficProxy::parseReverseTarget("http://127.0.0.1:" + std::to_string(origin.port), rev, err), "reverse mode set");
+        r.setMode(rev);
+        Socket c;
+        c.connectLoopback(r.port(), 2000, err);
+        c.sendAll("GET /rev?x=1 HTTP/1.1\r\nHost: localhost:" + std::to_string(r.port()) + "\r\n\r\n");
+        const std::string resp = readAllFrom(c);
+        origin.join();
+        CHECK(resp.find("ok:/rev?x=1") != std::string::npos, "reverse proxy relays to the target");
+        CHECK(!origin.seen.empty() && origin.seen[0].find("Host: 127.0.0.1:" + std::to_string(origin.port)) != std::string::npos,
+              "Host header rewritten to the target");
+        CHECK(waitFlows(r, 1) && r.flows()[0].host == "127.0.0.1" && r.flows()[0].port == origin.port, "reverse flow recorded");
+        r.stop();
+    }
+}
+
+// Hooks without Python: answer, rewrite, kill.
+struct FakeHooks : TrafficProxy::Hooks {
+    Verdict onRequest(const TrafficProxy::Flow&, std::string& raw, std::string& reply) override {
+        if (raw.find("/local") != std::string::npos) {
+            reply = "HTTP/1.1 203 Local\r\nContent-Type: text/plain\r\n\r\nfrom hook";
+            return Verdict::Respond;
+        }
+        if (raw.find("/kill") != std::string::npos) return Verdict::Kill;
+        const size_t at = raw.find("/rewrite");
+        if (at != std::string::npos) {
+            raw.replace(at, 8, "/rewritten");
+            return Verdict::Modified;
+        }
+        return Verdict::Continue;
+    }
+    Verdict onResponse(const TrafficProxy::Flow&, const std::string&, std::string& raw) override {
+        const size_t at = raw.find("ok:");
+        if (at == std::string::npos) return Verdict::Continue;
+        raw = raw.substr(0, raw.find("\r\n\r\n") + 4) + "OK!" + raw.substr(at + 3);
+        return Verdict::Modified;
+    }
+    bool wantsResponses() const override { return true; }
+};
+
+static void testProxyHooks() {
+    std::printf("== proxy hooks ==\n");
+    std::string err;
+    TrafficProxy proxy;
+    proxy.start(0, err);
+    proxy.setHooks(std::make_shared<FakeHooks>());
+    const auto get = [&](int port, const std::string& path) {
+        Socket c;
+        c.connectLoopback(proxy.port(), 2000, err);
+        c.sendAll("GET http://127.0.0.1:" + std::to_string(port) + path + " HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(port) + "\r\n\r\n");
+        return readAllFrom(c);
+    };
+    std::string resp = get(9, "/local");  // port 9: nothing listens - the hook answers
+    CHECK(resp.find("203 Local") != std::string::npos && resp.find("from hook") != std::string::npos &&
+              resp.find("Content-Length: 9") != std::string::npos,
+          "a hook answers without the server");
+    resp = get(9, "/kill");
+    CHECK(resp.empty(), "a killed request gets no answer");
+    MiniOrigin origin;
+    origin.start(1);
+    resp = get(origin.port, "/rewrite");
+    origin.join();
+    CHECK(!origin.seen.empty() && origin.seen[0].rfind("GET /rewritten", 0) == 0, "the hook's rewritten request went out");
+    CHECK(resp.find("OK!/rewritten") != std::string::npos && resp.find("Content-Length: 13") != std::string::npos,
+          ("the hook's rewritten response reached the client: " + resp).c_str());
+    CHECK(waitFlows(proxy, 3), "hook flows complete");
+    auto flows = proxy.flows();
+    CHECK(flows.size() == 3 && flows[0].status == 203 && flows[0].edited && flows[1].error == "killed by a script" &&
+              flows[2].edited && flows[2].path == "/rewritten",
+          "hook outcomes recorded on the flows");
+    proxy.stop();
+}
+
+static void testTrafficScripts() {
+    std::printf("== traffic scripts (Python) ==\n");
+    // Message <-> JSON, no Python needed.
+    const std::string raw = "POST /a?b=1 HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
+    Json j;
+    CHECK(Json::parse(trafficscript::Host::messageJson(raw, false), j) && j.get("method").asString("") == "POST" &&
+              j.get("path").asString("") == "/a?b=1" && j.get("content_decoded").asBool(false),
+          "request to script JSON (body dechunked)");
+    std::string out;
+    CHECK(codec::base64Decode(j.get("body_b64").asString(""), out) && out == "hello", "decoded body handed to the script");
+    std::string err;
+    const std::string rebuilt = trafficscript::Host::rebuild(j.dump(), false, err);
+    CHECK(rebuilt == "POST /a?b=1 HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello", ("rebuilt request: " + rebuilt).c_str());
+    CHECK(trafficscript::Host::rebuild("{\"method\":\"GET\",\"path\":\"/x y\"}", false, err).empty(), "invalid start line refused");
+
+    trafficscript::Host probe;
+    const fs::path dir = fs::temp_directory_path() / "apkspy-script-test";
+    fs::create_directories(dir);
+    const fs::path script = dir / "hooks.py";
+    {
+        std::ofstream s(script, std::ios::binary);
+        s << "from apkspy_addon import Response, ctx\n"
+             "def request(flow):\n"
+             "    if flow.request.path == '/local':\n"
+             "        flow.response = Response.make(200, b'scripted', {'Content-Type': 'text/plain'})\n"
+             "        return\n"
+             "    flow.request.headers['X-Script'] = 'yes'\n"
+             "    q = flow.request.query\n"
+             "    q['added'] = '1'\n"
+             "    flow.request.query = q\n"
+             "def response(flow):\n"
+             "    ctx.log('saw', flow.request.path, flow.response.status_code)\n"
+             "    flow.response.text = flow.response.text.upper()\n"
+             "    flow.response.headers['X-Seen'] = flow.request.headers.get('x-script', '')\n";
+    }
+    if (proc::run({"python", "--version"}, 10000).exitCode != 0) {
+        std::printf("  (no python on PATH: script host skipped)\n");
+        return;
+    }
+    auto host = std::make_shared<trafficscript::Host>();
+    const bool started = host->start("python", {pathutil::toUtf8(script)}, pathutil::toUtf8(dir / "support"), err);
+    CHECK(started && host->hasRequestHook() && host->hasResponseHook(), ("script loaded: " + err).c_str());
+    if (!started) {
+        for (const auto& l : host->takeLog()) std::printf("    %s\n", l.c_str());
+        return;
+    }
+    TrafficProxy proxy;
+    proxy.start(0, err);
+    proxy.setHooks(host);
+    MiniOrigin origin;
+    origin.start(1);
+    Socket c;
+    c.connectLoopback(proxy.port(), 2000, err);
+    c.sendAll("GET http://127.0.0.1:" + std::to_string(origin.port) + "/p?x=2 HTTP/1.1\r\nHost: 127.0.0.1:" +
+              std::to_string(origin.port) + "\r\n\r\n");
+    std::string resp = readAllFrom(c, 8000);
+    origin.join();
+    CHECK(!origin.seen.empty() && origin.seen[0].rfind("GET /p?x=2&added=1 HTTP/1.1", 0) == 0 &&
+              origin.seen[0].find("X-Script: yes") != std::string::npos,
+          ("request changed by the script: " + (origin.seen.empty() ? std::string() : origin.seen[0].substr(0, 80))).c_str());
+    CHECK(resp.find("OK:/P?X=2&ADDED=1") != std::string::npos && resp.find("X-Seen: yes") != std::string::npos,
+          ("response changed by the script: " + resp).c_str());
+    Socket d;
+    d.connectLoopback(proxy.port(), 2000, err);
+    d.sendAll("GET http://127.0.0.1:9/local HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n");
+    resp = readAllFrom(d, 8000);
+    CHECK(resp.find("200 OK") != std::string::npos && resp.find("scripted") != std::string::npos, "script answered a request itself");
+    bool logged = false;
+    for (int i = 0; i < 100 && !logged; ++i) {
+        for (const auto& l : host->takeLog()) logged |= l.find("saw /p") != std::string::npos;
+        if (!logged) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    CHECK(logged, "ctx.log output reaches the log");
+    // A broken script: the error is reported, the proxy is unaffected.
+    {
+        std::ofstream s(dir / "broken.py", std::ios::binary);
+        s << "def request(flow)\n    return\n";  // missing colon: a SyntaxError on load
+    }
+    trafficscript::Host broken;
+    CHECK(!broken.start("python", {pathutil::toUtf8(dir / "broken.py")}, pathutil::toUtf8(dir / "support"), err) &&
+              err.find("failed to load") != std::string::npos,
+          ("a script that does not load is reported: " + err).c_str());
+    proxy.stop();
+    host->stop();
+    CHECK(!host->running(), "script host stops");
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Proxy tools, round 2: decoders, WebSocket, routing, replay, exports,
+// content views, conditions, limits, raw TCP / UDP / DNS, h2c, scripts
+// ---------------------------------------------------------------------------
+#include "debug/Http2.hpp"
+#include "debug/ProtoSchema.hpp"
+namespace {
+
+static std::string unhex(const std::string& h) {
+    std::string out;
+    codec::hexDecode(h, out);
+    return out;
+}
+
+static void testBodyDecoders() {
+    std::printf("== brotli / zstd bodies ==\n");
+    TrafficProxy::Message m;
+    m.headers = {{"Content-Encoding", "br"}};
+    m.body = unhex("1b760000144aac9b7abde1979d7f8ec282360e9ce09003f78b9e38e6b600abc3caa0c2da6636dccd808d2e21d76ee3ea4cb8f0d2b8c7c2704d3af0697ea1b84573abc4571e");
+    std::string note;
+    const std::string plain = TrafficProxy::decodeBody(m, &note);
+    CHECK(plain.rfind("ukko nooa, ukko nooa oli kunnon mies", 0) == 0 && plain.size() == 119 && note.find("decoded from br") != std::string::npos,
+          ("brotli body decoded: " + note).c_str());
+    TrafficProxy::Message z;
+    z.headers = {{"Content-Encoding", "zstd"}};
+    z.body = unhex("28b52ffd201081000068656c6c6f207a73746420776f726c64");
+    CHECK(TrafficProxy::decodeBody(z, &note) == "hello zstd world", "zstd body decoded");
+    z.body = "garbage";
+    TrafficProxy::decodeBody(z, &note);
+    CHECK(note.find("could not decode") != std::string::npos, "bad zstd reported");
+}
+
+// A WebSocket origin: answers the upgrade, then echoes each client message
+// as "echo:<payload>" until the client closes.
+struct WsOrigin {
+    Socket listener;
+    int port = 0;
+    std::string upgradeRequest;
+    std::vector<std::string> received;
+    std::thread thread;
+    void start() {
+        std::string err;
+        listener.listenLoopback(0, err);
+        port = listener.localPort();
+        thread = std::thread([this] {
+            Socket c = listener.accept(5000);
+            if (!c.valid()) return;
+            std::string buf;
+            char chunk[65536];
+            while (buf.find("\r\n\r\n") == std::string::npos && c.waitReadable(3000)) {
+                const long n = c.recvSome(chunk, sizeof chunk);
+                if (n <= 0) return;
+                buf.append(chunk, (size_t)n);
+            }
+            upgradeRequest = buf.substr(0, buf.find("\r\n\r\n") + 4);
+            buf.erase(0, upgradeRequest.size());
+            c.sendAll("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: x\r\n\r\n");
+            for (;;) {
+                while (buf.size() < 2 || buf.size() < 2 + 4 + (size_t)((unsigned char)buf[1] & 0x7f) +
+                                                           (((unsigned char)buf[1] & 0x7f) == 126 ? 2 : 0)) {
+                    if (!c.waitReadable(3000)) return;
+                    const long n = c.recvSome(chunk, sizeof chunk);
+                    if (n <= 0) return;
+                    buf.append(chunk, (size_t)n);
+                }
+                const int op = buf[0] & 0x0f;
+                size_t len = (unsigned char)buf[1] & 0x7f, at = 2;
+                if (len == 126) len = ((unsigned char)buf[2] << 8) | (unsigned char)buf[3], at = 4;
+                while (buf.size() < at + 4 + len) {
+                    if (!c.waitReadable(3000)) return;
+                    const long n = c.recvSome(chunk, sizeof chunk);
+                    if (n <= 0) return;
+                    buf.append(chunk, (size_t)n);
+                }
+                std::string payload = buf.substr(at + 4, len);
+                for (size_t i = 0; i < payload.size(); ++i) payload[i] = (char)(payload[i] ^ buf[at + (i % 4)]);
+                buf.erase(0, at + 4 + len);
+                if (op == 8) return;
+                received.push_back(payload);
+                c.sendAll(TrafficProxy::wsFrame(1, "echo:" + payload, false));
+            }
+        });
+    }
+    void join() {
+        if (thread.joinable()) thread.join();
+    }
+};
+
+// Reads one unmasked server frame from the client side.
+static bool readServerFrame(Socket& s, std::string& buf, std::string& payload) {
+    char chunk[65536];
+    for (;;) {
+        if (buf.size() >= 2) {
+            size_t len = (unsigned char)buf[1] & 0x7f, at = 2;
+            if (len == 126 && buf.size() >= 4) len = ((unsigned char)buf[2] << 8) | (unsigned char)buf[3], at = 4;
+            if (len != 126 && buf.size() >= at + len) {
+                payload = buf.substr(at, len);
+                buf.erase(0, at + len);
+                return true;
+            }
+        }
+        if (!s.waitReadable(3000)) return false;
+        const long n = s.recvSome(chunk, sizeof chunk);
+        if (n <= 0) return false;
+        buf.append(chunk, (size_t)n);
+    }
+}
+
+struct WsHooks : TrafficProxy::Hooks {
+    Verdict onRequest(const TrafficProxy::Flow&, std::string&, std::string&) override { return Verdict::Continue; }
+    Verdict onResponse(const TrafficProxy::Flow&, const std::string&, std::string&) override { return Verdict::Continue; }
+    bool wantsResponses() const override { return false; }
+    Verdict onWebSocket(const TrafficProxy::Flow&, bool fromClient, int, std::string& payload) override {
+        if (fromClient && payload == "drop me") return Verdict::Kill;
+        if (fromClient && payload == "rewrite me") {
+            payload = "rewritten";
+            return Verdict::Modified;
+        }
+        return Verdict::Continue;
+    }
+    bool wantsWebSocket() const override { return true; }
+};
+
+static void testWebSocketTools() {
+    std::printf("== WebSocket: payloads, hooks, injection, intercept ==\n");
+    const std::string f = TrafficProxy::wsFrame(1, std::string(300, 'x'), false);
+    CHECK(f.size() == 4 + 300 && (unsigned char)f[0] == 0x81 && (unsigned char)f[1] == 126, "frame header with 16-bit length");
+    std::string err;
+    WsOrigin origin;
+    origin.start();
+    TrafficProxy proxy;
+    proxy.start(0, err);
+    proxy.setHooks(std::make_shared<WsHooks>());
+    Socket c;
+    c.connectLoopback(proxy.port(), 2000, err);
+    c.sendAll("GET http://127.0.0.1:" + std::to_string(origin.port) + "/ws HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(origin.port) +
+              "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: abc\r\nSec-WebSocket-Version: 13\r\n"
+              "Sec-WebSocket-Extensions: permessage-deflate\r\n\r\n");
+    std::string buf;
+    char chunk[4096];
+    while (buf.find("\r\n\r\n") == std::string::npos && c.waitReadable(3000)) {
+        const long n = c.recvSome(chunk, sizeof chunk);
+        if (n <= 0) break;
+        buf.append(chunk, (size_t)n);
+    }
+    CHECK(buf.find("101") != std::string::npos, "upgrade relayed");
+    buf.erase(0, buf.find("\r\n\r\n") + 4);
+    CHECK(origin.upgradeRequest.find("Connection: Upgrade") != std::string::npos &&
+              origin.upgradeRequest.find("permessage-deflate") == std::string::npos,
+          "upstream gets Connection: Upgrade and no compression offer");
+    std::string payload;
+    const std::string big(3000, 'b');
+    c.sendAll(TrafficProxy::wsFrame(1, big, true));
+    CHECK(readServerFrame(c, buf, payload) && payload == "echo:" + big, "a message round-trips");
+    c.sendAll(TrafficProxy::wsFrame(1, "rewrite me", true));
+    CHECK(readServerFrame(c, buf, payload) && payload == "echo:rewritten", "a hook rewrote a message");
+    c.sendAll(TrafficProxy::wsFrame(1, "drop me", true));
+    c.sendAll(TrafficProxy::wsFrame(1, "after", true));
+    CHECK(readServerFrame(c, buf, payload) && payload == "echo:after", "a hook dropped a message");
+    // Injection both ways.
+    uint64_t wsId = 0;
+    for (int i = 0; i < 100 && !wsId; ++i) {
+        for (const auto& fl : proxy.flows())
+            if (fl.websocket) wsId = fl.id;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(proxy.webSocketLive(wsId), "connection live");
+    CHECK(proxy.injectWebSocket(wsId, false, 1, "to the app", err) && readServerFrame(c, buf, payload) && payload == "to the app",
+          "message injected to the app");
+    CHECK(proxy.injectWebSocket(wsId, true, 1, "to the server", err) && readServerFrame(c, buf, payload) && payload == "echo:to the server",
+          "message injected to the server");
+    // Intercept: hold the next client message, edit it, forward it.
+    proxy.setIntercept(false, false, "", true);
+    c.sendAll(TrafficProxy::wsFrame(1, "hold me", true));
+    TrafficProxy::Held held;
+    for (int i = 0; i < 300 && held.id == 0; ++i) {
+        for (const auto& h : proxy.held())
+            if (h.websocket) held = h;
+        if (!held.id) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(held.id && held.raw == "hold me" && !held.response, "client message held at the intercept");
+    proxy.forward(held.id, "edited at intercept");
+    // The server's echo is held too (both directions are intercepted): forward it unchanged.
+    held = {};
+    for (int i = 0; i < 300 && held.id == 0; ++i) {
+        for (const auto& h : proxy.held())
+            if (h.websocket && h.response) held = h;
+        if (!held.id) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(held.id && held.raw == "echo:edited at intercept", "server message held at the intercept");
+    if (held.id) proxy.forward(held.id);
+    CHECK(readServerFrame(c, buf, payload) && payload == "echo:edited at intercept", "edited message forwarded");
+    proxy.setIntercept(false, false, "", false);
+    c.sendAll(TrafficProxy::wsFrame(8, "", true));
+    c.shutdownBoth();
+    origin.join();
+    TrafficProxy::Flow full;
+    for (int i = 0; i < 300 && !(proxy.flow(wsId, full) && full.complete); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    bool sawBig = false, sawDropped = false, sawEdited = false, sawInjected = false;
+    for (const auto& fr : full.wsFrames) {
+        sawBig |= fr.preview == big;
+        sawDropped |= fr.dropped && fr.preview == "drop me";
+        sawEdited |= fr.edited && fr.preview == "rewritten";
+        sawInjected |= fr.injected;
+    }
+    CHECK(sawBig && sawDropped && sawEdited && sawInjected, "frames recorded whole, with dropped / edited / injected marks");
+    CHECK(origin.received.size() >= 5 && std::find(origin.received.begin(), origin.received.end(), "drop me") == origin.received.end(),
+          "the dropped message never reached the server");
+    proxy.stop();
+}
+
+static void testRoutingAndReplay() {
+    std::printf("== routing: hosts, map local / remote, server replay ==\n");
+    CHECK(TrafficProxy::globMatch("https://api.*.com/v1/*", "https://api.example.com/v1/users?x=1") &&
+              !TrafficProxy::globMatch("https://api.*.com/v2/*", "https://api.example.com/v1/users"),
+          "URL globs");
+    CHECK(TrafficProxy::hostMatches("googleapis.com", "firebase.googleapis.com") && TrafficProxy::hostMatches("googleapis.com", "googleapis.com") &&
+              !TrafficProxy::hostMatches("googleapis.com", "notgoogleapis.com") && TrafficProxy::hostMatches("*.cdn.net", "a.b.cdn.net"),
+          "host patterns cover subdomains");
+    TrafficProxy::Routing r;
+    r.ignoreHosts = {"google.com"};
+    CHECK(!r.intercepts("www.google.com") && r.intercepts("api.example.com"), "ignore list");
+    r.allowHosts = {"example.com"};
+    CHECK(r.intercepts("api.example.com") && !r.intercepts("other.org"), "allow list");
+
+    std::string err;
+    const fs::path dir = fs::temp_directory_path() / "apkspy-maplocal";
+    fs::create_directories(dir / "static");
+    {
+        std::ofstream(dir / "config.json", std::ios::binary) << "{\"mocked\":true}";
+        std::ofstream(dir / "static" / "app.js", std::ios::binary) << "console.log(1)";
+    }
+    TrafficProxy proxy;
+    proxy.start(0, err);
+    TrafficProxy::Routing routing;
+    routing.mapLocal.push_back({true, "http://mock.invalid/config*", pathutil::toUtf8(dir / "config.json"), ""});
+    routing.mapLocal.push_back({true, "http://mock.invalid/static/*", pathutil::toUtf8(dir / "static"), ""});
+    MiniOrigin origin;
+    origin.start(1);
+    routing.mapRemote.push_back({true, "http://remote.invalid/api", "http://127.0.0.1:" + std::to_string(origin.port) + "/v2"});
+    proxy.setRouting(routing);
+    const auto get = [&](const std::string& url, const std::string& host) {
+        Socket c;
+        c.connectLoopback(proxy.port(), 2000, err);
+        c.sendAll("GET " + url + " HTTP/1.1\r\nHost: " + host + "\r\n\r\n");
+        return readAllFrom(c);
+    };
+    std::string resp = get("http://mock.invalid/config?v=1", "mock.invalid");
+    CHECK(resp.find("200 OK") != std::string::npos && resp.find("{\"mocked\":true}") != std::string::npos &&
+              resp.find("application/json") != std::string::npos,
+          "map local answers from a file");
+    resp = get("http://mock.invalid/static/app.js", "mock.invalid");
+    CHECK(resp.find("console.log(1)") != std::string::npos && resp.find("javascript") != std::string::npos, "map local from a directory");
+    resp = get("http://mock.invalid/static/missing.js", "mock.invalid");
+    CHECK(resp.find("404") != std::string::npos, "missing mapped file: 404");
+    resp = get("http://remote.invalid/api/users", "remote.invalid");
+    origin.join();
+    CHECK(resp.find("ok:/v2/users") != std::string::npos && !origin.seen.empty() &&
+              origin.seen[0].find("Host: 127.0.0.1:" + std::to_string(origin.port)) != std::string::npos,
+          "map remote rewrote the target, path and Host");
+    CHECK(waitFlows(proxy, 4) && proxy.flows()[3].note.find("map remote") != std::string::npos && proxy.flows()[0].note.find("map local") != std::string::npos,
+          "mapped flows say what happened");
+
+    // Server replay: the recorded response answers; unmatched ones are refused.
+    proxy.setRouting({});
+    TrafficProxy::Flow rec;
+    rec.method = "GET";
+    rec.host = "replay.invalid";
+    rec.port = 80;
+    rec.path = "/data?x=1";
+    rec.status = 200;
+    rec.response.startLine = "HTTP/1.1 200 OK";
+    rec.response.headers = {{"Content-Type", "text/plain"}, {"Content-Length", "8"}};
+    rec.response.body = "recorded";
+    TrafficProxy::ReplayOptions opts;
+    opts.refuseUnmatched = true;
+    proxy.setServerReplay({rec}, opts);
+    CHECK(proxy.serverReplayLeft() == 1, "one recorded response loaded");
+    resp = get("http://replay.invalid/data?x=1", "replay.invalid");
+    CHECK(resp.find("recorded") != std::string::npos && proxy.serverReplayLeft() == 0, "recorded response replayed (and used up)");
+    resp = get("http://replay.invalid/data?x=1", "replay.invalid");
+    CHECK(resp.find("404") != std::string::npos, "used response not reused; unmatched refused");
+    opts.reuse = true;
+    opts.ignoreQuery = true;
+    proxy.setServerReplay({rec}, opts);
+    resp = get("http://replay.invalid/data?other=2", "replay.invalid");
+    std::string resp2 = get("http://replay.invalid/data", "replay.invalid");
+    CHECK(resp.find("recorded") != std::string::npos && resp2.find("recorded") != std::string::npos, "reuse + ignore query");
+    proxy.clearServerReplay();
+    proxy.stop();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+static void testExportsAndMarks() {
+    std::printf("== copy as / HAR marks ==\n");
+    auto f = makeFlow(5, "POST", "api.example.com", "/v1/login?x=1", 200, "application/json", "{}");
+    f.request.headers = {{"Host", "api.example.com"}, {"Content-Type", "application/json"}, {"Content-Length", "13"}, {"X-Key", "it's"}};
+    f.request.body = "{\"user\":\"a\"}";
+    f.request.bodySize = f.request.body.size();
+    using flowexport::Format;
+    const std::string curl = flowexport::render(Format::Curl, f);
+    CHECK(curl.find("curl -X POST 'http://api.example.com/v1/login?x=1'") == 0 && curl.find("'X-Key: it'\\''s'") != std::string::npos &&
+              curl.find("Content-Length") == std::string::npos && curl.find("--data-binary") != std::string::npos,
+          ("cURL: " + curl).c_str());
+    const std::string py = flowexport::render(Format::PythonRequests, f);
+    CHECK(py.find("requests.request(") != std::string::npos && py.find("\"X-Key\": \"it's\"") != std::string::npos &&
+              py.find("data=\"{\\\"user\\\":\\\"a\\\"}\".encode()") != std::string::npos,
+          ("python: " + py).c_str());
+    const std::string js = flowexport::render(Format::Fetch, f);
+    CHECK(js.find("await fetch(\"http://api.example.com/v1/login?x=1\"") != std::string::npos && js.find("method: \"POST\"") != std::string::npos,
+          "fetch");
+    const std::string ps = flowexport::render(Format::PowerShell, f);
+    CHECK(ps.find("Invoke-WebRequest -Uri 'http://api.example.com/v1/login?x=1' -Method POST") != std::string::npos &&
+              ps.find("'it''s'") != std::string::npos && ps.find("-ContentType 'application/json'") != std::string::npos,
+          ("powershell: " + ps).c_str());
+    CHECK(flowexport::render(Format::Httpie, f).find("http POST") != std::string::npos &&
+              flowexport::render(Format::Raw, f).rfind("POST /v1/login?x=1 HTTP/1.1\r\n", 0) == 0,
+          "httpie / raw");
+    flowarchive::Marks marks;
+    marks[5] = {3, "check this"};
+    const std::string har = flowarchive::toHar({f}, &marks);
+    std::vector<TrafficProxy::Flow> back;
+    std::vector<flowarchive::Mark> got;
+    std::string err;
+    CHECK(flowarchive::fromHar(har, back, err, &got) && got.size() == 1 && got[0].color == 3 && got[0].comment == "check this",
+          "highlight and comment saved in HAR");
+}
+
+static void testContentViews2() {
+    std::printf("== content views: JWT, GraphQL, CBOR, DNS, .proto ==\n");
+    // {"alg":"HS256","typ":"JWT"} . {"sub":"42","exp":1700000000}
+    const std::string jwtTok = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0MiIsImV4cCI6MTcwMDAwMDAwMH0.c2lnbmF0dXJl";
+    std::string out;
+    CHECK(contentview::jwt("Bearer " + jwtTok, out) && out.find("\"sub\": \"42\"") != std::string::npos &&
+              out.find("exp = 2023-11-14 22:13:20 UTC  (expired)") != std::string::npos,
+          ("JWT decoded: " + out).c_str());
+    CHECK(contentview::detect(jwtTok, "text/plain") == contentview::View::Jwt, "a bare JWT body is detected");
+    const std::string gql = "{\"operationName\":\"Me\",\"query\":\"query Me { me { id name } }\",\"variables\":{\"a\":1}}";
+    CHECK(contentview::graphql(gql, out) && out.find("operation: Me") != std::string::npos && out.find("me {") != std::string::npos &&
+              out.find("variables:") != std::string::npos && contentview::detect(gql, "application/json") == contentview::View::GraphQL,
+          ("GraphQL: " + out).c_str());
+    // CBOR {"a": [1, -2, "x"], "b": true, "c": 1.5 (half)}
+    const std::string cb = unhex("a3616183012161786162f56163f93e00");
+    CHECK(contentview::cbor(cb, out) && out.find("\"a\": [") != std::string::npos && out.find("-2") != std::string::npos &&
+              out.find("\"x\"") != std::string::npos && out.find("true") != std::string::npos && out.find("1.5") != std::string::npos,
+          ("CBOR: " + out).c_str());
+    // DNS: a query for example.com A, and an answer 93.184.216.34.
+    const std::string q = unhex("abcd01000001000000000000076578616d706c6503636f6d0000010001");
+    const std::string a = unhex("abcd81800001000100000000076578616d706c6503636f6d0000010001c00c000100010000012c00045db8d822");
+    CHECK(contentview::dnsName(q) == "example.com" && contentview::dnsSummary(q) == "A? example.com", "DNS query summary");
+    CHECK(contentview::dnsSummary(a) == "A 93.184.216.34" && contentview::dns(a, out) && out.find("answer: example.com A 93.184.216.34") != std::string::npos,
+          ("DNS answer: " + out).c_str());
+    // AAAA 2606:4700::6810:84e5 (zero groups compressed)
+    const std::string aaaa = unhex("abcd81800001000100000000076578616d706c6503636f6d00001c0001c00c001c00010000012c0010260647000000000000000000681084e5");
+    CHECK(contentview::dnsSummary(aaaa) == "AAAA 2606:4700::6810:84e5", ("IPv6 compressed: " + contentview::dnsSummary(aaaa)).c_str());
+    CHECK(contentview::graphql("{\"query\":\"query { me { id name friends(first: 2) { id } } }\"}", out) &&
+              out.find("    id\n    name\n    friends(first: 2) {") != std::string::npos,
+          ("GraphQL fields one per line: " + out).c_str());
+    TrafficProxy::Flow dnsFlow;
+    dnsFlow.method = "DNS";
+    dnsFlow.transport = "udp";
+    dnsFlow.host = "1.1.1.1";
+    dnsFlow.port = 53;
+    dnsFlow.path = "example.com";
+    CHECK(dnsFlow.url() == "dns://1.1.1.1:53 example.com", ("raw flow URL: " + dnsFlow.url()).c_str());
+    // .proto schema
+    protoschema::Schema schema;
+    std::string err;
+    const std::string proto = R"(syntax = "proto3";
+package shop;
+// a comment
+message Order {
+  enum Status { UNKNOWN = 0; PAID = 2; }
+  message Item { string sku = 1; uint32 qty = 2; }
+  int64 id = 1;
+  Status status = 2;
+  repeated Item items = 3;
+  repeated int32 codes = 4;
+  map<string, int32> tags = 5;
+  oneof payment { string card = 6; sint32 credit = 7; }
+}
+service Shop { rpc Get (Order) returns (Order); }
+)";
+    CHECK(schema.addSource(proto, "shop.proto", err), ("proto parsed: " + err).c_str());
+    CHECK(schema.message("shop.Order") && schema.message("shop.Order.Item") && schema.messageNames().size() == 2, "messages named");
+    // id=5, status=PAID, items {sku:"A1" qty:3}, codes packed [1,2], tags {"k":7}, credit=-3
+    const std::string bytes = unhex("0805" "1002" "1a060a0241311003" "22020102" "2a050a016b1007" "3805");
+    std::string decoded;
+    CHECK(schema.decode(bytes, "shop.Order", decoded) && decoded.find("id: 5") != std::string::npos &&
+              decoded.find("status: PAID") != std::string::npos && decoded.find("sku: \"A1\"") != std::string::npos &&
+              decoded.find("codes: [1, 2]") != std::string::npos && decoded.find("tags[\"k\"]: 7") != std::string::npos &&
+              decoded.find("credit: -3") != std::string::npos,
+          ("schema decode: " + decoded).c_str());
+    const auto rendered = contentview::render(contentview::View::Protobuf, bytes, "application/x-protobuf", &schema, "shop.Order");
+    CHECK(rendered.text.find("status: PAID") != std::string::npos, "the protobuf view uses the schema");
+    CHECK(!schema.addSource("message Broken { int32 x = ", "bad.proto", err) && err.find("bad.proto") != std::string::npos, "proto errors named");
+}
+
+static void testConditionsAndLimits() {
+    std::printf("== network conditions / capture limits ==\n");
+    std::string err;
+    TrafficProxy proxy;
+    proxy.start(0, err);
+    TrafficProxy::Conditions c;
+    c.latencyMs = 300;
+    proxy.setConditions(c);
+    CHECK(proxy.conditions().latencyMs == 300 && proxy.conditions().active(), "conditions set");
+    MiniOrigin origin;
+    origin.start(1);
+    const auto t0 = std::chrono::steady_clock::now();
+    {
+        Socket s;
+        s.connectLoopback(proxy.port(), 2000, err);
+        s.sendAll("GET http://127.0.0.1:" + std::to_string(origin.port) + "/slow HTTP/1.1\r\nHost: x\r\n\r\n");
+        readAllFrom(s);
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    origin.join();
+    CHECK(ms >= 280, ("latency added: " + std::to_string(ms) + " ms").c_str());
+    c = {};
+    c.failPercent = 100;
+    proxy.setConditions(c);
+    {
+        Socket s;
+        s.connectLoopback(proxy.port(), 2000, err);
+        s.sendAll("GET http://127.0.0.1:9/x HTTP/1.1\r\nHost: x\r\n\r\n");
+        CHECK(readAllFrom(s).find("502") != std::string::npos, "dropped connections answer 502");
+    }
+    proxy.setConditions({});
+    // Limits: bodies capped, history trimmed.
+    proxy.setLimits(100, 1024);
+    CHECK(TrafficProxy::maxBody() == 1024 && proxy.maxFlows() == 100, "limits set");
+    std::vector<TrafficProxy::Flow> many(150);
+    proxy.importFlows(many);
+    CHECK(proxy.flows().size() == 100, "history trimmed to the limit");
+    proxy.setLimits(TrafficProxy::kMaxFlows, TrafficProxy::kMaxBody);
+    proxy.stop();
+}
+
+static void testRawStreams() {
+    std::printf("== raw TCP, SOCKS5 UDP, DNS ==\n");
+    std::string err;
+    TrafficProxy proxy;
+    proxy.start(0, err);
+    // A non-TLS protocol through CONNECT: its bytes are kept.
+    Socket echo;
+    echo.listenLoopback(0, err);
+    const int echoPort = echo.localPort();
+    std::thread echoThread([&] {
+        Socket e = echo.accept(5000);
+        char b[256];
+        while (e.valid() && e.waitReadable(2000)) {
+            const long k = e.recvSome(b, sizeof b);
+            if (k <= 0) break;
+            e.sendAll(b, (size_t)k);
+        }
+    });
+    {
+        Socket t;
+        t.connectLoopback(proxy.port(), 2000, err);
+        t.sendAll("CONNECT 127.0.0.1:" + std::to_string(echoPort) + " HTTP/1.1\r\nHost: x\r\n\r\n");
+        char b[256];
+        t.waitReadable(3000) && t.recvSome(b, sizeof b);
+        t.sendAll("HELLO SMTP\r\n");
+        std::string got;
+        while (got.size() < 12 && t.waitReadable(3000)) {
+            const long n = t.recvSome(b, sizeof b);
+            if (n <= 0) break;
+            got.append(b, (size_t)n);
+        }
+        CHECK(got == "HELLO SMTP\r\n", "raw TCP relayed");
+    }
+    echoThread.join();
+    CHECK(waitFlows(proxy, 1), "tcp flow complete");
+    TrafficProxy::Flow tcp;
+    proxy.flow(proxy.flows()[0].id, tcp);
+    CHECK(tcp.transport == "tcp" && tcp.wsFrames.size() >= 2 && tcp.wsFrames[0].preview == "HELLO SMTP\r\n" && !tcp.wsFrames[1].fromClient,
+          "raw TCP bytes kept both ways");
+
+    // SOCKS5 UDP ASSOCIATE to a fake DNS server.
+    UdpSocket dnsServer;
+    CHECK(dnsServer.bind(true, 0, err), "fake DNS server binds");
+    const int dnsPort = dnsServer.localPort();
+    const std::string query = unhex("abcd01000001000000000000076578616d706c6503636f6d0000010001");
+    const std::string answer = unhex("abcd81800001000100000000076578616d706c6503636f6d0000010001c00c000100010000012c00045db8d822");
+    std::thread dnsThread([&] {
+        char b[512];
+        std::string from;
+        int fromPort = 0;
+        if (dnsServer.waitReadable(5000) && dnsServer.recvFrom(b, sizeof b, from, fromPort) > 0) {
+            std::string e;
+            dnsServer.sendTo(from, fromPort, answer.data(), answer.size(), e);
+        }
+    });
+    Socket control;
+    control.connectLoopback(proxy.port(), 2000, err);
+    control.sendAll(std::string("\x05\x01\x00", 3));
+    char b[64];
+    control.waitReadable(3000) && control.recvSome(b, 2);
+    control.sendAll(std::string("\x05\x03\x00\x01\x00\x00\x00\x00\x00\x00", 10));
+    std::string rep;
+    while (rep.size() < 10 && control.waitReadable(3000)) {
+        const long n = control.recvSome(b, sizeof b);
+        if (n <= 0) break;
+        rep.append(b, (size_t)n);
+    }
+    CHECK(rep.size() == 10 && rep[1] == 0, "UDP ASSOCIATE accepted");
+    const int relayPort = ((unsigned char)rep[8] << 8) | (unsigned char)rep[9];
+    UdpSocket client;
+    client.bind(true, 0, err);
+    std::string pkt("\x00\x00\x00\x01\x7f\x00\x00\x01", 8);
+    pkt += (char)(dnsPort >> 8);
+    pkt += (char)(dnsPort & 0xff);
+    pkt += query;
+    CHECK(client.sendTo("127.0.0.1", relayPort, pkt.data(), pkt.size(), err), "datagram sent to the relay");
+    char rb[1024];
+    std::string from;
+    int fromPort = 0;
+    long n = client.waitReadable(3000) ? client.recvFrom(rb, sizeof rb, from, fromPort) : -1;
+    CHECK(n == (long)(10 + answer.size()) && std::string(rb + 10, (size_t)n - 10) == answer, "DNS answer relayed back with the SOCKS header");
+    dnsThread.join();
+    control.shutdownBoth();
+    for (int i = 0; i < 300 && !(proxy.flows().size() >= 2 && proxy.flows().back().complete); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    TrafficProxy::Flow udp;
+    if (proxy.flows().size() >= 2) proxy.flow(proxy.flows()[1].id, udp);
+    // (the fake server is on a non-53 port: a UDP flow; the DNS view still reads it)
+    CHECK(udp.transport == "udp" && udp.wsFrames.size() == 2 && contentview::dnsSummary(udp.wsFrames[1].preview) == "A 93.184.216.34",
+          "UDP flow with both datagrams");
+    proxy.stop();
+}
+
+static std::string h2frame(uint8_t type, uint8_t flags, uint32_t stream, const std::string& payload) {
+    std::string f;
+    f += (char)(payload.size() >> 16), f += (char)(payload.size() >> 8), f += (char)payload.size();
+    f += (char)type, f += (char)flags;
+    f += (char)(stream >> 24), f += (char)(stream >> 16), f += (char)(stream >> 8), f += (char)stream;
+    return f + payload;
+}
+
+static void testH2c() {
+    std::printf("== plain-text HTTP/2 (h2c) ==\n");
+    std::string out;
+    CHECK(http2::huffmanDecode(unhex("f1e3c2e5f23a6ba0ab90f4ff"), out) && out == "www.example.com", "HPACK Huffman (RFC 7541 C.4.1)");
+    http2::HpackDecoder d;
+    http2::Headers h;
+    std::string err;
+    CHECK(d.decode(unhex("828684410f7777772e6578616d706c652e636f6d"), h, err) && h.size() == 4 && h[0].second == "GET" &&
+              h[1].second == "http" && h[2].second == "/" && h[3] == std::make_pair(std::string(":authority"), std::string("www.example.com")),
+          "HPACK request (RFC 7541 C.3.1)");
+    h.clear();
+    // C.3.2: uses the dynamic table entry added above.
+    CHECK(d.decode(unhex("828684be58086e6f2d6361636865"), h, err) && h.size() == 5 && h[3].second == "www.example.com" &&
+              h[4] == std::make_pair(std::string("cache-control"), std::string("no-cache")),
+          "HPACK dynamic table (RFC 7541 C.3.2)");
+
+    // Reverse mode to a fake h2c server.
+    Socket server;
+    server.listenLoopback(0, err);
+    const int serverPort = server.localPort();
+    std::string serverGot;
+    std::thread st([&] {
+        Socket c = server.accept(5000);
+        char b[4096];
+        while (c.valid() && serverGot.find("/grpc.Svc/Call") == std::string::npos && c.waitReadable(3000)) {
+            const long n = c.recvSome(b, sizeof b);
+            if (n <= 0) return;
+            serverGot.append(b, (size_t)n);
+        }
+        // SETTINGS, HEADERS (:status 200, content-type literal), DATA "hello" END_STREAM.
+        std::string hdr = "\x88";  // :status 200 (static 8)
+        hdr += std::string("\x0f\x10", 2) + (char)16 + "application/grpc";  // content-type (31), no indexing
+        c.sendAll(h2frame(4, 0, 0, "") + h2frame(1, 0x4, 1, hdr) + h2frame(0, 0x1, 1, "hello"));
+        c.waitReadable(1000);
+    });
+    TrafficProxy proxy;
+    proxy.start(0, err);
+    TrafficProxy::Mode rev;
+    TrafficProxy::parseReverseTarget("http://127.0.0.1:" + std::to_string(serverPort), rev, err);
+    proxy.setMode(rev);
+    Socket c;
+    c.connectLoopback(proxy.port(), 2000, err);
+    // :method POST (3), :scheme http (6), :path literal, content-type literal; END_HEADERS; then DATA END_STREAM.
+    std::string req = "\x83\x86";
+    req += std::string("\x04", 1) + (char)14 + "/grpc.Svc/Call";
+    std::string body = std::string("\x00\x00\x00\x00\x02\x08\x01", 7);
+    c.sendAll(std::string(http2::kPreface, http2::kPrefaceLen) + h2frame(4, 0, 0, "") + h2frame(1, 0x4, 1, req) + h2frame(0, 0x1, 1, body));
+    std::string got;
+    char b[4096];
+    while (got.find("hello") == std::string::npos && c.waitReadable(3000)) {
+        const long n = c.recvSome(b, sizeof b);
+        if (n <= 0) break;
+        got.append(b, (size_t)n);
+    }
+    CHECK(got.find("hello") != std::string::npos, "h2c relayed both ways");
+    CHECK(serverGot.rfind(std::string(http2::kPreface, http2::kPrefaceLen), 0) == 0, "the preface reached the server unchanged");
+    c.shutdownBoth();
+    st.join();
+    TrafficProxy::Flow stream;
+    for (int i = 0; i < 300; ++i) {
+        for (const auto& f : proxy.flows())
+            if (f.alpn == "h2c" && f.method == "POST" && f.complete) proxy.flow(f.id, stream);
+        if (stream.id) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(stream.id && stream.path == "/grpc.Svc/Call" && stream.status == 200 && stream.response.body == "hello" &&
+              stream.request.body == body && stream.response.header("content-type") == "application/grpc",
+          "the h2c stream is listed as a request with its bodies");
+    proxy.stop();
+}
+
+static void testScripts2() {
+    std::printf("== traffic scripts: several, websocket_message, error ==\n");
+    if (proc::run({"python", "--version"}, 10000).exitCode != 0) {
+        std::printf("  (no python on PATH: skipped)\n");
+        return;
+    }
+    const fs::path dir = fs::temp_directory_path() / "apkspy-scripts2";
+    fs::create_directories(dir);
+    std::ofstream(dir / "a.py", std::ios::binary) << "def request(flow):\n    flow.request.headers['X-Order'] = 'a'\n";
+    std::ofstream(dir / "b.py", std::ios::binary)
+        << "from apkspy_addon import ctx\n"
+           "def request(flow):\n    flow.request.headers['X-Order'] = flow.request.headers.get('X-Order', '') + 'b'\n"
+           "def websocket_message(flow):\n    m = flow.websocket.messages[-1]\n"
+           "    if m.from_client and m.text == 'py':\n        m.text = 'from python'\n"
+           "def error(flow):\n    ctx.log('failed:', flow.request.path, flow.error)\n";
+    auto host = std::make_shared<trafficscript::Host>();
+    std::string err;
+    CHECK(host->start("python", {pathutil::toUtf8(dir / "a.py"), pathutil::toUtf8(dir / "b.py")}, pathutil::toUtf8(dir / "support"), err) &&
+              host->hasRequestHook() && host->hasWebSocketHook() && host->hasErrorHook(),
+          ("two scripts loaded: " + err).c_str());
+    TrafficProxy proxy;
+    proxy.start(0, err);
+    proxy.setHooks(host);
+    MiniOrigin origin;
+    origin.start(1);
+    {
+        Socket c;
+        c.connectLoopback(proxy.port(), 2000, err);
+        c.sendAll("GET http://127.0.0.1:" + std::to_string(origin.port) + "/x HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(origin.port) + "\r\n\r\n");
+        readAllFrom(c, 8000);
+    }
+    origin.join();
+    CHECK(!origin.seen.empty() && origin.seen[0].find("X-Order: ab") != std::string::npos, "hooks ran in script order");
+    // websocket_message
+    WsOrigin ws;
+    ws.start();
+    Socket c;
+    c.connectLoopback(proxy.port(), 2000, err);
+    c.sendAll("GET http://127.0.0.1:" + std::to_string(ws.port) + "/ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+    std::string buf;
+    char chunk[4096];
+    while (buf.find("\r\n\r\n") == std::string::npos && c.waitReadable(3000)) {
+        const long n = c.recvSome(chunk, sizeof chunk);
+        if (n <= 0) break;
+        buf.append(chunk, (size_t)n);
+    }
+    buf.erase(0, buf.find("\r\n\r\n") + 4);
+    c.sendAll(TrafficProxy::wsFrame(1, "py", true));
+    std::string payload;
+    CHECK(readServerFrame(c, buf, payload) && payload == "echo:from python", "websocket_message() rewrote a message");
+    c.sendAll(TrafficProxy::wsFrame(8, "", true));
+    c.shutdownBoth();
+    ws.join();
+    // error()
+    {
+        Socket e;
+        e.connectLoopback(proxy.port(), 2000, err);
+        e.sendAll("GET http://127.0.0.1:9/nowhere HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n");
+        readAllFrom(e, 8000);
+    }
+    bool logged = false;
+    for (int i = 0; i < 150 && !logged; ++i) {
+        for (const auto& l : host->takeLog()) logged |= l.find("failed: /nowhere") != std::string::npos;
+        if (!logged) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    CHECK(logged, "error() called for a failed flow");
+    proxy.stop();
+    host->stop();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
     // `--write-sample <dir>`: writes sample.apk + sample.apkspy (the
     // synthetic inputs used above) for manual / smoke testing of the app.
@@ -2080,7 +4205,28 @@ int main(int argc, char** argv) {
     testHttpClient();
     testIntercept();
     testMatchReplace();
+    testCaAndCertificates();
+    testTlsHandshake();
+    testHttpsInterception();
+    testHttpsInterceptAndRules();
+    testWebSocketCapture();
+    testRepeaterHttps();
     testTextDiff();
+    testContentViews();
+    testFlowFilters();
+    testFlowArchive();
+    testProxyModes();
+    testProxyHooks();
+    testTrafficScripts();
+    testBodyDecoders();
+    testWebSocketTools();
+    testRoutingAndReplay();
+    testExportsAndMarks();
+    testContentViews2();
+    testConditionsAndLimits();
+    testRawStreams();
+    testH2c();
+    testScripts2();
     testMcpToolsEndToEnd();
     std::printf("\n%d passed, %d failed\n", passes, failures);
     return failures ? 1 : 0;

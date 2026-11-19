@@ -2,9 +2,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include "app/Icons.hpp"
 #include "core/TextUtils.hpp"
 #include "ui/McpSettings.hpp"
+#include "ui/TrafficCommon.hpp"
 #include "ui/UiUtil.hpp"
 
 namespace {
@@ -81,6 +83,16 @@ void SettingsDialog::open() {
     std::snprintf(pythonPath_, sizeof pythonPath_, "%s", settings_.getString(Settings::kPythonPath, "python").c_str());
     std::snprintf(terminalShell_, sizeof terminalShell_, "%s", settings_.getString(Settings::kTerminalShell, "").c_str());
     trafficPort_ = settings_.getInt(Settings::kTrafficPort, 8899);
+    interceptHttps_ = settings_.getBool(Settings::kTrafficInterceptHttps, true);
+    verifyUpstream_ = settings_.getBool(Settings::kTrafficVerifyUpstream, true);
+    proxyMode_ = settings_.getString(Settings::kTrafficMode, "regular") == "reverse" ? 1 : 0;
+    std::snprintf(reverseTarget_, sizeof reverseTarget_, "%s", settings_.getString(Settings::kTrafficReverseTarget, "").c_str());
+    std::snprintf(upstreamProxy_, sizeof upstreamProxy_, "%s", settings_.getString(Settings::kTrafficUpstream, "").c_str());
+    std::snprintf(upstreamAuth_, sizeof upstreamAuth_, "%s", settings_.getString(Settings::kTrafficUpstreamAuth, "").c_str());
+    modeStatus_.clear();
+    maxFlows_ = settings_.getInt(Settings::kTrafficMaxFlows, 5000);
+    maxBodyKb_ = settings_.getInt(Settings::kTrafficMaxBodyKb, 2048);
+    caStatus_.clear();
     adbTestResult_.clear();
     themeAtOpen_ = Theme::state();
     zoomAtOpen_ = getZoom_ ? getZoom_() : 1.f;
@@ -105,6 +117,27 @@ void SettingsDialog::commit() {
     settings_.set(Settings::kPythonPath, std::string(pythonPath_));
     settings_.set(Settings::kTerminalShell, std::string(terminalShell_));
     settings_.set(Settings::kTrafficPort, trafficPort_);
+    settings_.set(Settings::kTrafficInterceptHttps, interceptHttps_);
+    settings_.set(Settings::kTrafficVerifyUpstream, verifyUpstream_);
+    settings_.set(Settings::kTrafficMode, proxyMode_ == 1 ? "reverse" : "regular");
+    settings_.set(Settings::kTrafficReverseTarget, std::string(reverseTarget_));
+    settings_.set(Settings::kTrafficUpstream, std::string(upstreamProxy_));
+    settings_.set(Settings::kTrafficUpstreamAuth, std::string(upstreamAuth_));
+    settings_.set(Settings::kTrafficMaxFlows, maxFlows_);
+    settings_.set(Settings::kTrafficMaxBodyKb, maxBodyKb_);
+    devices_.traffic().setLimits(static_cast<size_t>(maxFlows_), static_cast<size_t>(maxBodyKb_) * 1024);
+    {
+        // New connections use the new mode at once (a running capture included).
+        TrafficProxy::Mode mode;
+        std::string error;
+        modeStatus_ = trafficui::modeFromSettings(settings_, mode, error) ? std::string() : error;
+        if (modeStatus_.empty()) devices_.traffic().setMode(mode);
+    }
+    {
+        std::string error;
+        if (!devices_.setTlsInterception(interceptHttps_, error)) caStatus_ = error;
+        devices_.setUpstreamVerification(verifyUpstream_);
+    }
     Theme::save(settings_);
     devices_.refreshDevices();
     // The applied appearance is the new baseline for Cancel.
@@ -414,6 +447,108 @@ void SettingsDialog::drawNetworkPage() {
     ImGui::InputInt("##trafficport", &trafficPort_, 0, 0);
     trafficPort_ = std::clamp(trafficPort_, 1024, 65535);
     hint("The local port the capture proxy listens on. The Traffic panel routes the device to it over adb.");
+
+    section("Capture limits");
+    ImGui::SetNextItemWidth(ui::em(8.f));
+    ImGui::InputInt("requests kept", &maxFlows_, 1000, 10000);
+    maxFlows_ = std::clamp(maxFlows_, 100, 1000000);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(ui::em(8.f));
+    ImGui::InputInt("KB per body", &maxBodyKb_, 512, 4096);
+    maxBodyKb_ = std::clamp(maxBodyKb_, 1, 1024 * 1024);
+    hint("The oldest requests are dropped past the first number; bodies are kept up to the second (the traffic itself "
+         "always passes whole). Large values use a lot of memory.");
+
+    section("Proxy mode");
+    ImGui::RadioButton("Regular", &proxyMode_, 0);
+    ImGui::SameLine();
+    ImGui::RadioButton("Reverse", &proxyMode_, 1);
+    if (proxyMode_ == 0) {
+        hint("An HTTP proxy (plain requests and CONNECT tunnels); SOCKS5 clients are recognised on the same port. "
+             "Start capture sets it as the device's global proxy.");
+    } else {
+        ImGui::SetNextItemWidth(-1.f);
+        ImGui::InputTextWithHint("##reverse", "https://api.example.com", reverseTarget_, sizeof reverseTarget_);
+        hint("Every request is sent to this server, whatever the app asked for (its Host header is rewritten). Point "
+             "the app at http://localhost:<port> - Start capture only adds the adb reverse mapping and leaves the "
+             "device's proxy setting alone. An https:// target is reached over TLS, verified like any upstream.");
+    }
+
+    section("Upstream proxy");
+    ImGui::SetNextItemWidth(ui::em(16.f));
+    ImGui::InputTextWithHint("##upstream", "host:port (empty = direct)", upstreamProxy_, sizeof upstreamProxy_);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1.f);
+    ImGui::InputTextWithHint("##upauth", "user:password (optional)", upstreamAuth_, sizeof upstreamAuth_,
+                             ImGuiInputTextFlags_Password);
+    hint("Chain every outgoing connection through another HTTP proxy (a corporate proxy, Burp, mitmproxy...): "
+         "tunnels and HTTPS go through CONNECT, plain HTTP is forwarded in absolute form. Credentials are sent as "
+         "Proxy-Authorization: Basic and stored in the settings file.");
+    if (!modeStatus_.empty()) ImGui::TextColored(trafficui::kWarn, "%s", modeStatus_.c_str());
+
+    section("HTTPS interception");
+    ImGui::Checkbox("Decrypt HTTPS (CONNECT) with ApkSpy's certificate authority", &interceptHttps_);
+    hint("On: the proxy terminates the app's TLS with a per-host certificate signed by ApkSpy's CA and shows the "
+         "decrypted requests like any other. Off: HTTPS connections are relayed as blind tunnels. The apps must "
+         "trust the CA - see the Traffic panel's 'HTTPS & certificates' to install it on a device.");
+    ImGui::Checkbox("Verify upstream servers' certificates", &verifyUpstream_);
+    hint("The proxy checks every origin server's certificate against the bundled Mozilla root store (assets/"
+         "cacert.pem). Turn it off only for test setups; each unverified connection is marked in the flow.");
+    ImGui::Spacing();
+
+    // The certificate authority itself. These actions apply immediately (like
+    // the AI page's controls); OK / Cancel do not roll them back.
+    section("ApkSpy certificate authority");
+    ca::Store* ca = devices_.ca();
+    if (!ca || !ca->ready()) {
+        ImGui::TextWrapped("No CA loaded: HTTPS interception is off. Tick the box above and apply to generate one "
+                           "(first use creates it in the ApkSpy config directory).");
+    } else {
+        const long long left = ca->ca()->secondsUntilExpiry();
+        char buf[256];
+        std::snprintf(buf, sizeof buf, "%s\nSHA-256 %s\nvalid %s to %s (%.1f years left)", ca->ca()->subject().c_str(),
+                      ca->ca()->sha256Fingerprint().c_str(), ca->ca()->notBefore().c_str(), ca->ca()->notAfter().c_str(),
+                      left / (365.0 * 24 * 3600));
+        ImGui::PushTextWrapPos(0.f);
+        ImGui::TextUnformatted(buf);
+        ImGui::PopTextWrapPos();
+        if (left <= 0) hint("The CA has expired - regenerate it and install the new certificate on the device.");
+        if (ImGui::Button("Export PEM")) caExport_.open(FileBrowser::Mode::SaveFile), caExport_.setDefaultName("apkspy-ca.pem");
+        ImGui::SameLine();
+        if (ImGui::Button("Export CER (DER)"))
+            caExport_.open(FileBrowser::Mode::SaveFile), caExport_.setDefaultName("apkspy-ca.cer");
+        ImGui::SameLine();
+        if (ImGui::Button("Regenerate...")) ImGui::OpenPopup("##caregen");
+        if (ImGui::BeginPopup("##caregen")) {
+            ImGui::TextWrapped("A new CA replaces the current one everywhere at once. Devices that trusted the old "
+                               "certificate must get the new one before HTTPS can be captured there again. The old "
+                               "CA's private key is overwritten.");
+            if (ui::smallButton("Regenerate now")) {
+                std::string error;
+                caStatus_ = devices_.regenerateCa(error) ? "A new CA was generated." : ("Regeneration failed: " + error);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ui::smallButton("Cancel")) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+        hint("The private key stays in the ApkSpy config directory (apkspy-ca.key) and is never part of an export.");
+    }
+    caExport_.render();
+    {
+        std::string path;
+        if (caExport_.takeAccepted(path)) {
+            ca::Store* store = devices_.ca();
+            if (store) {
+                const bool der = path.size() > 4 && tex::asciiIEqual(path.substr(path.size() - 4), ".cer");
+                const std::string bytes = der ? store->caDer() : store->caPem();
+                std::ofstream out(path, std::ios::binary | std::ios::trunc);
+                out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+                caStatus_ = out.good() ? ("Certificate exported to " + path) : ("Could not write " + path);
+            }
+        }
+    }
+    if (!caStatus_.empty()) hint(caStatus_.c_str());
 }
 
 // ---- Terminal & Scripts -------------------------------------------------------------

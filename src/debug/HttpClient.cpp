@@ -5,15 +5,6 @@
 #include "core/Socket.hpp"
 #include "core/TextUtils.hpp"
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <winhttp.h>
-#pragma comment(lib, "winhttp.lib")
-#endif
-
 namespace httpclient {
 
 namespace {
@@ -51,7 +42,7 @@ bool split(const std::string& prepared, Parts& p) {
 
 }  // namespace
 
-bool readResponse(Socket& s, const std::string& method, Result& r, int timeoutMs, const std::atomic<bool>* cancel) {
+bool readResponse(net::Stream& s, const std::string& method, Result& r, int timeoutMs, const std::atomic<bool>* cancel) {
     std::string buf;
     char chunk[16384];
     bool closed = false;
@@ -147,6 +138,11 @@ bool readResponse(Socket& s, const std::string& method, Result& r, int timeoutMs
     return true;
 }
 
+bool readResponse(Socket& sock, const std::string& method, Result& r, int timeoutMs, const std::atomic<bool>* cancel) {
+    net::PlainStream s(sock);
+    return readResponse(s, method, r, timeoutMs, cancel);
+}
+
 std::string rawMessage(const TrafficProxy::Message& m) {
     std::string out = m.startLine + "\r\n";
     for (const auto& [name, value] : m.headers) out += name + ": " + value + "\r\n";
@@ -176,133 +172,42 @@ Result sendPlain(const Target& t, const std::string& prepared, const std::string
     return r;
 }
 
-#ifdef _WIN32
-std::wstring wide(const std::string& s) {
-    if (s.empty()) return {};
-    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
-    std::wstring w(static_cast<size_t>(n), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
-    return w;
-}
-
-std::string narrow(const std::wstring& w) {
-    if (w.empty()) return {};
-    const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
-    std::string s(static_cast<size_t>(n), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), s.data(), n, nullptr, nullptr);
-    return s;
-}
-
-std::string winhttpError(DWORD code) {
-    switch (code) {
-    case ERROR_WINHTTP_SECURE_FAILURE:
-    case ERROR_WINHTTP_SECURE_INVALID_CA:
-    case ERROR_WINHTTP_SECURE_CERT_CN_INVALID:
-    case ERROR_WINHTTP_SECURE_CERT_DATE_INVALID:
-        return "the server's certificate is not trusted (tick Ignore certificate errors to send anyway)";
-    case ERROR_WINHTTP_NAME_NOT_RESOLVED: return "the host name could not be resolved";
-    case ERROR_WINHTTP_CANNOT_CONNECT: return "could not connect to the server";
-    case ERROR_WINHTTP_TIMEOUT: return "timed out waiting for the server";
-    case ERROR_WINHTTP_CONNECTION_ERROR: return "the connection was reset (is the port really HTTPS?)";
-    case ERROR_WINHTTP_INVALID_SERVER_RESPONSE: return "the server's answer is not valid HTTP";
-    default: break;
-    }
-    wchar_t* text = nullptr;
-    FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_HMODULE | FORMAT_MESSAGE_IGNORE_INSERTS,
-                   GetModuleHandleW(L"winhttp.dll"), code, 0, reinterpret_cast<wchar_t*>(&text), 0, nullptr);
-    std::string msg = text ? narrow(text) : std::string();
-    if (text) LocalFree(text);
-    while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r' || msg.back() == ' ' || msg.back() == '.')) msg.pop_back();
-    return msg.empty() ? "WinHTTP error " + std::to_string(code) : msg + " (" + std::to_string(code) + ")";
-}
-
-struct Handle {
-    HINTERNET h = nullptr;
-    ~Handle() {
-        if (h) WinHttpCloseHandle(h);
-    }
-};
-
-Result sendTls(const Target& t, const std::string& prepared, const Options& o, const std::atomic<bool>* cancel) {
+// HTTPS through the bundled mbedTLS: a plain TCP connection, a TLS handshake
+// (SNI + certificate verification against the roots, or explicitly not, for
+// this one send only), then the same request/response handling as plain HTTP.
+Result sendTls(const Target& t, const std::string& prepared, const Parts& p, const Options& o,
+               const std::atomic<bool>* cancel) {
     Result r;
     r.sent = prepared;
     const auto t0 = Clock::now();
-    Parts p;
-    if (!split(prepared, p)) return r.error = "the request has no start line", r;
-    const auto fail = [&](const char* what) {
-        r.error = std::string(what) + ": " + winhttpError(GetLastError());
+    Socket s;
+    std::string error;
+    if (!Socket::initNetworking() || !s.connectHost(t.host, t.port, std::min(o.timeoutMs, 15000), error)) {
+        r.error = "could not connect to " + t.label() + (error.empty() ? "" : ": " + error);
+        return r;
+    }
+    tls::Connection tls;
+    std::shared_ptr<tls::TrustStore> defaultRoots;
+    const tls::TrustStore* roots = o.roots;
+    if (!roots && !o.ignoreCertErrors) {
+        defaultRoots = tls::defaultTrustStore(error);
+        roots = defaultRoots.get();
+    }
+    if (!tls.connect(s, t.host, roots, !o.ignoreCertErrors, std::min(o.timeoutMs, 15000), error)) {
+        r.error = error;
         r.ms = msSince(t0);
         return r;
-    };
-    Handle session, connect, request;
-    session.h = WinHttpOpen(L"ApkSpy-Repeater", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session.h) return fail("WinHTTP");
-    WinHttpSetTimeouts(session.h, o.timeoutMs, std::min(o.timeoutMs, 15000), o.timeoutMs, o.timeoutMs);
-    connect.h = WinHttpConnect(session.h, wide(t.host).c_str(), static_cast<INTERNET_PORT>(t.port), 0);
-    if (!connect.h) return fail("connect");
-    const std::wstring version = wide(p.version);
-    request.h = WinHttpOpenRequest(connect.h, wide(p.method).c_str(), wide(p.target).c_str(), version.c_str(), WINHTTP_NO_REFERER,
-                                   WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE | WINHTTP_FLAG_ESCAPE_DISABLE |
-                                                                    WINHTTP_FLAG_ESCAPE_DISABLE_QUERY);
-    if (!request.h) return fail("request");
-    // One send, as typed: no redirects, cookies or automatic sign-in.
-    DWORD disable = WINHTTP_DISABLE_REDIRECTS | WINHTTP_DISABLE_COOKIES | WINHTTP_DISABLE_AUTHENTICATION;
-    WinHttpSetOption(request.h, WINHTTP_OPTION_DISABLE_FEATURE, &disable, sizeof disable);
-    if (o.ignoreCertErrors) {
-        DWORD flags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID | SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
-                      SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
-        WinHttpSetOption(request.h, WINHTTP_OPTION_SECURITY_FLAGS, &flags, sizeof flags);
     }
-    std::string headers;
-    for (const auto& [name, value] : p.headers) {
-        // WinHTTP frames the body itself.
-        if (tex::asciiIEqual(name, "content-length") || tex::asciiIEqual(name, "transfer-encoding")) continue;
-        headers += name + ": " + value + "\r\n";
+    net::TlsStream stream(s, tls);
+    if (!stream.sendAll(prepared)) {
+        r.error = "the connection closed while sending";
+        return r;
     }
-    const std::wstring wheaders = wide(headers);
-    if (!WinHttpSendRequest(request.h, wheaders.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : wheaders.c_str(),
-                            static_cast<DWORD>(wheaders.size()), p.body.empty() ? WINHTTP_NO_REQUEST_DATA : p.body.data(),
-                            static_cast<DWORD>(p.body.size()), static_cast<DWORD>(p.body.size()), 0))
-        return fail("send");
-    if (!WinHttpReceiveResponse(request.h, nullptr)) return fail("receive");
-    DWORD size = 0;
-    WinHttpQueryHeaders(request.h, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, nullptr, &size, WINHTTP_NO_HEADER_INDEX);
-    std::wstring raw(size / sizeof(wchar_t), L'\0');
-    if (!WinHttpQueryHeaders(request.h, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, raw.data(), &size, WINHTTP_NO_HEADER_INDEX))
-        return fail("headers");
-    raw.resize(size / sizeof(wchar_t));
-    TrafficProxy::parseHead(narrow(raw), r.response);
-    // WinHTTP removes the chunk framing: drop the header so the body reads as plain.
-    bool dechunked = false;
-    for (auto it = r.response.headers.begin(); it != r.response.headers.end();)
-        if (tex::asciiIEqual(it->first, "transfer-encoding")) it = r.response.headers.erase(it), dechunked = true;
-        else ++it;
-    r.status = std::atoi(r.response.startLine.c_str() + std::min<size_t>(9, r.response.startLine.size()));
-    std::string body;
-    for (;;) {
-        if (cancel && cancel->load()) return r.error = "cancelled", r.ms = msSince(t0), r;
-        DWORD avail = 0;
-        if (!WinHttpQueryDataAvailable(request.h, &avail)) return fail("read");
-        if (avail == 0) break;
-        const size_t at = body.size();
-        body.resize(at + avail);
-        DWORD got = 0;
-        if (!WinHttpReadData(request.h, body.data() + at, avail, &got)) return fail("read");
-        body.resize(at + got);
-        if (body.size() >= kMaxBody) {
-            r.response.truncated = true;
-            body.resize(kMaxBody);
-            break;
-        }
-    }
-    r.response.bodySize = body.size();
-    r.response.body = std::move(body);
-    r.note = dechunked ? "sent through WinHTTP; it removed the chunked framing" : "sent through WinHTTP";
+    r.ok = readResponse(stream, p.method, r, o.timeoutMs, cancel);
     r.ms = msSince(t0);
-    r.ok = true;
+    if (r.ok) r.note = std::string("sent over ") + tls.version();
     return r;
 }
-#endif
 
 }  // namespace
 
@@ -404,12 +309,9 @@ Result send(const Target& target, std::string_view typed, const Options& options
     if (prepared.empty()) return r.error = "the request is empty", r;
     const std::string method = prepared.substr(0, prepared.find(' '));
     if (target.https) {
-#ifdef _WIN32
-        return sendTls(target, prepared, options, cancel);
-#else
-        r.error = "sending HTTPS needs the Windows build (WinHTTP)";
-        return r;
-#endif
+        Parts p;
+        if (!split(prepared, p)) return r.error = "the request has no start line", r;
+        return sendTls(target, prepared, p, options, cancel);
     }
     return sendPlain(target, prepared, method, options, cancel);
 }

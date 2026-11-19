@@ -37,6 +37,7 @@ struct ApkInfo {
     std::string appLabelRef;  // "@string/app_name" when appLabel was resolved from resources.arsc
     bool debuggable = false;
     bool allowBackup = false;
+    std::string networkSecurityConfig;  // android:networkSecurityConfig ("@xml/..."), "" when absent
     std::vector<std::string> permissions;  // uses-permission android:name values
     std::vector<ApkComponent> components;
     std::vector<ApkSigningInfo> signatures;

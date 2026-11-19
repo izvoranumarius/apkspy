@@ -76,6 +76,17 @@ private:
 
     FileBrowser jadxBrowser_;
     FileBrowser adbBrowser_;
+    FileBrowser caExport_;
+    bool interceptHttps_ = true;
+    bool verifyUpstream_ = true;
+    int proxyMode_ = 0;              // 0 regular, 1 reverse
+    int maxFlows_ = 5000;
+    int maxBodyKb_ = 2048;
+    char reverseTarget_[512] = {};
+    char upstreamProxy_[512] = {};
+    char upstreamAuth_[256] = {};
+    std::string modeStatus_;         // why the mode could not be applied
+    std::string caStatus_;  // last CA action's outcome (settings dialog)
     std::future<std::string> adbTest_;
     std::string adbTestResult_;
 };

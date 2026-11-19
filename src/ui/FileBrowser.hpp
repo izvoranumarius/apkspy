@@ -15,7 +15,8 @@ public:
         SaveProject,    // new .apkspy project file (name input)
         SaveFile,       // export target: single file, any name (M5)
         SelectFolder,   // export target: an existing directory (M5)
-        SelectExecutable
+        SelectExecutable,
+        OpenFile        // any existing file (sessions, scripts)
     };
 
     void open(Mode mode);

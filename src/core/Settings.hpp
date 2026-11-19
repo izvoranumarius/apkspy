@@ -37,6 +37,23 @@ public:
     static constexpr const char* kTerminalShell = "terminal.shell";  // "" = PowerShell / $SHELL
     static constexpr const char* kTrafficPort = "traffic.port";
     static constexpr const char* kTrafficRules = "traffic.rules";  // match & replace rules (JSON)
+    // HTTPS interception: decrypt CONNECT tunnels with ApkSpy's own CA
+    // (on by default; without it, tunnels are relayed blind as before).
+    static constexpr const char* kTrafficInterceptHttps = "traffic.interceptHttps";
+    // Verify upstream servers' certificates against the bundled root store.
+    static constexpr const char* kTrafficVerifyUpstream = "traffic.verifyUpstream";
+    // Proxy mode: "regular" (HTTP proxy + CONNECT, SOCKS5 on the same port)
+    // or "reverse" (every request goes to traffic.reverseTarget).
+    static constexpr const char* kTrafficMode = "traffic.mode";
+    static constexpr const char* kTrafficReverseTarget = "traffic.reverseTarget";  // "https://api.example.com"
+    static constexpr const char* kTrafficUpstream = "traffic.upstream";            // "host:port", "" = direct
+    static constexpr const char* kTrafficUpstreamAuth = "traffic.upstreamAuth";    // "user:password"
+    static constexpr const char* kTrafficScript = "traffic.script";                // last loaded traffic scripts ('|'-separated)
+    static constexpr const char* kTrafficRouting = "traffic.routing";              // ignore / allow hosts, map local / remote (JSON)
+    static constexpr const char* kTrafficConditions = "traffic.conditions";        // network conditions (JSON)
+    static constexpr const char* kTrafficMaxFlows = "traffic.maxFlows";
+    static constexpr const char* kTrafficProtoDir = "traffic.protoDir";  // .proto files for the protobuf views
+    static constexpr const char* kTrafficMaxBodyKb = "traffic.maxBodyKb";
     static constexpr const char* kFullCjkFonts = "ui.fullCjkFonts";
     static constexpr const char* kUiZoomPercent = "ui.zoomPercent";  // text / UI zoom, 100 = default
     static constexpr const char* kMcpPort = "mcp.port";

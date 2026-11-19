@@ -12,7 +12,9 @@
 #include <vector>
 #include "core/Process.hpp"
 #include "debug/Adb.hpp"
+#include "debug/CaStore.hpp"
 #include "debug/Jdwp.hpp"
+#include "debug/Tls.hpp"
 #include "debug/TrafficProxy.hpp"
 
 // A worker thread with a FIFO of jobs. Used so device round-trips (adb
@@ -220,6 +222,18 @@ public:
     DebugSession& debugger() { return debugger_; }
     // Network traffic sniffer (proxy the device is routed through).
     TrafficProxy& traffic() { return traffic_; }
+
+    // HTTPS interception: ApkSpy's CA, generated on first run and kept in the
+    // user config directory, signs a certificate per host so the proxy can
+    // decrypt the traffic of apps that trust it.
+    bool enableTlsInterception(std::string& error);  // loads or generates the CA
+    // On/off in one call (Settings); off returns the proxy to blind tunnels.
+    bool setTlsInterception(bool enabled, std::string& error);
+    ca::Store* ca() { return ca_.get(); }            // null while disabled
+    bool regenerateCa(std::string& error);           // a brand new CA
+    // Upstream server verification (on by default; the flag is the user's
+    // explicit choice from Settings).
+    void setUpstreamVerification(bool verify);
     // Stops the proxy and restores the routed device's proxy setting.
     void stopTraffic();
 
@@ -262,4 +276,5 @@ private:
 
     DebugSession debugger_;
     TrafficProxy traffic_;
+    std::shared_ptr<ca::Store> ca_;  // the CA shared with the proxy
 };

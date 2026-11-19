@@ -66,6 +66,8 @@ ApkSpy/
 │   ├── glfw/             GLFW 3.4 headers (GLFW/) used by the MSVC build
 │   ├── miniz/            miniz 3.0.2 headers
 │   ├── libwebp/          libwebp 1.5.0 headers (the internal src/**/*.h are part of it)
+│   ├── brotli/           brotli 1.1.0 public headers (brotli/decode.h)
+│   ├── zstd/             zstd 1.5.6 public headers
 │   └── stb/              stb_image (header-only)
 ├── tests/                headless tests (core logic, analysis/MCP/devices, ImGui regressions)
 │                         + ApkSpyTests.vcxproj (Windows build of the portable suite)
@@ -73,6 +75,8 @@ ApkSpy/
 │   ├── imgui/            Dear ImGui .cpp sources (+ backends/)
 │   ├── glfw/             Windows x64 static library (lib-vc2022/glfw3.lib)
 │   ├── miniz/            miniz .c sources
+│   ├── brotli/           brotli decoder sources (common/, dec/; MIT)
+│   ├── zstd/             zstd decompression sources (common/, decompress/; BSD)
 │   └── libwebp/          libwebp .c sources (dec/dsp/utils)
 ├── build/                build output (ignored by version control)
 ├── Makefile              Linux and macOS build (+ `make test`)
@@ -104,7 +108,10 @@ factor that grows with the size of open files.
 
 ## Third-party code
 
-Dear ImGui, GLFW, miniz, libwebp, stb and miniaudio (0.11.25, with its copy of
-stb_vorbis, in `include/miniaudio`) are included in `include/` and `lib/`, each
-under its own license. jadx, adb and Python are separate tools that you
+Dear ImGui, GLFW, miniz, libwebp, stb, miniaudio (0.11.25, with its copy of
+stb_vorbis, in `include/miniaudio`), mbedTLS, and the brotli (1.1.0, MIT) and
+zstd (1.5.6, BSD; decompression only, built with `ZSTD_DISABLE_ASM`) decoders
+are included in `include/` and `lib/`, each under its own license (see the
+LICENSE file in each `lib/` folder). The HPACK tables in `src/debug/Http2.cpp`
+were generated from the text of RFC 7541. jadx, adb and Python are separate tools that you
 install yourself.
