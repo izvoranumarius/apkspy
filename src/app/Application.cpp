@@ -13,12 +13,14 @@
 #include "imgui_internal.h"
 #include "ui/AnalysisPanel.hpp"
 #include "ui/DevicePanels.hpp"
+#include "ui/FridaPanel.hpp"
 #include "ui/EditorPanel.hpp"
 #include "ui/ExplorerPanel.hpp"
 #include "ui/McpSettings.hpp"
 #include "ui/BookmarksPanel.hpp"
 #include "ui/EditsPanel.hpp"
 #include "ui/InsightsPanel.hpp"
+#include "ui/RepackPanel.hpp"
 #include "ui/ScriptPanel.hpp"
 #include "ui/TrafficPanel.hpp"
 #include "ui/TrafficCommon.hpp"
@@ -99,15 +101,17 @@ Application::Application()
     panels_.push_back(std::make_unique<FunctionPanel>(workspace_, *analysisPanel_));
     panels_.push_back(std::make_unique<ReferencesPanel>(workspace_, *analysisPanel_));
     panels_.push_back(std::make_unique<DecompilerPanel>(workspace_, *analysisPanel_));
-    panels_.push_back(std::make_unique<DevicesPanel>(workspace_, devices_, show));
+    panels_.push_back(std::make_unique<DevicesPanel>(workspace_, devices_, settings_, show));
     auto debugger = std::make_unique<DebuggerPanel>(workspace_, devices_);
     debuggerPanel_ = debugger.get();
     panels_.push_back(std::move(debugger));
     panels_.push_back(std::make_unique<LogcatPanel>(workspace_, devices_));
+    panels_.push_back(std::make_unique<FridaPanel>(workspace_, devices_));
     panels_.push_back(std::make_unique<TrafficPanel>(workspace_, devices_, settings_));
     panels_.push_back(std::make_unique<BookmarksPanel>(workspace_, show));
     panels_.push_back(std::make_unique<EditsPanel>(workspace_));
     panels_.push_back(std::make_unique<InsightsPanel>(workspace_, show));
+    panels_.push_back(std::make_unique<RepackPanel>(workspace_, settings_));
     mcpSettings_ = std::make_unique<McpSettings>(workspace_, settings_, *mcp_);
     settingsDialog_.setMcp(mcpSettings_.get());
     settingsDialog_.setZoomControl([this] { return zoomTarget(); }, [this](float zoom) { setZoom(zoom); });
@@ -994,8 +998,8 @@ void Application::drawDockHost() {
 void Application::initPerspectives() {
     perspectives_ = {
         {"Code", "Browse the APK, read and search the sources", "Editor", {"Explorer", "Overview", "Editor", "Search", "Bookmarks", "Edits", "Output", "Terminal", "Decoder"}, {}},
-        {"Analysis", "Classes, native code, graphs, strings and resources", "Analysis", {"Analysis", "Function", "Decompiler", "Editor", "References", "Bookmarks", "Edits", "Insights", "Decoder"}, {}},
-        {"Debug", "Attach to a process: threads, stack, locals and logs", "Debugger", {"Devices", "Debugger", "Editor", "Logcat", "Terminal"}, {}},
+        {"Analysis", "Classes, native code, graphs, strings and resources", "Analysis", {"Analysis", "Function", "Decompiler", "Editor", "References", "Bookmarks", "Edits", "Insights", "Repack", "Decoder"}, {}},
+        {"Debug", "Attach to a process: threads, stack, locals and logs", "Debugger", {"Devices", "Debugger", "Editor", "Logcat", "Frida", "Terminal"}, {}},
         {"Network", "Capture the app's traffic and map its API", "Traffic", {"Traffic", "Logcat", "Terminal", "Decoder"}, {}},
         {"Scripts", "Automate ApkSpy with Python", "Script", {"Script", "Output", "Terminal"}, {}},
     };
@@ -1148,6 +1152,7 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
         dock("Bookmarks", bottom);
         dock("Edits", bottom);
         dock("Insights", bottom);
+        dock("Repack", bottom);
         dock("Decoder", bottom);
         select("Function"), select("Decompiler"), select("References");
     } else if (p.name == "Debug") {
@@ -1158,6 +1163,7 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
         dock("Debugger", main);
         dock("Editor", editor);
         dock("Logcat", bottom);
+        dock("Frida", bottom);
         dock("Terminal", bottom);
         select("Logcat"), select("Debugger");
     } else if (p.name == "Network") {

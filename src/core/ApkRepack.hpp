@@ -4,51 +4,71 @@
 #include <utility>
 #include <vector>
 
-class ApkArchive;
-
-// Rebuilds an APK with modified entries and re-signs it, so a release build
-// can be made debuggable (JDWP refuses non-debuggable apps since Android 14),
-// have pinning stripped, or carry an injected native library.
+// Rebuilds an APK with modified entries and re-signs it, so an edited app can
+// be installed on a device: patch smali/resources, re-pack, align and sign.
 //
-// Layout of the output: entries copied from the source (aligned where the
-// platform needs it - resources.arsc and stored .so files - via miniz), the
-// replaced entries, then a signing block.
-//
-// Signing: v1 (JAR manifest, PKCS#7) is implemented; v2/v3 blocks are
-// produced when a signing key is available. The crypto uses the already
-// bundled mbedTLS, so no new dependency is added.
+// The pipeline is: rebuild the zip (bundled miniz, resources.arsc and .so
+// kept uncompressed) -> zipalign -> apksigner. Alignment and signing use the
+// Android SDK build-tools (zipalign, apksigner) and the JDK's keytool, found
+// next to a known adb or on PATH; when they are missing the output is left
+// rebuilt-but-unsigned and the log says so (nothing crashes).
 namespace repack {
 
 struct Replacement {
-    std::string entryPath;  // zip path, e.g. AndroidManifest.xml
+    std::string entryPath;  // zip path, e.g. AndroidManifest.xml or smali as compiled dex
     std::string bytes;      // the new content
+};
+
+// External tools. Derive them from the SDK that holds a known adb, or leave
+// the PATH defaults.
+struct Tools {
+    std::string zipalign = "zipalign";
+    std::string apksigner = "apksigner";  // a .bat on Windows
+    std::string keytool = "keytool";      // from the JDK
+    // <sdk>/platform-tools/adb -> <sdk>/build-tools/<newest>/{zipalign,apksigner}.
+    static Tools fromAdb(const std::string& adbPath);
 };
 
 struct Options {
     std::string sourceApk;
     std::string outputApk;
     std::vector<Replacement> replacements;
-    // Re-sign with this key (PKCS#12 / PEM). When empty the output is left
-    // unsigned-but-modified (installable only with unsigned flags).
+    // Signing key (a Java keystore). When empty, a debug keystore is used or
+    // created (the standard android / androiddebugkey / android), so the
+    // output is always installable.
     std::string keystorePath;
     std::string keystorePassword;
-    std::string alias;
-    // Lists what was written, for the panel / report.
-    bool verbose = false;
+    std::string keyAlias;
+    std::string keyPassword;   // defaults to the store password when empty
+    bool align = true;         // run zipalign before signing
+    bool sign = true;          // run apksigner
 };
 
 struct Result {
     bool ok = false;
     std::string error;
-    std::string log;       // one line per step (verbose)
-    size_t entries = 0;    // entries written
+    std::string log;        // one line per step
+    std::string outputApk;  // the final file written
+    size_t entries = 0;
     size_t replaced = 0;
+    bool aligned = false;
     bool signedOutput = false;
 };
 
+// Default debug keystore path (~/.android/debug.keystore) and its fixed
+// credentials, matching the Android SDK's own debug key.
+std::string debugKeystorePath();
+
+// Ensures `path` exists as a debug keystore, creating it with keytool when
+// missing. False (with error) only when it is missing and cannot be created.
+bool ensureDebugKeystore(const Tools& tools, const std::string& path, std::string& error);
+
+// apksigner argv for `in` -> `out` (pure, for testing/preview).
+std::vector<std::string> signArgv(const Tools& tools, const Options& opts, const std::string& in, const std::string& out);
+
 // Runs the whole pipeline. Blocking: call it from a worker thread (the UI
 // shows the log as it arrives through onLog).
-Result run(const Options& options, std::function<void(const std::string&)> onLog = {},
+Result run(const Options& options, const Tools& tools, std::function<void(const std::string&)> onLog = {},
            const std::function<bool()>& cancelled = {});
 
 }  // namespace repack

@@ -5,6 +5,7 @@
 #include <sstream>
 #include <functional>
 #include "app/Theme.hpp"
+#include "core/Settings.hpp"
 #include "core/TextUtils.hpp"
 #include "ui/UiUtil.hpp"
 
@@ -88,11 +89,113 @@ std::string shortMethod(const std::string& ref) {
 // Devices
 // ---------------------------------------------------------------------------
 
+void DevicesPanel::refreshAvds() {
+    if (avdJob_.valid()) return;  // one at a time
+    const emulator::Tools tools = emulator::Tools::fromAdb(devices_.adbPath());
+    const std::string adb = devices_.adbPath();
+    avdJob_ = std::async(std::launch::async, [tools, adb] {
+        std::string err;
+        auto avds = emulator::list(tools, adb, err);
+        return std::make_pair(std::move(avds), std::move(err));
+    });
+}
+
+void DevicesPanel::drawEmulators() {
+    // Reap a finished refresh.
+    if (avdJob_.valid() && avdJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        auto [avds, err] = avdJob_.get();
+        avds_ = std::move(avds);
+        avdError_ = std::move(err);
+        avdsLoaded_ = true;
+    }
+    if (!avdsLoaded_ && !avdJob_.valid()) refreshAvds();
+
+    if (!ImGui::CollapsingHeader("Emulators")) return;
+    const bool busy = avdJob_.valid();
+    ImGui::BeginDisabled(busy);
+    if (ui::smallButton(busy ? "Loading..." : "Refresh AVDs")) refreshAvds();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::Checkbox("Route through ApkSpy proxy", &routeProxy_);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Launch with -http-proxy 127.0.0.1:%d so the whole VM's traffic goes through ApkSpy",
+                          settings_.getInt(Settings::kTrafficPort, 8899));
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Options##emu")) ImGui::OpenPopup("##emuopts");
+    if (ImGui::BeginPopup("##emuopts")) {
+        ImGui::Checkbox("Writable system (-writable-system)", &launchOpts_.writableSystem);
+        ImGui::Checkbox("Cold boot (-no-snapshot-load)", &launchOpts_.coldBoot);
+        ImGui::Checkbox("Don't save state on exit (-no-snapshot-save)", &launchOpts_.noSnapshotSave);
+        ImGui::Checkbox("Wipe data (-wipe-data)", &launchOpts_.wipeData);
+        ImGui::Checkbox("No audio (-no-audio)", &launchOpts_.noAudio);
+        ImGui::EndPopup();
+    }
+
+    if (!avdError_.empty()) ui::wrappedColored(kWarn(), avdError_);
+    if (!emStatus_.empty()) ImGui::TextDisabled("%s", emStatus_.c_str());
+    if (avds_.empty() && avdError_.empty()) {
+        ImGui::TextDisabled("No AVDs found. Create one with Android Studio or avdmanager.");
+        ImGui::Spacing();
+        return;
+    }
+
+    if (ImGui::BeginTable("##avds", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("AVD");
+        ImGui::TableSetupColumn("System", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("##action", ImGuiTableColumnFlags_WidthFixed, ui::em(5.f));
+        for (auto& a : avds_) {
+            ImGui::TableNextRow();
+            ImGui::PushID(a.name.c_str());
+            ImGui::TableNextColumn();
+            if (a.running) ImGui::TextColored(kGood(), "%s", a.name.c_str());
+            else ImGui::TextUnformatted(a.name.c_str());
+            if (a.running && !a.serial.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("running as %s", a.serial.c_str());
+            ImGui::TableNextColumn();
+            std::string sys = a.target;
+            if (!a.abi.empty()) sys += (sys.empty() ? "" : "  ") + a.abi;
+            if (!a.device.empty()) sys += "  (" + a.device + ")";
+            ImGui::TextDisabled("%s", sys.c_str());
+            ImGui::TableNextColumn();
+            if (a.running) {
+                if (ui::smallButton("Stop")) {
+                    std::string err;
+                    if (!a.serial.empty() && !emulator::kill(devices_.adbPath(), a.serial, err))
+                        emStatus_ = "stop failed: " + err;
+                    else emStatus_ = "stopping " + a.name;
+                    launched_.erase(std::remove_if(launched_.begin(), launched_.end(),
+                                                   [&](auto& p) { return p.first == a.name; }),
+                                    launched_.end());
+                    a.running = false;
+                }
+            } else {
+                if (ui::smallButton("Launch")) {
+                    emulator::LaunchOptions opts = launchOpts_;
+                    if (routeProxy_) opts.httpProxy = "127.0.0.1:" + std::to_string(settings_.getInt(Settings::kTrafficPort, 8899));
+                    const emulator::Tools tools = emulator::Tools::fromAdb(devices_.adbPath());
+                    std::string err;
+                    ChildProcess p = emulator::launch(tools, a.name, opts, err);
+                    if (!p.valid()) {
+                        emStatus_ = "launch failed: " + err;
+                    } else {
+                        launched_.emplace_back(a.name, std::move(p));
+                        emStatus_ = "launching " + a.name + (routeProxy_ ? " (proxy on)" : "");
+                        a.running = true;  // optimistic; the next refresh confirms the serial
+                    }
+                }
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::Spacing();
+}
+
 void DevicesPanel::drawContents() {
     if (firstRefresh_) {
         firstRefresh_ = false;
         devices_.refreshDevices();
     }
+    drawEmulators();
     if (!devices_.lastError().empty()) ui::wrappedColored(kWarn(), devices_.lastError());
     const std::vector<adb::Device> devices = devices_.devices();
     const std::string selected = devices_.selected();

@@ -576,6 +576,12 @@
     <ClInclude Include="src\ui\InsightsPanel.hpp">
       <Filter>Header Files\ui</Filter>
     </ClInclude>
+    <ClInclude Include="src\ui\FridaPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\RepackPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
     <ClInclude Include="src\edit\Edits.hpp">
       <Filter>Header Files\edit</Filter>
     </ClInclude>
@@ -897,6 +903,12 @@
       <Filter>Source Files\analysis</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\InsightsPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\FridaPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\RepackPanel.cpp">
       <Filter>Source Files\ui</Filter>
     </ClCompile>
     <ClCompile Include="src\edit\Edits.cpp">

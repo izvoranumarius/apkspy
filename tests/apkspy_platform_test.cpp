@@ -37,6 +37,8 @@
 #include "analysis/ElfFile.hpp"
 #include "analysis/GraphLayout.hpp"
 #include "analysis/NativeCode.hpp"
+#include "debug/Emulator.hpp"
+#include "core/ApkRepack.hpp"
 #include "core/Process.hpp"
 #include "core/Project.hpp"
 #include "core/ScriptRunner.hpp"
@@ -4300,6 +4302,86 @@ static void testKotlinMetadata() {
     CHECK(facade.displayKind() == "file facade", "file facade kind");
 }
 
+static void testEmulator() {
+    std::printf("== emulator ==\n");
+    using namespace emulator;
+    CHECK(validAvdName("Pixel_6_API_34") && validAvdName("a.b-c_1"), "valid AVD names");
+    CHECK(!validAvdName("") && !validAvdName("-x") && !validAvdName(".x") && !validAvdName("has space") && !validAvdName("semi;colon"),
+          "invalid AVD names rejected");
+    CHECK(validSystemImage("system-images;android-34;google_apis;x86_64"), "valid system image");
+    CHECK(!validSystemImage("android-34;google_apis;x86_64") && !validSystemImage("system-images;a;b") &&
+              !validSystemImage("system-images;a;b;c;d"),
+          "invalid system images rejected");
+    CHECK(validProxy("127.0.0.1:8899") && validProxy("http://10.0.2.2:8080") && validProxy("proxy.local:3128"), "valid proxies");
+    CHECK(!validProxy("127.0.0.1") && !validProxy(":8899") && !validProxy("127.0.0.1:") && !validProxy("127.0.0.1:70000") &&
+              !validProxy("127.0.0.1:0"),
+          "invalid proxies rejected");
+
+    Tools t;
+    t.emulator = "emulator";
+    LaunchOptions opts;
+    auto argv = launchArgv(t, "Pixel_6_API_34", opts);
+    CHECK(argv.size() >= 3 && argv[0] == "emulator" && argv[1] == "-avd" && argv[2] == "Pixel_6_API_34", "base argv");
+    const auto has = [](const std::vector<std::string>& v, const std::string& flag) {
+        return std::find(v.begin(), v.end(), flag) != v.end();
+    };
+    const auto valAfter = [](const std::vector<std::string>& v, const std::string& flag) -> std::string {
+        auto it = std::find(v.begin(), v.end(), flag);
+        return it != v.end() && std::next(it) != v.end() ? *std::next(it) : std::string();
+    };
+    CHECK(!has(argv, "-http-proxy") && !has(argv, "-writable-system") && !has(argv, "-wipe-data"), "plain boot: no extra flags");
+    CHECK(has(argv, "-netdelay") && valAfter(argv, "-netdelay") == "none", "netdelay set");
+
+    opts.httpProxy = "127.0.0.1:8899";
+    opts.writableSystem = true;
+    opts.coldBoot = true;
+    opts.wipeData = true;
+    opts.noSnapshotSave = true;
+    argv = launchArgv(t, "Pixel_6_API_34", opts);
+    CHECK(valAfter(argv, "-http-proxy") == "127.0.0.1:8899", "proxy flag + value");
+    CHECK(has(argv, "-writable-system") && has(argv, "-wipe-data") && has(argv, "-no-snapshot-load") && has(argv, "-no-snapshot-save"),
+          "all options present");
+
+    // An invalid proxy is dropped from the argv (launch() rejects it outright).
+    opts = LaunchOptions{};
+    opts.httpProxy = "not a proxy";
+    CHECK(!has(launchArgv(t, "x", opts), "-http-proxy"), "invalid proxy not added to argv");
+}
+
+static void testRepack() {
+    std::printf("== repack ==\n");
+    repack::Tools t;
+    t.apksigner = "apksigner";
+    const auto has = [](const std::vector<std::string>& v, const std::string& x) {
+        return std::find(v.begin(), v.end(), x) != v.end();
+    };
+    const auto valAfter = [](const std::vector<std::string>& v, const std::string& flag) -> std::string {
+        auto it = std::find(v.begin(), v.end(), flag);
+        return it != v.end() && std::next(it) != v.end() ? *std::next(it) : std::string();
+    };
+
+    // Default (debug) keystore: fixed android/androiddebugkey credentials.
+    repack::Options dbg;
+    auto a = repack::signArgv(t, dbg, "in.apk", "out.apk");
+    CHECK(a[0] == "apksigner" && a[1] == "sign", "apksigner sign");
+    CHECK(valAfter(a, "--ks-pass") == "pass:android" && valAfter(a, "--ks-key-alias") == "androiddebugkey", "debug key creds");
+    CHECK(valAfter(a, "--out") == "out.apk" && a.back() == "in.apk", "in/out ordering");
+    CHECK(valAfter(a, "--ks") == repack::debugKeystorePath(), "debug keystore path");
+
+    // Custom keystore: credentials flow through; key password defaults to store.
+    repack::Options cst;
+    cst.keystorePath = "my.jks";
+    cst.keystorePassword = "s3cret";
+    cst.keyAlias = "release";
+    a = repack::signArgv(t, cst, "in.apk", "out.apk");
+    CHECK(valAfter(a, "--ks") == "my.jks" && valAfter(a, "--ks-pass") == "pass:s3cret", "custom keystore");
+    CHECK(valAfter(a, "--ks-key-alias") == "release" && valAfter(a, "--key-pass") == "pass:s3cret", "alias + key pass defaults to store");
+    cst.keyPassword = "keypw";
+    CHECK(valAfter(repack::signArgv(t, cst, "i", "o"), "--key-pass") == "pass:keypw", "explicit key password");
+    CHECK(!repack::debugKeystorePath().empty(), "debug keystore path resolves");
+    (void)has;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -4363,6 +4445,8 @@ int main(int argc, char** argv) {
     testScripts2();
     testArm32();
     testKotlinMetadata();
+    testEmulator();
+    testRepack();
     testMcpToolsEndToEnd();
     std::printf("\n%d passed, %d failed\n", passes, failures);
     return failures ? 1 : 0;

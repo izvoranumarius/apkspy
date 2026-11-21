@@ -137,6 +137,8 @@
     <ClInclude Include="src\analysis\Insights.hpp" />
     <ClInclude Include="src\analysis\Mapping.hpp" />
     <ClInclude Include="src\ui\InsightsPanel.hpp" />
+    <ClInclude Include="src\ui\FridaPanel.hpp" />
+    <ClInclude Include="src\ui\RepackPanel.hpp" />
     <ClInclude Include="src\ui\EditsPanel.hpp" />
     <ClInclude Include="src\analysis\ManifestAudit.hpp" />
     <ClInclude Include="src\analysis\Report.hpp" />
@@ -350,6 +352,8 @@
     <ClCompile Include="src\analysis\Insights.cpp" />
     <ClCompile Include="src\analysis\Mapping.cpp" />
     <ClCompile Include="src\ui\InsightsPanel.cpp" />
+    <ClCompile Include="src\ui\FridaPanel.cpp" />
+    <ClCompile Include="src\ui\RepackPanel.cpp" />
     <ClCompile Include="src\ui\EditsPanel.cpp" />
     <ClCompile Include="src\analysis\ManifestAudit.cpp" />
     <ClCompile Include="src\analysis\Report.cpp" />

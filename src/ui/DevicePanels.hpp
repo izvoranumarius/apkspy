@@ -1,32 +1,52 @@
 #pragma once
 #include <chrono>
 #include <functional>
+#include <future>
 #include <string>
+#include <utility>
 #include <vector>
 #include "debug/DeviceService.hpp"
+#include "debug/Emulator.hpp"
 #include "ui/Panel.hpp"
 #include "ui/UiUtil.hpp"
 
-// "Devices": adb devices, their processes (debuggable ones marked) and a live
-// CPU / memory / thread monitor of one process.
+class Settings;
+
+// "Devices": AVD (emulator) management, adb devices, their processes
+// (debuggable ones marked) and a live CPU / memory / thread monitor.
 class DevicesPanel : public Panel {
 public:
-    DevicesPanel(Workspace& workspace, DeviceService& devices, std::function<void(const std::string&)> showPanel)
-        : Panel(workspace, "Devices"), devices_(devices), showPanel_(std::move(showPanel)) {}
+    DevicesPanel(Workspace& workspace, DeviceService& devices, Settings& settings,
+                 std::function<void(const std::string&)> showPanel)
+        : Panel(workspace, "Devices"), devices_(devices), settings_(settings), showPanel_(std::move(showPanel)) {}
 
 protected:
     void drawContents() override;
 
 private:
     void drawMonitor();
+    void drawEmulators();
+    void refreshAvds();
     void attach(const std::string& serial, int pid);
     DeviceService& devices_;
+    Settings& settings_;
     std::function<void(const std::string&)> showPanel_;
     char filter_[128] = {};
     bool onlyDebuggable_ = false;
     bool showKernel_ = false;  // kernel threads ([kworker/...], children of kthreadd)
     bool firstRefresh_ = true;
     std::chrono::steady_clock::time_point lastAutoRefresh_{};
+
+    // Emulators (AVDs). Launched emulators are owned here: the ChildProcess
+    // keeps the VM alive until it is stopped or ApkSpy exits.
+    std::vector<emulator::Avd> avds_;
+    std::string avdError_;
+    bool avdsLoaded_ = false;
+    std::future<std::pair<std::vector<emulator::Avd>, std::string>> avdJob_;
+    std::vector<std::pair<std::string, ChildProcess>> launched_;  // (avd name, process)
+    emulator::LaunchOptions launchOpts_;
+    bool routeProxy_ = true;  // launch with -http-proxy to ApkSpy
+    std::string emStatus_;
 };
 
 // "Debugger": JDWP execution control (x64dbg-style toolbar + F-key
