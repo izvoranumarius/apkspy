@@ -6,6 +6,9 @@ TARGET := $(BUILD)/apkspy
 TEST := $(BUILD)/apkspy_core_test
 PLATFORM_TEST := $(BUILD)/apkspy_platform_test
 IMGUI_TEST := $(BUILD)/imgui_editor_test
+SMALI_TEST := $(BUILD)/smali_validate_test
+EDITS_TEST := $(BUILD)/edits_test
+INSIGHTS_TEST := $(BUILD)/insights_test
 LIB := lib
 
 UNAME := $(shell uname -s)
@@ -48,7 +51,7 @@ C_SRC := $(wildcard $(LIB)/miniz/*.c) $(wildcard $(LIB)/libwebp/src/dec/*.c) \
 UI_SRC := src/app/Application.cpp src/app/Theme.cpp src/app/ThemePresets.cpp src/app/WindowFrame.cpp src/app/main.cpp \
           src/ui/EditorPanel.cpp src/ui/ExplorerPanel.cpp src/ui/OutputPanel.cpp src/ui/SearchPanel.cpp \
           src/ui/SettingsDialog.cpp src/ui/TitleBar.cpp src/ui/FileBrowser.cpp src/ui/ImageViewer.cpp \
-          src/ui/OverviewPanel.cpp src/ui/AnalysisPanel.cpp src/ui/AnalysisNative.cpp src/ui/AnalysisDecompiler.cpp src/ui/BookmarksPanel.cpp src/ui/GraphView.cpp src/ui/ScriptPanel.cpp src/ui/DevicePanels.cpp src/ui/McpSettings.cpp src/ui/TrafficPanel.cpp src/ui/TrafficRepeater.cpp src/ui/TrafficIntercept.cpp src/ui/TrafficRules.cpp src/ui/TrafficComparer.cpp src/ui/TrafficHistory.cpp src/ui/TrafficCerts.cpp src/ui/TrafficTools.cpp src/ui/TrafficRouting.cpp \
+          src/ui/OverviewPanel.cpp src/ui/AnalysisPanel.cpp src/ui/AnalysisNative.cpp src/ui/AnalysisDecompiler.cpp src/ui/BookmarksPanel.cpp src/ui/EditsPanel.cpp src/ui/InsightsPanel.cpp src/ui/GraphView.cpp src/ui/ScriptPanel.cpp src/ui/DevicePanels.cpp src/ui/McpSettings.cpp src/ui/TrafficPanel.cpp src/ui/TrafficRepeater.cpp src/ui/TrafficIntercept.cpp src/ui/TrafficRules.cpp src/ui/TrafficComparer.cpp src/ui/TrafficHistory.cpp src/ui/TrafficCerts.cpp src/ui/TrafficTools.cpp src/ui/TrafficRouting.cpp \
           src/ui/ShellIcons.cpp src/ui/HexView.cpp src/ui/AudioPlayer.cpp src/ui/AudioCodecs.cpp src/ui/VideoPlayer.cpp src/ui/MediaViews.cpp src/ui/TerminalPanel.cpp src/ui/DecoderPanel.cpp src/ui/CommandPalette.cpp src/core/Pty.cpp src/image/Texture.cpp src/image/ImageDecoder.cpp src/app/HeadlessMcp.cpp
 CORE_SRC := $(filter-out $(UI_SRC),$(APP_SRC))
 
@@ -81,10 +84,13 @@ $(OBJ)/%.o: %.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-test: $(TEST) $(PLATFORM_TEST) $(IMGUI_TEST)
+test: $(TEST) $(PLATFORM_TEST) $(IMGUI_TEST) $(SMALI_TEST) $(EDITS_TEST) $(INSIGHTS_TEST)
 	./$(TEST)
 	./$(PLATFORM_TEST)
 	./$(IMGUI_TEST)
+	./$(SMALI_TEST)
+	./$(EDITS_TEST)
+	./$(INSIGHTS_TEST)
 
 $(BUILD)/test_%.o: lib/miniz/%.c
 	@mkdir -p $(@D)
@@ -118,6 +124,25 @@ $(IMGUI_TEST): tests/imgui_editor_test.cpp $(LIB)/imgui/imgui.cpp $(LIB)/imgui/i
 	$(CXX) -std=c++23 -O1 -Wall -Wextra -Wno-unused-parameter -Iinclude/imgui -Iinclude/imgui/backends \
 	    tests/imgui_editor_test.cpp $(LIB)/imgui/imgui.cpp $(LIB)/imgui/imgui_draw.cpp \
 	    $(LIB)/imgui/imgui_tables.cpp $(LIB)/imgui/imgui_widgets.cpp -o $@
+
+# Smali edit validation (pure: no APK, no file system).
+$(SMALI_TEST): tests/smali_validate_test.cpp src/smali/Validate.cpp src/analysis/DexFile.cpp \
+                src/smali/Validate.hpp src/analysis/DexFile.hpp
+	@mkdir -p $(@D)
+	$(CXX) -std=c++23 -O1 -g -Wall -Wextra -Wno-unused-parameter -Isrc \
+	    tests/smali_validate_test.cpp src/smali/Validate.cpp src/analysis/DexFile.cpp -o $@
+
+$(EDITS_TEST): tests/edits_test.cpp src/edit/Edits.cpp src/smali/Validate.cpp src/analysis/DexFile.cpp \
+               src/edit/Edits.hpp src/smali/Validate.hpp src/core/SafePath.hpp
+	@mkdir -p $(@D)
+	$(CXX) -std=c++23 -O1 -g -Wall -Wextra -Wno-unused-parameter -Isrc \
+	    tests/edits_test.cpp src/edit/Edits.cpp src/smali/Validate.cpp src/analysis/DexFile.cpp -o $@
+
+$(INSIGHTS_TEST): tests/insights_test.cpp src/analysis/Insights.cpp src/analysis/Mapping.cpp \
+                  src/analysis/Insights.hpp src/analysis/Mapping.hpp
+	@mkdir -p $(@D)
+	$(CXX) -std=c++23 -O1 -g -Wall -Wextra -Wno-unused-parameter -Isrc \
+	    tests/insights_test.cpp src/analysis/Insights.cpp src/analysis/Mapping.cpp -o $@
 
 run: $(TARGET)
 	./$(TARGET)

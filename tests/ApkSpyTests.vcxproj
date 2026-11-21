@@ -197,6 +197,9 @@
     <ClCompile Include="..\src\analysis\AnalysisService.cpp" />
     <ClCompile Include="..\src\analysis\ApkAnalysis.cpp" />
     <ClCompile Include="..\src\analysis\ApkDiff.cpp" />
+    <ClCompile Include="..\src\smali\Validate.cpp" />
+    <ClCompile Include="..\src\analysis\ManifestAudit.cpp" />
+    <ClCompile Include="..\src\analysis\Report.cpp" />
     <ClCompile Include="..\src\analysis\Dalvik.cpp" />
     <ClCompile Include="..\src\analysis\DexFile.cpp" />
     <ClCompile Include="..\src\analysis\ElfFile.cpp" />
@@ -213,6 +216,7 @@
     <ClCompile Include="..\src\mcp\McpTransports.cpp" />
     <ClCompile Include="..\src\debug\Adb.cpp" />
     <ClCompile Include="..\src\debug\DeviceService.cpp" />
+    <ClCompile Include="..\src\debug\Emulator.cpp" />
     <ClCompile Include="..\src\debug\Jdwp.cpp" />
     <ClCompile Include="..\src\debug\TrafficProxy.cpp" />
     <ClCompile Include="..\src\debug\HttpClient.cpp" />
@@ -339,6 +343,11 @@
     <ClCompile Include="..\lib\miniz\miniz_tdef.c" />
     <ClCompile Include="..\lib\miniz\miniz_tinfl.c" />
     <ClCompile Include="..\lib\miniz\miniz_zip.c" />
+    <ClCompile Include="..\src\analysis\Arm32.cpp" />
+    <ClCompile Include="..\src\analysis\KotlinMetadata.cpp" />
+    <ClCompile Include="..\src\debug\FridaBridge.cpp" />
+    <ClCompile Include="..\src\core\ApkRepack.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
+

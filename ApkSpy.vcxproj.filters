@@ -367,6 +367,12 @@
     <Filter Include="Header Files\image">
       <UniqueIdentifier>{7FB7C1B9-DC83-4ABC-8D61-FE37D89A5B5D}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\edit">
+      <UniqueIdentifier>{4B1E5C2A-7D3F-4A8B-9C6E-2F1D0A3B5C7E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\smali">
+      <UniqueIdentifier>{352E7F5F-3969-4599-8CD4-F2E0A63F2533}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Header Files\ui">
       <UniqueIdentifier>{8759A4A3-AE22-48B0-9CFF-9D8AEB52FD77}</UniqueIdentifier>
     </Filter>
@@ -417,6 +423,12 @@
     </Filter>
     <Filter Include="Source Files\image">
       <UniqueIdentifier>{C9AD22B9-276D-4DD0-AB03-3AB3D84505E5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\edit">
+      <UniqueIdentifier>{8E2D4F6A-1B3C-4D5E-A7F9-0C2B4D6E8F1A}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\smali">
+      <UniqueIdentifier>{99C0358F-B2A5-4BDC-9520-D48B1805B236}</UniqueIdentifier>
     </Filter>
     <Filter Include="Source Files\ui">
       <UniqueIdentifier>{1DD236D3-3999-45BA-B092-269EEA1E99B1}</UniqueIdentifier>
@@ -554,6 +566,24 @@
     </ClInclude>
     <ClInclude Include="src\mcp\McpTools.hpp">
       <Filter>Header Files\mcp</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\Insights.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\Mapping.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\InsightsPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\edit\Edits.hpp">
+      <Filter>Header Files\edit</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\EditsPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\smali\Validate.hpp">
+      <Filter>Header Files\smali</Filter>
     </ClInclude>
     <ClInclude Include="src\analysis\ApkDiff.hpp">
       <Filter>Header Files\analysis</Filter>
@@ -859,6 +889,24 @@
     </ClCompile>
     <ClCompile Include="src\mcp\McpTools.cpp">
       <Filter>Source Files\mcp</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\Insights.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\Mapping.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\InsightsPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\edit\Edits.cpp">
+      <Filter>Source Files\edit</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\EditsPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\smali\Validate.cpp">
+      <Filter>Source Files\smali</Filter>
     </ClCompile>
     <ClCompile Include="src\analysis\ApkDiff.cpp">
       <Filter>Source Files\analysis</Filter>

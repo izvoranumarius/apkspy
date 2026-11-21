@@ -193,6 +193,35 @@ public:
     // Smali listing of a method, on the instruction at `pc` when given.
     void openMethodListing(const std::string& group, const ApkAnalysis& a, const ApkAnalysis::MethodDef& m,
                            uint32_t pc = UINT32_MAX);
+    // Edit tracking (edit report / export of edited files) ------------------
+    // Every file the user edited this session: its text before the first
+    // edit and its latest text. Records outlive their tabs (generated smali
+    // listings are freed with their tab; reopening the same listing restores
+    // the edited text). In memory only - not written to project files.
+    struct EditRecord {
+        std::string group;
+        RootKind kind = RootKind::Decompiled;
+        std::string nodePath;  // TreeNode::path() (disk path / virtual path)
+        std::string display;   // workspace-relative ("sources/com/a/B.java", "smali/...")
+        std::string original;
+        std::string current;   // refreshed from the open tab by refreshEdits()
+    };
+    // Called before a document enters editing; records its baseline once.
+    void noteEditBegin(const Document& doc);
+    // Copies the live text of open edited tabs into their records.
+    void refreshEdits();
+    const std::vector<EditRecord>& editRecords() const { return edits_; }
+    // Drops records whose text equals the baseline (after a revert).
+    void forgetUnchangedEdits();
+    // Puts the record's original text back: the open tab is reset (in-memory
+    // for listings; decompiled files are rewritten on disk). False when the
+    // record is gone or the file cannot be written.
+    bool revertEdit(size_t index);
+    // Opens the edited file at `line` (0-based) when it can still be found.
+    bool openEdit(size_t index, int line);
+    // Bumped when records are added, removed or reverted.
+    uint64_t editsVersion() const { return editsVersion_; }
+
     // Promotes a preview tab so it survives further explorer clicks.
     void promoteDocument(Document* doc);
     void closeDocument(const Document* doc);
@@ -328,6 +357,10 @@ private:
     bool suppressNav_ = false;    // true while navStep re-opens a document
     SymbolIndex symbols_;         // class name -> file index for Ctrl+click (M3)
     ExportJob export_;            // running folder export (M5)
+    std::vector<EditRecord> edits_;  // edit tracking, see EditRecord
+    uint64_t editsVersion_ = 0;
+    EditRecord* findEdit(const std::string& group, RootKind kind, const std::string& nodePath);
+    Document* documentFor(const EditRecord& r);
     std::unordered_map<std::string, uint64_t> treeEpochs_;  // per-group tree change counter
     uint64_t stateVersion_ = 1;
 

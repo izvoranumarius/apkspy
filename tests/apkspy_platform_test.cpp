@@ -2540,7 +2540,7 @@ static void testHttpsInterception() {
         expiredThread.join();
     }
 
-    // The HTTP/2 preface through an intercepted session is diagnosed, not hung.
+    // The HTTP/2 preface through an intercepted session is decoded, not hung.
     {
         ProxyTlsClient client;
         CHECK(client.connect(proxy.port(), "127.0.0.1", origin.port, "origin.test", &roots, error), "h2 client opens");
@@ -2548,10 +2548,12 @@ static void testHttpsInterception() {
         client.tls.close();
         client.sock.shutdownBoth();
         waitFlows(proxy, proxy.flows().size() + 1);
-        bool diagnosed = false;
+        // h2 is relayed and decoded passively now (it used to be diagnosed as
+        // unsupported): the connection flow exists with the h2 marker and no error.
+        bool decoded = false;
         for (const auto& f : proxy.flows())
-            if (f.error.find("HTTP/2") != std::string::npos) diagnosed = true;
-        CHECK(diagnosed, "HTTP/2 preface diagnosed");
+            if ((f.alpn == "h2" || f.alpn == "h2c") && f.error.empty() && f.method == "PRI") decoded = true;
+        CHECK(decoded, "HTTP/2 preface decoded");
     }
 
     origin.stopping = true;
@@ -4168,6 +4170,138 @@ static void testScripts2() {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// ARM32 decoding and Kotlin metadata
+// ---------------------------------------------------------------------------
+#include "analysis/Arm32.hpp"
+#include "analysis/KotlinMetadata.hpp"
+namespace {
+
+static arm32::Insn a32(uint32_t w, uint64_t addr = 0x2000) {
+    const uint8_t b[4] = {(uint8_t)w, (uint8_t)(w >> 8), (uint8_t)(w >> 16), (uint8_t)(w >> 24)};
+    return arm32::decode(b, 4, addr, false);
+}
+
+static arm32::Insn t16(uint16_t h, uint64_t addr = 0x1000) {
+    const uint8_t b[2] = {(uint8_t)h, (uint8_t)(h >> 8)};
+    return arm32::decode(b, 2, addr, true);
+}
+
+static arm32::Insn t32(uint16_t h1, uint16_t h2, uint64_t addr = 0x1000) {
+    const uint8_t b[4] = {(uint8_t)h1, (uint8_t)(h1 >> 8), (uint8_t)h2, (uint8_t)(h2 >> 8)};
+    return arm32::decode(b, 4, addr, true);
+}
+
+static void testArm32() {
+    std::printf("== arm32 / thumb decoding ==\n");
+    using arm32::Flow;
+    auto i = t32(0xF7FF, 0xFBFE);  // bl backward: 0x1000 -> 0x800 (S = 1, offset -0x804)
+    CHECK(i.mnemonic == "bl" && i.hasTarget && i.target == 0x800 && i.flow == Flow::Call && i.size == 4,
+          ("thumb bl backward: " + i.mnemonic + " " + i.operands).c_str());
+    i = t32(0xF000, 0xF802);  // bl forward +4: 0x1000 -> 0x1008
+    CHECK(i.mnemonic == "bl" && i.target == 0x1008, ("thumb bl forward: " + i.operands).c_str());
+    i = t32(0xF000, 0xE802, 0x1002);  // blx forward: target from the word-aligned PC
+    CHECK(i.mnemonic == "blx" && i.target == 0x1008, ("thumb blx: " + i.operands).c_str());
+    i = t32(0xF000, 0xB802);  // b.w forward
+    CHECK(i.mnemonic == "b.w" && i.flow == Flow::Jump && i.target == 0x1008, ("thumb b.w: " + i.operands).c_str());
+    i = t32(0xF040, 0x8002);  // bne.w forward
+    CHECK(i.mnemonic == "bne.w" && i.flow == Flow::CondJump && i.target == 0x1008, ("thumb bne.w: " + i.mnemonic).c_str());
+    i = t32(0xE8BD, 0x8010);  // pop.w {r4, pc}
+    CHECK(i.mnemonic == "pop.w" && i.operands == "{r4, pc}" && i.flow == Flow::Return, "thumb pop.w returns");
+    i = t16(0xBD10);
+    CHECK(i.mnemonic == "pop" && i.operands == "{r4, pc}" && i.flow == Flow::Return && i.size == 2, "thumb pop {r4, pc}");
+    i = t16(0xB510);
+    CHECK(i.mnemonic == "push" && i.operands == "{r4, lr}", "thumb push {r4, lr}");
+    i = t16(0x4798);
+    CHECK(i.mnemonic == "blx" && i.operands == "r3" && i.flow == Flow::IndirectCall, "thumb blx r3");
+    i = t16(0x4770);
+    CHECK(i.mnemonic == "bx" && i.flow == Flow::Return, "thumb bx lr");
+    i = t16(0xD1FE, 0x100);
+    CHECK(i.mnemonic == "bne" && i.target == 0x100 && i.flow == Flow::CondJump, "thumb bne to itself");
+    i = t16(0xDF00);
+    CHECK(i.mnemonic == "svc" && i.flow == Flow::Normal, "thumb svc is not a branch");
+    i = t16(0x0089);  // lsls r1, r1, #2
+    CHECK(i.mnemonic == "lsls" && i.operands == "r1, r1, #2", ("thumb lsls: " + i.mnemonic + " " + i.operands).c_str());
+    i = t16(0x4801, 0x1002);  // ldr r0, [pc, #4] from an unaligned pc
+    CHECK(i.target == 0x1008, "thumb literal load target");
+
+    i = a32(0xE3010234);
+    CHECK(i.mnemonic == "movw" && i.operands == "r0, #0x1234", ("a32 movw: " + i.mnemonic + " " + i.operands).c_str());
+    i = a32(0xE3450678);
+    CHECK(i.mnemonic == "movt" && i.operands == "r0, #0x5678", "a32 movt");
+    i = a32(0xE10F0000);  // mrs r0, apsr - not movw
+    CHECK(i.mnemonic != "movw", "a32 mrs is not decoded as movw");
+    i = a32(0xE2810B01);
+    CHECK(i.mnemonic == "add" && i.operands == "r0, r1, #0x400", ("a32 add rotated imm: " + i.operands).c_str());
+    i = a32(0xE0A10002);  // adc r0, r1, r2 - not "sub #imm"
+    CHECK(i.mnemonic.rfind("sub", 0) != 0 && i.mnemonic.rfind("add", 0) != 0, "a32 adc register is not add/sub immediate");
+    i = a32(0xE1A04007);
+    CHECK(i.mnemonic == "mov" && i.operands == "r4, r7", "a32 mov r4, r7");
+    i = a32(0xE1A0F00E);
+    CHECK(i.flow == Flow::Return, "a32 mov pc, lr returns");
+    i = a32(0xE49DF004);
+    CHECK(i.flow == Flow::Return && i.mnemonic == "ldr", "a32 ldr pc, [sp], #4 returns");
+    i = a32(0xE5112004);
+    CHECK(i.operands == "r2, [r1, #-4]", ("a32 negative offset: " + i.operands).c_str());
+    i = a32(0xEBFFFBFE);  // bl backward: 0x2000 -> 0x1000
+    CHECK(i.mnemonic == "bl" && i.target == 0x1000 && i.flow == Flow::Call, "a32 bl backward");
+    i = a32(0xFA000000);  // blx #imm to Thumb: 0x2000 + 8
+    CHECK(i.mnemonic == "blx" && i.target == 0x2008 && i.flow == Flow::Call, "a32 blx immediate");
+    i = a32(0xE92D4010);
+    CHECK(i.mnemonic == "push" && i.operands == "{r4, lr}", "a32 push");
+    i = a32(0xE8BD8010);
+    CHECK(i.mnemonic == "pop" && i.flow == Flow::Return, "a32 pop {.., pc} returns");
+    const uint8_t three[3] = {1, 2, 3};
+    i = arm32::decode(three, 3, 0, false);
+    CHECK(!i.known && i.size == 3, "truncated input consumes what is left");
+}
+
+// d1 in the current encoding: '\0', then one character per protobuf byte.
+static std::vector<std::string> d1Of(const std::string& bytes) {
+    std::string s(1, '\0');
+    for (unsigned char c : bytes) {
+        if (c < 0x80) s += static_cast<char>(c);
+        else s += static_cast<char>(0xC0 | (c >> 6)), s += static_cast<char>(0x80 | (c & 0x3F));
+    }
+    return {s};
+}
+
+static void testKotlinMetadata() {
+    std::printf("== kotlin metadata ==\n");
+    uint32_t flags = 0;
+    // StringTableTypes (empty), then Class field 1 = flags.
+    CHECK(kotlinmeta::classFlagsFromD1(d1Of(std::string("\x00\x08\x86\x08", 4)), flags) && flags == 1030, "data class flags");
+    kotlinmeta::Metadata m;
+    m.present = true;
+    m.kind = kotlinmeta::Kind::Class;
+    m.flagsKnown = true;
+    const auto show = [&](uint32_t f) {
+        m.classFlags = f;
+        m.classKind = static_cast<kotlinmeta::ClassKind>((f >> 6) & 7);
+        m.isSealed = ((f >> 4) & 3) == 3;
+        m.isInner = (f >> 9) & 1;
+        m.isData = (f >> 10) & 1;
+        m.isValue = (f >> 13) & 1;
+        return m.displayKind();
+    };
+    CHECK(show(flags) == "data class", "data class shown");
+    CHECK(kotlinmeta::classFlagsFromD1(d1Of(std::string("\x00\x08\x86\x03", 4)), flags) && show(flags) == "companion object",
+          "companion object");
+    CHECK(kotlinmeta::classFlagsFromD1(d1Of(std::string("\x00\x08\x36", 3)), flags) && show(flags) == "sealed class", "sealed class");
+    // Other fields before flags are skipped; a missing flags field means the default (6).
+    CHECK(kotlinmeta::classFlagsFromD1(d1Of(std::string("\x02\x0a\x00\x18\x05\x08\x46", 7)), flags) && show(flags) == "interface",
+          "fields skipped, interface");
+    CHECK(kotlinmeta::classFlagsFromD1(d1Of(std::string("\x00\x18\x05", 3)), flags) && flags == 6, "default flags");
+    CHECK(!kotlinmeta::classFlagsFromD1({std::string("\xEF\xBF\xBF abc")}, flags), "old 8-to-7 encoding is not guessed");
+    CHECK(!kotlinmeta::classFlagsFromD1(d1Of(std::string("\x05\x01", 2)), flags), "truncated protobuf rejected");
+    kotlinmeta::Metadata facade;
+    facade.present = true;
+    facade.kind = kotlinmeta::Kind::File;
+    CHECK(facade.displayKind() == "file facade", "file facade kind");
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
     // `--write-sample <dir>`: writes sample.apk + sample.apkspy (the
     // synthetic inputs used above) for manual / smoke testing of the app.
@@ -4227,6 +4361,8 @@ int main(int argc, char** argv) {
     testRawStreams();
     testH2c();
     testScripts2();
+    testArm32();
+    testKotlinMetadata();
     testMcpToolsEndToEnd();
     std::printf("\n%d passed, %d failed\n", passes, failures);
     return failures ? 1 : 0;

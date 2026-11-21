@@ -1,0 +1,95 @@
+#pragma once
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <vector>
+
+// Static triage of an APK: hard-coded secrets, third-party SDKs (trackers),
+// app frameworks, packers / protectors (detection only), code-risk rules and
+// an obfuscation estimate - plus JSON and SARIF export of the findings.
+//
+// Pure functions over plain inputs (class descriptors, referenced method
+// signatures, string constants, archive entry names) so they work on any
+// source of those and are testable without an APK. Nothing is executed,
+// nothing is modified, nothing touches the network.
+namespace insights {
+
+enum class Severity { Info, Low, Medium, High };
+const char* severityName(Severity s);
+
+// What the scanners look at. ApkSpy fills it from ApkAnalysis + the APK tree.
+struct Inputs {
+    std::vector<std::string> classes;     // defined classes, descriptors ("Lcom/a/B;")
+    std::vector<std::string> methodRefs;  // referenced methods ("Lx/Y;->name(proto)ret")
+    std::vector<std::string> strings;     // string constants
+    std::vector<std::string> files;       // archive entry names ("lib/arm64-v8a/libflutter.so")
+};
+
+// --- Secrets ----------------------------------------------------------------
+struct Secret {
+    std::string kind;     // "AWS access key ID", "Google API key", ...
+    std::string value;    // the matched token
+    size_t stringIndex = 0;  // Inputs::strings index it came from
+    Severity severity = Severity::High;
+};
+std::vector<Secret> findSecrets(const std::vector<std::string>& strings);
+// "AKIA****WXYZ": first 4 and last 4 characters kept.
+std::string mask(std::string_view secret);
+
+// --- SDKs / trackers --------------------------------------------------------
+struct Sdk {
+    std::string name;      // "Firebase Analytics"
+    std::string category;  // "Analytics", "Advertising", "Crash reporting", ...
+    bool tracker = false;  // collects usage / ad data
+    std::string prefix;    // matched package ("Lcom/google/firebase/analytics/")
+    int classes = 0;       // defined classes under the prefix
+};
+std::vector<Sdk> detectSdks(const std::vector<std::string>& classes);
+
+// --- Frameworks and packers -------------------------------------------------
+struct Detection {
+    std::string name;      // "Flutter", "React Native (Hermes)", "Jiagu (Qihoo 360)"
+    std::string kind;      // "Framework" or "Packer"
+    std::string evidence;  // file or class that matched
+};
+std::vector<Detection> detectFrameworks(const Inputs& in);
+
+// --- Code-risk rules --------------------------------------------------------
+struct RuleHit {
+    std::string id;     // "webview-js-interface"
+    Severity severity = Severity::Medium;
+    std::string title;
+    std::string masvs;  // "MASVS-PLATFORM-2"
+    std::string detail;
+    std::vector<std::string> matched;  // referenced signatures / strings that triggered it
+};
+// Rules over referenced APIs and constants. Library code is not excluded:
+// the app layer resolves each matched signature to its callers.
+std::vector<RuleHit> runRules(const Inputs& in);
+
+// --- Obfuscation ------------------------------------------------------------
+struct Obfuscation {
+    int appClasses = 0;   // classes outside well-known library packages
+    int shortNames = 0;   // of those, simple names of 1-2 characters ("a", "b0")
+    double ratio = 0.0;   // shortNames / appClasses
+    const char* verdict = "none";  // "none", "light", "heavy"
+};
+Obfuscation estimateObfuscation(const std::vector<std::string>& classes);
+
+// --- Everything together ----------------------------------------------------
+struct Result {
+    std::vector<Secret> secrets;
+    std::vector<Sdk> sdks;
+    std::vector<Detection> detections;
+    std::vector<RuleHit> rules;
+    Obfuscation obfuscation;
+};
+Result scan(const Inputs& in);
+
+// JSON object (secrets masked). Stable key order.
+std::string toJson(const Result& r, std::string_view apkName);
+// SARIF 2.1.0 log: one rule per finding kind, one result per finding
+// (secrets masked). Locations are logical (class / method signatures).
+std::string toSarif(const Result& r, std::string_view apkName);
+
+}  // namespace insights

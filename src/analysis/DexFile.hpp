@@ -27,6 +27,7 @@ public:
         uint32_t superclassIdx = kNoIndex;  // type index or kNoIndex
         uint32_t interfacesOff = 0;
         uint32_t sourceFileIdx = kNoIndex;  // string index or kNoIndex
+        uint32_t annotationsOff = 0;        // annotations_directory_item (0 = none)
         uint32_t classDataOff = 0;
     };
 

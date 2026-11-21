@@ -291,6 +291,7 @@ void EditorPanel::drawDocument(Document& doc) {
     // Read-only viewer by default; only an explicit Edit toggle switches to
     // the editor (files from the APK archive can never be edited).
     if (doc.wantsEdit() && doc.canEdit()) {
+        if (!doc.isEditing()) workspace_.noteEditBegin(doc);
         doc.beginEdit();
         drawEditable(doc);
         return;
@@ -357,8 +358,9 @@ void EditorPanel::drawToolbar(Document& doc) {
             else doc.setWantsEdit(true);
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", doc.isEditing() ? "Back to the read-only view (unsaved edits are kept)"
-                                                    : "Edit this file in place (saved with Ctrl+S)");
+            ImGui::SetTooltip("%s", doc.isEditing()     ? "Back to the read-only view (unsaved edits are kept)"
+                                    : doc.editsInMemory() ? "Edit this listing (kept in memory; see the Edits panel to export)"
+                                                          : "Edit this file in place (saved with Ctrl+S)");
     }
 }
 

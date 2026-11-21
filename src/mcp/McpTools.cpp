@@ -10,6 +10,7 @@
 #include "analysis/ApkDiff.hpp"
 #include "analysis/Dalvik.hpp"
 #include "analysis/Decompiler.hpp"
+#include "analysis/ManifestAudit.hpp"
 #include "core/ApkInfo.hpp"
 #include "core/AxmlDecoder.hpp"
 #include "core/Paths.hpp"
@@ -1891,6 +1892,52 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             }
                             return McpToolResult::ok(std::move(j));
                         });
+                    }});
+
+    server.addTool({"audit_manifest", "Security audit of the manifest",
+                    "Static assessment of AndroidManifest.xml: exported components, dangerous permissions, "
+                    "debuggable/backup/cleartext flags and MASVS-mapped findings. Needs no jadx and no device.",
+                    schema::object({{"apk", str("APK group")}, {"format", str("text (Markdown) or json (default)")}}),
+                    true, false, [&ws](const Json& args, McpToolContext&) -> McpToolOutcome {
+                        std::string err;
+                        Root* root = resolveApk(ws, args, err);
+                        if (!root) return McpToolResult::error(err);
+                        auto* arch = dynamic_cast<ApkArchive*>(root->source.get());
+                        if (!arch) return McpToolResult::error("not APK archives");
+                        // The resource table names the app label; loading it is
+                        // best effort (a broken arsc must not fail the audit).
+                        const auto res = ws.resources(root->title);
+                        manifestaudit::Audit audit;
+                        if (!manifestaudit::audit(*arch, res.get(), audit, err)) return McpToolResult::error(err);
+                        if (args.get("format").asString("json") == "text")
+                            return McpToolResult::ok(Json(manifestaudit::toMarkdown(audit)));
+                        Json j = Json::object();
+                        for (const auto& f : audit.findings)
+                            j.set(f.title, Json::obj({{"severity", manifestaudit::severityName(f.severity)},
+                                                     {"masvs", f.masvsId}, {"detail", f.detail},
+                                                     {"location", f.location}}));
+                        return McpToolResult::ok(Json::obj(
+                            {{"package", audit.package},
+                             {"app_label", audit.appLabel},
+                             {"target_sdk", audit.targetSdk},
+                             {"debuggable", audit.debuggable},
+                             {"allow_backup", audit.allowBackup},
+                             {"uses_cleartext", audit.usesCleartext},
+                             {"dangerous_permissions", [&audit] {
+                                  Json l = Json::array();
+                                  for (const auto& p : audit.dangerousPermissions) l.push(p);
+                                  return l;
+                              }()},
+                             {"exported_components", [&audit] {
+                                  Json l = Json::array();
+                                  for (const auto& c : audit.components)
+                                      if (c.exported)
+                                          l.push(Json::obj({{"kind", manifestaudit::Component::kindName(c.kind)},
+                                                            {"name", c.name}, {"permission", c.permission}}));
+                                  return l;
+                              }()},
+                             {"findings", std::move(j)},
+                             {"findings_count", static_cast<unsigned long long>(audit.findings.size())}}));
                     }});
 
     // --------------------------------------------------------------- UI bridge

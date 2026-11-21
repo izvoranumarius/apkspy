@@ -95,9 +95,16 @@ public:
     static uint64_t editSerial() { return sEditSerial_.load(); }
 
     // --- Editing ----------------------------------------------------------
-    // Only files on disk (decompiled output) can be modified; APK entries
-    // stay read-only.
-    bool canEdit() const { return mode_ == Mode::Code && rootKind_ == RootKind::Decompiled && !node_->path().empty(); }
+    // Files on disk (decompiled output) can be modified, and so can generated
+    // smali listings - in memory only (save() keeps the text in the tab and
+    // the workspace's edit store; nothing is written). APK entries stay
+    // read-only.
+    bool canEdit() const {
+        if (mode_ != Mode::Code || !node_ || node_->path().empty()) return false;
+        return rootKind_ == RootKind::Decompiled || (rootKind_ == RootKind::Virtual && language_ == Language::Smali);
+    }
+    // True for in-memory edits (generated listings): save() writes nothing.
+    bool editsInMemory() const { return rootKind_ == RootKind::Virtual; }
     // The viewer is read-only by default; the editor's Edit toggle switches
     // this document into editing mode (and back, keeping any unsaved edits).
     bool wantsEdit() const { return wantsEdit_; }
@@ -115,6 +122,9 @@ public:
     bool save();
     // Discards the edits and leaves editing mode ("Don't Save").
     void cancelEdit();
+    // Replaces the read-only text of a Code document (any edits are
+    // discarded); used to revert a file to its pre-edit baseline.
+    void resetText(std::string text);
 
     // Jumps to a 0-BASED line number (-1 = clear). The highlight band is
     // drawn on that line by both the read-only viewer and the editor.

@@ -132,9 +132,18 @@
     <ClInclude Include="src\mcp\McpTransports.hpp" />
     <ClInclude Include="src\mcp\McpTools.hpp" />
     <ClInclude Include="src\analysis\ApkDiff.hpp" />
+    <ClInclude Include="src\smali\Validate.hpp" />
+    <ClInclude Include="src\edit\Edits.hpp" />
+    <ClInclude Include="src\analysis\Insights.hpp" />
+    <ClInclude Include="src\analysis\Mapping.hpp" />
+    <ClInclude Include="src\ui\InsightsPanel.hpp" />
+    <ClInclude Include="src\ui\EditsPanel.hpp" />
+    <ClInclude Include="src\analysis\ManifestAudit.hpp" />
+    <ClInclude Include="src\analysis\Report.hpp" />
     <ClInclude Include="src\mcp\McpServer.hpp" />
     <ClInclude Include="src\debug\Jdwp.hpp" />
     <ClInclude Include="src\debug\DeviceService.hpp" />
+    <ClInclude Include="src\debug\Emulator.hpp" />
     <ClInclude Include="src\debug\Adb.hpp" />
     <ClInclude Include="src\core\Socket.hpp" />
     <ClInclude Include="src\mcp\Json.hpp" />
@@ -183,6 +192,14 @@
     <ClInclude Include="src\ui\SearchPanel.hpp" />
     <ClInclude Include="src\ui\SettingsDialog.hpp" />
     <ClInclude Include="src\ui\TitleBar.hpp" />
+    <ClCompile Include="src\analysis\Arm32.cpp" />
+    <ClInclude Include="src\analysis\Arm32.hpp" />
+    <ClCompile Include="src\analysis\KotlinMetadata.cpp" />
+    <ClInclude Include="src\analysis\KotlinMetadata.hpp" />
+    <ClCompile Include="src\debug\FridaBridge.cpp" />
+    <ClInclude Include="src\debug\FridaBridge.hpp" />
+    <ClCompile Include="src\core\ApkRepack.cpp" />
+    <ClInclude Include="src\core\ApkRepack.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\debug\CaStore.cpp" />
@@ -328,9 +345,18 @@
     <ClCompile Include="src\mcp\McpTransports.cpp" />
     <ClCompile Include="src\mcp\McpTools.cpp" />
     <ClCompile Include="src\analysis\ApkDiff.cpp" />
+    <ClCompile Include="src\smali\Validate.cpp" />
+    <ClCompile Include="src\edit\Edits.cpp" />
+    <ClCompile Include="src\analysis\Insights.cpp" />
+    <ClCompile Include="src\analysis\Mapping.cpp" />
+    <ClCompile Include="src\ui\InsightsPanel.cpp" />
+    <ClCompile Include="src\ui\EditsPanel.cpp" />
+    <ClCompile Include="src\analysis\ManifestAudit.cpp" />
+    <ClCompile Include="src\analysis\Report.cpp" />
     <ClCompile Include="src\mcp\McpServer.cpp" />
     <ClCompile Include="src\debug\Jdwp.cpp" />
     <ClCompile Include="src\debug\DeviceService.cpp" />
+    <ClCompile Include="src\debug\Emulator.cpp" />
     <ClCompile Include="src\debug\Adb.cpp" />
     <ClCompile Include="src\core\Socket.cpp" />
     <ClCompile Include="src\mcp\Json.cpp" />

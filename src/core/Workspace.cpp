@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <string_view>
 #include <unordered_map>
 
@@ -766,6 +767,10 @@ void Workspace::openGenerated(const std::string& group, const std::string& path,
             node = root->tree->findByPath(path);
         }
     if (!node) node = root->tree->addChild(std::make_unique<TreeNode>(title, path, TreeNode::classify(path)));
+    // The same listing edited earlier this session: show the edited text
+    // again (only when the listing itself is unchanged).
+    if (EditRecord* e = findEdit(group, RootKind::Virtual, path); e && e->original == text && e->current != e->original)
+        text = e->current;
     memory->put(path, std::move(text));
     NavLocation origin;
     const NavLocation* originPtr = nullptr;
@@ -788,6 +793,8 @@ void Workspace::closeDocument(const Document* doc) {
     for (auto it = documents_.begin(); it != documents_.end(); ++it) {
         if (it->get() == doc) {
             const TreeNode* node = doc->node();
+            if (node)
+                if (EditRecord* e = findEdit(doc->rootGroup(), doc->rootKind(), node->path())) e->current = std::string(doc->text());
             const bool generated = doc->rootKind() == RootKind::Virtual;
             const std::string group = doc->rootGroup();
             documents_.erase(it);
@@ -805,6 +812,7 @@ void Workspace::closeDocument(const Document* doc) {
 
 void Workspace::closeAllDocuments() {
     if (documents_.empty()) return;
+    refreshEdits();
     pendingFocus_ = nullptr;
     activeDocument_ = nullptr;
     documents_.clear();
@@ -824,6 +832,8 @@ void Workspace::closeAll() {
     pendingTabs_.clear();
     nav_.clear();  // history is per project session
     annotations_.clear();
+    edits_.clear();
+    ++editsVersion_;
     symbols_.clear();
     analysis_.clear();
     analysisReported_.clear();
@@ -861,4 +871,107 @@ void Workspace::applyPendingTabs(Root::Kind kind, const std::string& group) {
                                                  (t.group.empty() || t.group == group);
                                       }),
                        pendingTabs_.end());
+}
+
+// ---------------------------------------------------------------------------
+// Edit tracking
+// ---------------------------------------------------------------------------
+
+Workspace::EditRecord* Workspace::findEdit(const std::string& group, RootKind kind, const std::string& nodePath) {
+    for (EditRecord& e : edits_)
+        if (e.kind == kind && e.group == group && e.nodePath == nodePath) return &e;
+    return nullptr;
+}
+
+Document* Workspace::documentFor(const EditRecord& r) {
+    for (auto& d : documents_)
+        if (d->rootKind() == r.kind && d->rootGroup() == r.group && d->node() && d->node()->path() == r.nodePath) return d.get();
+    return nullptr;
+}
+
+void Workspace::noteEditBegin(const Document& doc) {
+    if (!doc.canEdit() || !doc.node()) return;
+    const std::string& nodePath = doc.node()->path();
+    if (findEdit(doc.rootGroup(), doc.rootKind(), nodePath)) return;
+    EditRecord r;
+    r.group = doc.rootGroup();
+    r.kind = doc.rootKind();
+    r.nodePath = nodePath;
+    std::string rel = nodePath;
+    std::replace(rel.begin(), rel.end(), '\\', '/');
+    if (r.kind == RootKind::Decompiled)
+        if (Root* root = rootByGroup(r.group, Root::Kind::Decompiled)) {
+            std::string base = root->outDir;
+            std::replace(base.begin(), base.end(), '\\', '/');
+            while (!base.empty() && base.back() == '/') base.pop_back();
+            if (!base.empty() && rel.size() > base.size() && rel.compare(0, base.size(), base) == 0 && rel[base.size()] == '/')
+                rel = rel.substr(base.size() + 1);
+        }
+    while (!rel.empty() && rel.front() == '/') rel.erase(rel.begin());
+    if (apkRoots().size() > 1) rel = r.group + "/" + rel;
+    r.display = rel;
+    r.original = std::string(doc.text());
+    r.current = r.original;
+    edits_.push_back(std::move(r));
+    ++editsVersion_;
+}
+
+void Workspace::refreshEdits() {
+    for (EditRecord& e : edits_)
+        if (Document* d = documentFor(e)) e.current = std::string(d->text());
+}
+
+void Workspace::forgetUnchangedEdits() {
+    refreshEdits();
+    const size_t before = edits_.size();
+    edits_.erase(std::remove_if(edits_.begin(), edits_.end(), [](const EditRecord& e) { return e.current == e.original; }),
+                 edits_.end());
+    if (edits_.size() != before) ++editsVersion_;
+}
+
+bool Workspace::revertEdit(size_t index) {
+    if (index >= edits_.size()) return false;
+    EditRecord& e = edits_[index];
+    if (e.kind == RootKind::Decompiled) {
+        std::ofstream out(pathutil::fromUtf8(e.nodePath), std::ios::binary | std::ios::trunc);
+        if (!out) return false;
+        out.write(e.original.data(), static_cast<std::streamsize>(e.original.size()));
+        out.close();
+        if (!out) return false;
+    } else if (Root* v = rootByGroup(e.group, Root::Kind::Virtual); v && v->title == e.group) {
+        static_cast<MemorySource*>(v->source.get())->put(e.nodePath, e.original);
+    }
+    if (Document* d = documentFor(e)) d->resetText(e.original);
+    e.current = e.original;
+    ++editsVersion_;
+    return true;
+}
+
+bool Workspace::openEdit(size_t index, int line) {
+    if (index >= edits_.size()) return false;
+    const EditRecord& e = edits_[index];
+    if (Document* d = documentFor(e)) {
+        d->goTo(line);
+        requestFocus(d);
+        return true;
+    }
+    Root* root = rootByGroup(e.group, e.kind);
+    if (root && e.kind == RootKind::Virtual && root->title != e.group) root = nullptr;
+    const TreeNode* node = root && root->tree ? root->tree->findByPath(e.nodePath) : nullptr;
+    if (!node) {
+        if (e.kind != RootKind::Virtual) return false;
+        // Freed listing: bring it back (openGenerated restores the edited text).
+        const std::string title = e.nodePath.substr(e.nodePath.find_last_of('/') + 1);
+        const std::string original = e.original;  // openGenerated may touch edits_
+        openGenerated(e.group, e.nodePath, title, original, line);
+        return true;
+    }
+    NavLocation origin;
+    const NavLocation* originPtr = nullptr;
+    if (activeDocument_) {
+        origin = locationOf(*activeDocument_);
+        originPtr = &origin;
+    }
+    navigateTo(*root, *node, line, originPtr);
+    return true;
 }

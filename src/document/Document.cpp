@@ -263,13 +263,27 @@ void Document::cancelEdit() {
     ++textRevision_;
 }
 
+void Document::resetText(std::string text) {
+    if (mode_ != Mode::Code) return;
+    editing_ = false;
+    wantsEdit_ = false;
+    dirty_ = false;
+    std::string().swap(editBuffer_);
+    setText(std::move(text));
+    cachesDirty_ = false;
+    bumpEditSerial();
+    ++textRevision_;
+}
+
 bool Document::save() {
     if (!canEdit()) return false;
-    std::ofstream out(pathutil::fromUtf8(node_->path()), std::ios::binary);
-    if (!out) return false;
-    out.write(editBuffer_.data(), static_cast<std::streamsize>(editBuffer_.size()));
-    out.close();
-    if (!out) return false;
+    if (!editsInMemory()) {
+        std::ofstream out(pathutil::fromUtf8(node_->path()), std::ios::binary);
+        if (!out) return false;
+        out.write(editBuffer_.data(), static_cast<std::streamsize>(editBuffer_.size()));
+        out.close();
+        if (!out) return false;
+    }
     dirty_ = false;
     editing_ = false;
     // The saved buffer becomes the read-only text (moved, not copied).

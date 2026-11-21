@@ -765,6 +765,27 @@ bool TrafficProxy::serveExchange(net::Stream& client, std::shared_ptr<Flow>& flo
         if (up.sendAll(seed)) relayH2c(client, upStream, m.reverseHost, m.reversePort, seed, flow);
         return false;
     }
+    // A client preface inside a decrypted HTTPS exchange (the app negotiated h2
+    // over TLS): the preset knows the server, so relay it as h2c would be but
+    // over the established tunnel and decode it passively.
+    if (head.rfind("PRI * HTTP/2.0", 0) == 0 && preset && preset->https) {
+        flow = flow ? flow : newFlow();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            flow->method = "PRI";
+            flow->https = true;
+            flow->host = preset->host;
+            flow->port = preset->port;
+            flow->sni = preset->sni;
+            flow->tlsVersion = preset->tlsVersion;
+            flow->tlsCipher = preset->tlsCipher;
+            flow->alpn = "h2";
+        }
+        const std::string seed = head + "\r\n\r\n" + rest;
+        if (!client.sendAll(seed)) return false;
+        relayH2c(client, client, preset->host, preset->port, seed, flow);
+        return false;
+    }
     if (head.rfind("PRI * HTTP/2.0", 0) == 0) {
         flow = flow ? flow : newFlow();  // a persistent session's flow exists only now
         std::lock_guard<std::mutex> lock(mutex_);

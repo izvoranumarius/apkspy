@@ -202,6 +202,7 @@ std::shared_ptr<DexFile> DexFile::parse(std::shared_ptr<const std::vector<uint8_
         c.superclassIdx = rd32(p + 8);
         c.interfacesOff = rd32(p + 12);
         c.sourceFileIdx = rd32(p + 16);
+        c.annotationsOff = rd32(p + 20);
         c.classDataOff = rd32(p + 24);
         if (c.classIdx >= dex->typeIdsSize_) continue;  // skip junk entries
         dex->classDefs_.push_back(c);
