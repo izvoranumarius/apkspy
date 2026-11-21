@@ -57,3 +57,27 @@ private:
     std::deque<Event> events_;
     uint64_t seq_ = 0;
 };
+
+// Deploying and running frida-server on a device: Frida needs a matching
+// frida-server binary running (usually as root) before the CLI can connect.
+// These helpers push a binary the user supplies and run it; the external
+// `frida` CLI and a rooted device remain prerequisites.
+namespace fridaserver {
+
+// A remote path safe to drop into an adb shell command ([A-Za-z0-9._/-]).
+bool validRemotePath(const std::string& p);
+
+// `adb root` (best effort), then push `localBinary` to `remotePath` and
+// chmod it 0755. Synchronous; blocking. False (with error) when push or
+// chmod fail. `adbPath` is the adb executable.
+bool deploy(const std::string& adbPath, const std::string& serial, const std::string& localBinary,
+            const std::string& remotePath, std::string& error);
+
+// argv that runs the server in the foreground of an adb shell, so a
+// ChildProcess the caller keeps alive owns the running server.
+std::vector<std::string> runArgv(const std::string& adbPath, const std::string& serial, const std::string& remotePath);
+
+// True when a frida-server process is running on the device (pidof).
+bool running(const std::string& adbPath, const std::string& serial);
+
+}  // namespace fridaserver

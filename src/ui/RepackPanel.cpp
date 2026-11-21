@@ -55,7 +55,9 @@ void RepackPanel::build() {
         }
         opts.replacements.push_back({e.zipPath, std::move(bytes)});
     }
-    const repack::Tools tools = repack::Tools::fromAdb(settings_.getString(Settings::kAdbPath, "adb"));
+    for (const auto& a : assemblies_) opts.assemblies.push_back({a.dir, a.entry});
+    repack::Tools tools = repack::Tools::fromAdb(settings_.getString(Settings::kAdbPath, "adb"));
+    if (smaliTool_[0]) tools.smali = smaliTool_;
     status_ = "Building...";
     job_ = std::async(std::launch::async, [opts, tools] { return repack::run(opts, tools); });
 }
@@ -129,6 +131,41 @@ void RepackPanel::drawContents() {
         if (newZipPath_[0]) {
             replacements_.push_back({newZipPath_, picked});
             newZipPath_[0] = '\0';
+        }
+    }
+
+    // Assemble smali folders into dex entries (external smali tool).
+    ImGui::SeparatorText("Assemble smali");
+    ImGui::TextDisabled("Assemble a baksmali-style smali folder into a dex entry (needs the 'smali' tool or smali.jar).");
+    ImGui::SetNextItemWidth(-ui::em(6.f));
+    ImGui::InputTextWithHint("##smalitool", "smali tool path or smali.jar (blank = 'smali' on PATH)", smaliTool_, sizeof smaliTool_);
+    if (ImGui::BeginTable("##asm", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+        ImGui::TableSetupColumn("Entry");
+        ImGui::TableSetupColumn("Smali folder", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("##x", ImGuiTableColumnFlags_WidthFixed, ui::em(2.5f));
+        int remove = -1;
+        for (int i = 0; i < static_cast<int>(assemblies_.size()); ++i) {
+            ImGui::TableNextRow();
+            ImGui::PushID(1000 + i);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(assemblies_[i].entry.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", assemblies_[i].dir.c_str());
+            ImGui::TableNextColumn();
+            if (ui::smallButton("x")) remove = i;
+            ImGui::PopID();
+        }
+        if (remove >= 0) assemblies_.erase(assemblies_.begin() + remove);
+        ImGui::EndTable();
+    }
+    ImGui::SetNextItemWidth(ui::em(16.f));
+    ImGui::InputTextWithHint("##newasm", "target entry, e.g. classes.dex", newAsmEntry_, sizeof newAsmEntry_);
+    ImGui::SameLine();
+    if (ui::smallButton("Add folder...") && newAsmEntry_[0]) asmDirBrowser_.open(FileBrowser::Mode::SelectFolder);
+    if (asmDirBrowser_.render(), asmDirBrowser_.takeAccepted(picked)) {
+        if (newAsmEntry_[0]) {
+            assemblies_.push_back({picked, newAsmEntry_});
+            newAsmEntry_[0] = '\0';
         }
     }
 

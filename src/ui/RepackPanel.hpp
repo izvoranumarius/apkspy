@@ -41,7 +41,16 @@ private:
     std::vector<Entry> replacements_;
     char newZipPath_[256] = {};
 
-    FileBrowser sourceBrowser_, outputBrowser_, ksBrowser_, replFileBrowser_;
+    // smali folders assembled into dex entries.
+    struct Asm {
+        std::string dir;
+        std::string entry;
+    };
+    std::vector<Asm> assemblies_;
+    char smaliTool_[1024] = {};
+    char newAsmEntry_[256] = {};
+
+    FileBrowser sourceBrowser_, outputBrowser_, ksBrowser_, replFileBrowser_, asmDirBrowser_;
     std::future<repack::Result> job_;
     std::string log_;
     std::string status_;

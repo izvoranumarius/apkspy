@@ -27,7 +27,53 @@ void FridaPanel::start() {
     if (!ok && error_.empty()) error_ = "could not start Frida (is the 'frida' CLI installed?)";
 }
 
+void FridaPanel::deployServer(const std::string& binary) {
+    const std::string serial = devices_.selected();
+    if (serial.empty()) {
+        serverStatus_ = "Select a device first.";
+        return;
+    }
+    std::string err;
+    const std::string remote = "/data/local/tmp/frida-server";
+    if (!fridaserver::deploy(devices_.adbPath(), serial, binary, remote, err)) {
+        serverStatus_ = "deploy failed: " + err;
+        return;
+    }
+    // Run it; the ChildProcess keeps the server alive until stopped.
+    serverProc_ = ChildProcess::spawn(fridaserver::runArgv(devices_.adbPath(), serial, remote));
+    serverStarted_ = serverProc_.valid();
+    serverStatus_ = serverStarted_ ? "frida-server deployed and started" : "deployed, but could not start it";
+}
+
 void FridaPanel::drawContents() {
+    // frida-server deployment.
+    const std::string serial = devices_.selected();
+    const auto now = std::chrono::steady_clock::now();
+    if (!serial.empty() && now - lastServerCheck_ > std::chrono::seconds(3)) {
+        lastServerCheck_ = now;
+        serverRunning_ = fridaserver::running(devices_.adbPath(), serial);
+    }
+    ImGui::TextUnformatted("frida-server:");
+    ImGui::SameLine();
+    if (serverRunning_) ImGui::TextColored(theme::vec(Col::Success), "running on device");
+    else ImGui::TextColored(theme::vec(Col::TextMuted), "not detected");
+    ImGui::SameLine();
+    if (ui::smallButton("Deploy & start...")) serverBrowser_.open(FileBrowser::Mode::OpenFile);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Push a frida-server binary (matching the device ABI and your frida version) and run it");
+    if (serverStarted_) {
+        ImGui::SameLine();
+        if (ui::smallButton("Stop server")) {
+            serverProc_.killProcess();
+            serverStarted_ = false;
+            serverStatus_ = "frida-server stopped";
+        }
+    }
+    std::string srvPicked;
+    if (serverBrowser_.render(), serverBrowser_.takeAccepted(srvPicked)) deployServer(srvPicked);
+    if (!serverStatus_.empty()) ImGui::TextDisabled("%s", serverStatus_.c_str());
+    ImGui::Separator();
+
     // Device selector (shared with the other device panels).
     const std::vector<adb::Device> devices = devices_.devices();
     std::string selected = devices_.selected();

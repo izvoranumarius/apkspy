@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -24,6 +25,7 @@ protected:
 
 private:
     void start();
+    void deployServer(const std::string& binary);
     DeviceService& devices_;
     ScriptRunner runner_;
     FridaBridge frida_{runner_};
@@ -36,4 +38,12 @@ private:
     bool autoScroll_ = true;
     uint64_t shown_ = 0;
     std::vector<FridaBridge::Event> events_;
+
+    // frida-server lifecycle (owned here while it runs).
+    FileBrowser serverBrowser_;
+    ChildProcess serverProc_;
+    bool serverStarted_ = false;
+    std::string serverStatus_;
+    std::chrono::steady_clock::time_point lastServerCheck_{};
+    bool serverRunning_ = false;
 };

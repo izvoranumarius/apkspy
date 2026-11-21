@@ -19,12 +19,21 @@ struct Replacement {
     std::string bytes;      // the new content
 };
 
+// A folder of smali assembled (by the external smali tool) into a dex entry.
+struct SmaliAssembly {
+    std::string smaliDir;   // folder of .smali files (a baksmali-style tree)
+    std::string entryPath;  // target zip entry, e.g. "classes.dex"
+};
+
 // External tools. Derive them from the SDK that holds a known adb, or leave
 // the PATH defaults.
 struct Tools {
     std::string zipalign = "zipalign";
     std::string apksigner = "apksigner";  // a .bat on Windows
     std::string keytool = "keytool";      // from the JDK
+    // The smali assembler: a wrapper on PATH, or a path to smali.jar (run
+    // through java). Only needed when Options::assemblies is non-empty.
+    std::string smali = "smali";
     // <sdk>/platform-tools/adb -> <sdk>/build-tools/<newest>/{zipalign,apksigner}.
     static Tools fromAdb(const std::string& adbPath);
 };
@@ -33,6 +42,9 @@ struct Options {
     std::string sourceApk;
     std::string outputApk;
     std::vector<Replacement> replacements;
+    // Smali folders assembled into dex entries before the rebuild (each
+    // becomes a replacement). Needs Tools::smali.
+    std::vector<SmaliAssembly> assemblies;
     // Signing key (a Java keystore). When empty, a debug keystore is used or
     // created (the standard android / androiddebugkey / android), so the
     // output is always installable.
@@ -65,6 +77,10 @@ bool ensureDebugKeystore(const Tools& tools, const std::string& path, std::strin
 
 // apksigner argv for `in` -> `out` (pure, for testing/preview).
 std::vector<std::string> signArgv(const Tools& tools, const Options& opts, const std::string& in, const std::string& out);
+
+// smali-assembler argv for `dir` -> `outDex` (pure). A `smali` ending in
+// ".jar" is run through java; otherwise it is the smali wrapper executable.
+std::vector<std::string> assembleArgv(const std::string& smali, const std::string& dir, const std::string& outDex);
 
 // Runs the whole pipeline. Blocking: call it from a worker thread (the UI
 // shows the log as it arrives through onLog).

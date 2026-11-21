@@ -1,4 +1,6 @@
 #include "debug/FridaBridge.hpp"
+#include <cctype>
+#include "core/Process.hpp"
 #include "core/ScriptRunner.hpp"
 
 namespace {
@@ -131,3 +133,59 @@ uint64_t FridaBridge::head() const {
     std::lock_guard<std::mutex> lock(m_);
     return seq_;
 }
+
+namespace fridaserver {
+
+bool validRemotePath(const std::string& p) {
+    if (p.empty() || p[0] != '/') return false;
+    for (char c : p)
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == '/' || c == '-')) return false;
+    return true;
+}
+
+bool deploy(const std::string& adbPath, const std::string& serial, const std::string& localBinary,
+            const std::string& remotePath, std::string& error) {
+    if (!validToken(serial, true)) {
+        error = "invalid serial";
+        return false;
+    }
+    if (!validRemotePath(remotePath)) {
+        error = "invalid remote path";
+        return false;
+    }
+    // Best effort: a Google-APIs emulator takes `adb root`; a production
+    // device will refuse it and need an already-rooted frida-server path.
+    proc::run({adbPath, "-s", serial, "root"}, 15000);
+    proc::run({adbPath, "-s", serial, "wait-for-device"}, 15000);
+    const proc::RunResult push = proc::run({adbPath, "-s", serial, "push", localBinary, remotePath}, 120000);
+    if (!push.started) {
+        error = "adb not found";
+        return false;
+    }
+    if (push.exitCode != 0) {
+        error = push.output.empty() ? "adb push failed" : push.output;
+        return false;
+    }
+    const proc::RunResult chmod = proc::run({adbPath, "-s", serial, "shell", "chmod", "755", remotePath}, 10000);
+    if (chmod.exitCode != 0) {
+        error = "chmod failed: " + chmod.output;
+        return false;
+    }
+    return true;
+}
+
+std::vector<std::string> runArgv(const std::string& adbPath, const std::string& serial, const std::string& remotePath) {
+    // Foreground in the adb shell: the owning ChildProcess keeps it alive,
+    // and its stdout/stderr stream back as the server's log.
+    return {adbPath, "-s", serial, "shell", remotePath};
+}
+
+bool running(const std::string& adbPath, const std::string& serial) {
+    const proc::RunResult r = proc::run({adbPath, "-s", serial, "shell", "pidof", "frida-server"}, 8000);
+    if (!r.started) return false;
+    for (char c : r.output)
+        if (std::isdigit(static_cast<unsigned char>(c))) return true;
+    return false;
+}
+
+}  // namespace fridaserver

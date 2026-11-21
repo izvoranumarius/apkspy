@@ -2,7 +2,9 @@
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <map>
+#include <sstream>
 #include "core/ApkArchive.hpp"
 #include "core/Paths.hpp"
 #include "core/Process.hpp"
@@ -91,6 +93,12 @@ bool ensureDebugKeystore(const Tools& tools, const std::string& path, std::strin
     return true;
 }
 
+std::vector<std::string> assembleArgv(const std::string& smali, const std::string& dir, const std::string& outDex) {
+    const bool isJar = smali.size() > 4 && smali.compare(smali.size() - 4, 4, ".jar") == 0;
+    if (isJar) return {"java", "-jar", smali, "a", dir, "-o", outDex};
+    return {smali, "a", dir, "-o", outDex};
+}
+
 std::vector<std::string> signArgv(const Tools& tools, const Options& opts, const std::string& in, const std::string& out) {
     const std::string ks = opts.keystorePath.empty() ? debugKeystorePath() : opts.keystorePath;
     const std::string storePass = opts.keystorePath.empty() ? "android" : opts.keystorePassword;
@@ -113,16 +121,29 @@ std::vector<std::string> signArgv(const Tools& tools, const Options& opts, const
 
 namespace {
 
+std::string readWhole(const std::string& path, bool& ok) {
+    std::ifstream in(pathutil::fromUtf8(path), std::ios::binary);
+    if (!in) {
+        ok = false;
+        return {};
+    }
+    std::ostringstream s;
+    s << in.rdbuf();
+    ok = true;
+    return s.str();
+}
+
 // The zip-rebuild step: source entries (replacements spliced in) into `dest`.
-bool rebuild(const Options& options, const std::function<void(const std::string&)>& log, const std::function<bool()>& cancelled,
+bool rebuild(const std::string& sourceApk, const std::vector<Replacement>& replacements,
+             const std::function<void(const std::string&)>& log, const std::function<bool()>& cancelled,
              const std::string& dest, Result& res) {
     ApkArchive in;
-    if (!in.open(options.sourceApk)) {
-        res.error = "cannot open " + options.sourceApk;
+    if (!in.open(sourceApk)) {
+        res.error = "cannot open " + sourceApk;
         return false;
     }
     std::map<std::string, std::string> replaced;
-    for (const auto& r : options.replacements) replaced[r.entryPath] = r.bytes;
+    for (const auto& r : replacements) replaced[r.entryPath] = r.bytes;
     log("Reading " + std::to_string(in.entries().size()) + " entries");
 
     mz_zip_archive out{};
@@ -193,8 +214,34 @@ Result run(const Options& options, const Tools& tools, std::function<void(const 
     };
     std::error_code ec;
 
+    // Assemble smali folders into dex replacements first.
+    std::vector<Replacement> reps = options.replacements;
+    int asmIndex = 0;
+    for (const auto& asmb : options.assemblies) {
+        const std::string outDex = options.outputApk + ".asm" + std::to_string(asmIndex++) + ".dex";
+        log("Assembling " + asmb.smaliDir + " -> " + asmb.entryPath);
+        const proc::RunResult r = proc::run(assembleArgv(tools.smali, asmb.smaliDir, outDex), 180000);
+        if (!r.started) {
+            res.error = "smali assembler not found (" + tools.smali + "); set its path or install smali";
+            return res;
+        }
+        if (r.exitCode != 0 || !fileExists(pathutil::fromUtf8(outDex))) {
+            res.error = "smali assembly failed: " + trim(r.output);
+            fs::remove(pathutil::fromUtf8(outDex), ec);
+            return res;
+        }
+        bool ok = false;
+        std::string bytes = readWhole(outDex, ok);
+        fs::remove(pathutil::fromUtf8(outDex), ec);
+        if (!ok) {
+            res.error = "cannot read assembled dex";
+            return res;
+        }
+        reps.push_back({asmb.entryPath, std::move(bytes)});
+    }
+
     const std::string rebuilt = options.outputApk + ".rebuilt.apk";
-    if (!rebuild(options, log, cancelled, rebuilt, res)) {
+    if (!rebuild(options.sourceApk, reps, log, cancelled, rebuilt, res)) {
         if (res.error.empty()) res.error = "repack failed";
         fs::remove(pathutil::fromUtf8(rebuilt), ec);
         return res;

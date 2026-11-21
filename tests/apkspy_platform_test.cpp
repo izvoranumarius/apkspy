@@ -38,6 +38,7 @@
 #include "analysis/GraphLayout.hpp"
 #include "analysis/NativeCode.hpp"
 #include "debug/Emulator.hpp"
+#include "debug/FridaBridge.hpp"
 #include "core/ApkRepack.hpp"
 #include "core/Process.hpp"
 #include "core/Project.hpp"
@@ -4379,7 +4380,27 @@ static void testRepack() {
     cst.keyPassword = "keypw";
     CHECK(valAfter(repack::signArgv(t, cst, "i", "o"), "--key-pass") == "pass:keypw", "explicit key password");
     CHECK(!repack::debugKeystorePath().empty(), "debug keystore path resolves");
+
+    // smali assembly argv: wrapper vs .jar (run through java).
+    auto wrap = repack::assembleArgv("smali", "out/smali", "classes.dex");
+    CHECK(wrap.size() == 5 && wrap[0] == "smali" && wrap[1] == "a" && wrap[2] == "out/smali" && wrap[3] == "-o" &&
+              wrap[4] == "classes.dex",
+          "smali wrapper argv");
+    auto jar = repack::assembleArgv("/opt/smali.jar", "d", "c.dex");
+    CHECK(jar.size() == 7 && jar[0] == "java" && jar[1] == "-jar" && jar[2] == "/opt/smali.jar" && jar[3] == "a", "smali.jar via java");
     (void)has;
+}
+
+static void testFridaServer() {
+    std::printf("== frida-server ==\n");
+    CHECK(fridaserver::validRemotePath("/data/local/tmp/frida-server"), "valid remote path");
+    CHECK(!fridaserver::validRemotePath("tmp/x") && !fridaserver::validRemotePath("/tmp/x; rm -rf /") &&
+              !fridaserver::validRemotePath("/tmp/$(id)") && !fridaserver::validRemotePath(""),
+          "remote paths with no leading slash or shell metacharacters rejected");
+    auto a = fridaserver::runArgv("adb", "emulator-5554", "/data/local/tmp/frida-server");
+    CHECK(a.size() == 5 && a[0] == "adb" && a[1] == "-s" && a[2] == "emulator-5554" && a[3] == "shell" &&
+              a[4] == "/data/local/tmp/frida-server",
+          "run argv");
 }
 
 }  // namespace
@@ -4447,6 +4468,7 @@ int main(int argc, char** argv) {
     testKotlinMetadata();
     testEmulator();
     testRepack();
+    testFridaServer();
     testMcpToolsEndToEnd();
     std::printf("\n%d passed, %d failed\n", passes, failures);
     return failures ? 1 : 0;
