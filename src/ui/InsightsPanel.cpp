@@ -59,11 +59,17 @@ void InsightsPanel::runScan() {
 
     haveAudit_ = false;
     auditError_.clear();
+    permUse_.clear();
+    permMissing_.clear();
     if (apk)
         if (const auto* archive = dynamic_cast<const ApkArchive*>(apk->source.get())) {
             const auto res = workspace_.resources(group_);
             haveAudit_ = manifestaudit::audit(*archive, res.get(), audit_, auditError_);
         }
+    if (haveAudit_) {
+        permUse_ = insights::permissionUsage(audit_.permissions, in.methodRefs);
+        permMissing_ = insights::missingPermissions(audit_.permissions, in.methodRefs);
+    }
     scanned_ = true;
     selectOverview_ = true;
     char buf[200];
@@ -313,6 +319,49 @@ void InsightsPanel::drawManifest() {
     std::snprintf(perms, sizeof perms, "Dangerous permissions (%zu)###perm", a.dangerousPermissions.size());
     if (ImGui::CollapsingHeader(perms))
         for (const auto& p : a.dangerousPermissions) ImGui::BulletText("%s", p.c_str());
+
+    const auto shortPerm = [](const std::string& p) {
+        const size_t dot = p.rfind('.');
+        return dot == std::string::npos ? p : p.substr(dot + 1);
+    };
+    char usage[64];
+    std::snprintf(usage, sizeof usage, "Permission \xE2\x86\x92 API usage (%zu)###permuse", permUse_.size());
+    if (!permUse_.empty() && ImGui::CollapsingHeader(usage)) {
+        ImGui::TextDisabled("Which guarded APIs the app actually calls for each requested permission.");
+        for (const auto& u : permUse_) {
+            ImGui::PushID(u.permission.c_str());
+            const bool unused = u.apis.empty();
+            ImGui::PushStyleColor(ImGuiCol_Text, unused ? theme::vec(Col::TextMuted) : theme::vec(Col::Text));
+            const bool open = ImGui::TreeNodeEx("##p", ImGuiTreeNodeFlags_SpanAvailWidth, "%s  (%zu)", shortPerm(u.permission).c_str(),
+                                                u.apis.size());
+            ImGui::PopStyleColor();
+            if (unused) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("no matching call found");
+            }
+            if (open) {
+                for (const auto& api : u.apis) ImGui::BulletText("%s", api.c_str());
+                ImGui::TreePop();
+            }
+            ImGui::PopID();
+        }
+    }
+    if (!permMissing_.empty()) {
+        char miss[72];
+        std::snprintf(miss, sizeof miss, "Guarded APIs used WITHOUT the permission (%zu)###permmiss", permMissing_.size());
+        if (ImGui::CollapsingHeader(miss)) {
+            ImGui::TextColored(theme::vec(Col::Warning), "These calls need a permission the manifest does not request.");
+            for (const auto& u : permMissing_) {
+                ImGui::PushID(u.permission.c_str());
+                if (ImGui::TreeNodeEx("##m", ImGuiTreeNodeFlags_SpanAvailWidth, "%s  (%zu)", shortPerm(u.permission).c_str(),
+                                      u.apis.size())) {
+                    for (const auto& api : u.apis) ImGui::BulletText("%s", api.c_str());
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+            }
+        }
+    }
 }
 
 void InsightsPanel::drawRetrace() {

@@ -39,6 +39,7 @@
 #include "analysis/NativeCode.hpp"
 #include "debug/Emulator.hpp"
 #include "debug/FridaBridge.hpp"
+#include "core/Annotations.hpp"
 #include "core/ApkRepack.hpp"
 #include "core/Process.hpp"
 #include "core/Project.hpp"
@@ -4403,6 +4404,41 @@ static void testFridaServer() {
           "run argv");
 }
 
+static void testAnnotationsMarkdown() {
+    std::printf("== annotations markdown ==\n");
+    std::vector<Annotation> notes;
+    Annotation bk;
+    bk.kind = Annotation::Kind::Bookmark;
+    bk.group = "app";
+    bk.path = "smali/com/a/Main.smali";
+    bk.line = 41;
+    bk.text = "entry point";
+    bk.context = "invoke-direct {v0}, ...";
+    notes.push_back(bk);
+    Annotation cm;
+    cm.kind = Annotation::Kind::Comment;
+    cm.group = "app";
+    cm.path = "smali/com/a/Main.smali";
+    cm.line = 9;
+    cm.text = "decrypts the\nconfig";
+    notes.push_back(cm);
+    Annotation rn;  // a rename: must NOT appear in notes markdown
+    rn.kind = Annotation::Kind::Rename;
+    rn.group = "app";
+    rn.path = "x";
+    rn.text = "newName";
+    notes.push_back(rn);
+
+    const std::string md = annotationsToMarkdown(notes, false);
+    CHECK(md.find("1 bookmark(s), 1 comment(s)") != std::string::npos, "counts exclude renames");
+    CHECK(md.find("### Main.smali") != std::string::npos, "file heading");
+    CHECK(md.find("**comment:10**") != std::string::npos && md.find("**bookmark:42**") != std::string::npos,
+          "1-based line numbers, comment before bookmark");
+    CHECK(md.find("decrypts the config") != std::string::npos, "multi-line text flattened");
+    CHECK(md.find("newName") == std::string::npos, "renames excluded");
+    CHECK(annotationsToMarkdown({}, false).find("No bookmarks or comments") != std::string::npos, "empty report");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -4469,6 +4505,7 @@ int main(int argc, char** argv) {
     testEmulator();
     testRepack();
     testFridaServer();
+    testAnnotationsMarkdown();
     testMcpToolsEndToEnd();
     std::printf("\n%d passed, %d failed\n", passes, failures);
     return failures ? 1 : 0;

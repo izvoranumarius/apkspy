@@ -1,5 +1,6 @@
 #include "core/Annotations.hpp"
 #include <algorithm>
+#include <cstdio>
 
 namespace {
 bool valid(const Annotation& a) {
@@ -123,5 +124,66 @@ std::string Annotations::unescape(const std::string& s) {
         const char n = s[++i];
         out.push_back(n == 'n' ? '\n' : n == 'r' ? '\r' : n);
     }
+    return out;
+}
+
+// --- Markdown export --------------------------------------------------------
+
+namespace {
+std::string fileOf(const std::string& path) {
+    const size_t s = path.find_last_of("/\\");
+    return s == std::string::npos ? path : path.substr(s + 1);
+}
+std::string hexAddr(uint64_t v) {
+    char b[24];
+    std::snprintf(b, sizeof b, "0x%llx", static_cast<unsigned long long>(v));
+    return b;
+}
+// One-line, trimmed, for the bullet; multi-line text is joined with " / ".
+std::string oneLine(const std::string& s) {
+    std::string out;
+    for (char c : s) out += (c == '\n' || c == '\r') ? ' ' : c;
+    return out;
+}
+}  // namespace
+
+std::string annotationsToMarkdown(const std::vector<Annotation>& notes, bool multiApk) {
+    // Keep bookmarks and comments; order by group, path, line, addr.
+    std::vector<const Annotation*> items;
+    for (const Annotation& a : notes)
+        if (a.kind == Annotation::Kind::Bookmark || a.kind == Annotation::Kind::Comment) items.push_back(&a);
+    std::sort(items.begin(), items.end(), [](const Annotation* a, const Annotation* b) {
+        if (a->group != b->group) return a->group < b->group;
+        if (a->path != b->path) return a->path < b->path;
+        if (a->line != b->line) return a->line < b->line;
+        return a->addr < b->addr;
+    });
+
+    std::string out = "# Notes\n";
+    int bookmarks = 0, comments = 0;
+    for (const Annotation* a : items) (a->kind == Annotation::Kind::Bookmark ? bookmarks : comments)++;
+    out += "\n" + std::to_string(bookmarks) + " bookmark(s), " + std::to_string(comments) + " comment(s).\n";
+
+    std::string curGroup, curPath;
+    for (const Annotation* a : items) {
+        if (multiApk && a->group != curGroup) {
+            curGroup = a->group;
+            curPath.clear();
+            out += "\n## " + curGroup + "\n";
+        }
+        if (a->path != curPath) {
+            curPath = a->path;
+            out += "\n### " + fileOf(a->path) + "\n\n";
+            if (fileOf(a->path) != a->path) out += "`" + a->path + "`\n\n";
+        }
+        const char* kind = a->kind == Annotation::Kind::Bookmark ? "bookmark" : "comment";
+        std::string where =
+            a->target == Annotation::Target::Native ? " @ " + hexAddr(a->addr) : ":" + std::to_string(a->line + 1);
+        out += "- **" + std::string(kind) + where + "**";
+        if (!a->text.empty()) out += " " + oneLine(a->text);
+        out += "\n";
+        if (!a->context.empty()) out += "  - `" + oneLine(a->context) + "`\n";
+    }
+    if (items.empty()) out += "\n_No bookmarks or comments._\n";
     return out;
 }

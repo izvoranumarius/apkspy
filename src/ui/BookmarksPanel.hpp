@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include "ui/AnnotationUi.hpp"
+#include "ui/FileBrowser.hpp"
 #include "ui/Panel.hpp"
 
 // Every bookmark and comment of the project, filterable. Double-click jumps
@@ -29,4 +30,5 @@ private:
     uint64_t appliedVersion_ = 0;
     std::vector<int> rows_;  // annotation ids, sorted by location
     ui::CommentPopup popup_;
+    FileBrowser exportBrowser_;
 };

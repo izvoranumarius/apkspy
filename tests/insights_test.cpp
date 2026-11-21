@@ -183,6 +183,31 @@ void testMapping() {
           "class names in messages");
 }
 
+void testPermissions() {
+    const std::vector<std::string> perms = {"android.permission.ACCESS_FINE_LOCATION", "android.permission.CAMERA",
+                                            "android.permission.INTERNET"};
+    const std::vector<std::string> refs = {
+        "Landroid/location/LocationManager;->getLastKnownLocation(Ljava/lang/String;)Landroid/location/Location;",
+        "Landroid/telephony/TelephonyManager;->getDeviceId()Ljava/lang/String;",  // READ_PHONE_STATE, NOT requested
+        "Ljava/lang/String;->length()I"};
+    const auto used = insights::permissionUsage(perms, refs);
+    const auto find = [&](const std::vector<insights::PermissionUse>& v, const char* p) -> const insights::PermissionUse* {
+        for (const auto& u : v)
+            if (u.permission == p) return &u;
+        return nullptr;
+    };
+    const auto* loc = find(used, "android.permission.ACCESS_FINE_LOCATION");
+    CHECK(loc && loc->apis.size() == 1, "location permission: one API used");
+    const auto* cam = find(used, "android.permission.CAMERA");
+    CHECK(cam && cam->apis.empty(), "camera requested but unused");
+    CHECK(!find(used, "android.permission.READ_PHONE_STATE"), "non-requested permission not in usage view");
+
+    const auto missing = insights::missingPermissions(perms, refs);
+    const auto* phone = find(missing, "android.permission.READ_PHONE_STATE");
+    CHECK(phone && phone->apis.size() == 1, "getDeviceId flagged: READ_PHONE_STATE used without the permission");
+    CHECK(!find(missing, "android.permission.ACCESS_FINE_LOCATION"), "requested permission not in missing view");
+}
+
 }  // namespace
 
 int main() {
@@ -193,6 +218,7 @@ int main() {
     testObfuscation();
     testExport();
     testMapping();
+    testPermissions();
     std::printf("%d passed, %d failed\n", passes, failures);
     return failures == 0 ? 0 : 1;
 }

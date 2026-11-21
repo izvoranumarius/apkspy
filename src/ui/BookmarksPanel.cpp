@@ -1,8 +1,11 @@
 #include "ui/BookmarksPanel.hpp"
 #include <algorithm>
 #include <cstdio>
+#include <fstream>
 #include <tuple>
+#include "core/Paths.hpp"
 #include "core/TextUtils.hpp"
+#include "ui/UiUtil.hpp"
 
 namespace {
 std::string fileName(const std::string& path) {
@@ -76,9 +79,23 @@ void BookmarksPanel::drawContents() {
     // Same chip switch as the other view filters (radio circles looked heavy).
     static const char* const kKinds[] = {"All", "Bookmarks", "Comments"};
     ui::segmented(kKinds, 3, kindFilter_);
+    ui::sameLineIfFits(ui::buttonWidth("Export MD..."));
+    ImGui::BeginDisabled(notes.all().empty());
+    if (ui::smallButton("Export MD...")) {
+        exportBrowser_.open(FileBrowser::Mode::SaveFile);
+        exportBrowser_.setDefaultName("notes.md");
+    }
+    ImGui::EndDisabled();
     ui::sameLineIfFits(ui::em(10.f));
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##flt", "Filter text or file...", filter_, sizeof filter_);
+    std::string picked;
+    if (exportBrowser_.render(), exportBrowser_.takeAccepted(picked)) {
+        const std::string md = annotationsToMarkdown(notes.all(), workspace_.apkRoots().size() > 1);
+        std::ofstream out(pathutil::fromUtf8(picked), std::ios::binary);
+        out.write(md.data(), static_cast<std::streamsize>(md.size()));
+        workspace_.log(out ? "Exported notes to " + picked : "Could not write " + picked);
+    }
     rebuildRows();
     if (notes.all().empty()) {
         ImGui::TextDisabled("Nothing yet. In the editor or a native listing press Ctrl+B for a bookmark or ; for a comment.");

@@ -76,6 +76,22 @@ struct Obfuscation {
 };
 Obfuscation estimateObfuscation(const std::vector<std::string>& classes);
 
+// --- Permission -> API usage ------------------------------------------------
+// Which guarded APIs an app actually calls for each dangerous permission it
+// requests - the gap between what it asks for and what it uses.
+struct PermissionUse {
+    std::string permission;          // "android.permission.ACCESS_FINE_LOCATION"
+    std::vector<std::string> apis;   // referenced guarded method signatures
+};
+// For each requested permission that has a known API set, the referenced
+// guarded APIs (empty apis = requested but no matching call seen).
+std::vector<PermissionUse> permissionUsage(const std::vector<std::string>& requestedPermissions,
+                                           const std::vector<std::string>& methodRefs);
+// Guarded APIs used WITHOUT the matching permission requested (possible
+// crash-at-runtime, or a permission added at runtime elsewhere).
+std::vector<PermissionUse> missingPermissions(const std::vector<std::string>& requestedPermissions,
+                                              const std::vector<std::string>& methodRefs);
+
 // --- Everything together ----------------------------------------------------
 struct Result {
     std::vector<Secret> secrets;

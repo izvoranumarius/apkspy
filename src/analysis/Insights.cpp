@@ -434,6 +434,76 @@ std::string q(std::string_view s) {
 
 }  // namespace
 
+namespace {
+
+// Dangerous permission -> guarded API signature prefixes. A referenced method
+// whose signature starts with one of these needs that permission.
+struct PermApi {
+    const char* permission;
+    std::vector<const char*> prefixes;
+};
+
+const std::vector<PermApi>& permApis() {
+    static const std::vector<PermApi> k = {
+        {"android.permission.ACCESS_FINE_LOCATION",
+         {"Landroid/location/LocationManager;->getLastKnownLocation", "Landroid/location/LocationManager;->requestLocationUpdates",
+          "Landroid/location/LocationManager;->getCurrentLocation", "Lcom/google/android/gms/location/FusedLocationProviderClient;->getLastLocation",
+          "Lcom/google/android/gms/location/FusedLocationProviderClient;->requestLocationUpdates"}},
+        {"android.permission.ACCESS_COARSE_LOCATION",
+         {"Landroid/location/LocationManager;->getLastKnownLocation", "Lcom/google/android/gms/location/FusedLocationProviderClient;->getLastLocation"}},
+        {"android.permission.CAMERA",
+         {"Landroid/hardware/Camera;->open", "Landroid/hardware/camera2/CameraManager;->openCamera", "Landroidx/camera/"}},
+        {"android.permission.RECORD_AUDIO",
+         {"Landroid/media/AudioRecord;-><init>", "Landroid/media/MediaRecorder;->start", "Landroid/media/AudioRecord;->startRecording"}},
+        {"android.permission.READ_CONTACTS", {"Landroid/provider/ContactsContract", "Landroid/provider/ContactsContract$"}},
+        {"android.permission.READ_SMS", {"Landroid/provider/Telephony$Sms", "Landroid/telephony/SmsManager;->getAllMessagesFromIcc"}},
+        {"android.permission.SEND_SMS", {"Landroid/telephony/SmsManager;->sendTextMessage", "Landroid/telephony/SmsManager;->sendMultipartTextMessage"}},
+        {"android.permission.READ_PHONE_STATE",
+         {"Landroid/telephony/TelephonyManager;->getDeviceId", "Landroid/telephony/TelephonyManager;->getImei",
+          "Landroid/telephony/TelephonyManager;->getSubscriberId", "Landroid/telephony/TelephonyManager;->getLine1Number",
+          "Landroid/telephony/TelephonyManager;->getSimSerialNumber"}},
+        {"android.permission.READ_EXTERNAL_STORAGE", {"Landroid/os/Environment;->getExternalStorageDirectory"}},
+        {"android.permission.READ_CALENDAR", {"Landroid/provider/CalendarContract"}},
+        {"android.permission.GET_ACCOUNTS", {"Landroid/accounts/AccountManager;->getAccounts", "Landroid/accounts/AccountManager;->getAccountsByType"}},
+        {"android.permission.READ_CALL_LOG", {"Landroid/provider/CallLog"}},
+        {"android.permission.CALL_PHONE", {"Landroid/telephony/TelephonyManager;->endCall"}},
+        {"android.permission.BLUETOOTH_CONNECT", {"Landroid/bluetooth/BluetoothDevice;->connectGatt", "Landroid/bluetooth/BluetoothSocket;->connect"}},
+        {"android.permission.BLUETOOTH_SCAN", {"Landroid/bluetooth/BluetoothAdapter;->startDiscovery", "Landroid/bluetooth/le/BluetoothLeScanner;->startScan"}},
+        {"android.permission.BODY_SENSORS", {"Landroid/hardware/SensorManager;->registerListener"}},
+        {"android.permission.NFC", {"Landroid/nfc/NfcAdapter;", "Landroid/nfc/tech/"}},
+        {"android.permission.READ_PHONE_NUMBERS", {"Landroid/telephony/TelephonyManager;->getLine1Number"}},
+        {"android.permission.ACTIVITY_RECOGNITION", {"Lcom/google/android/gms/location/ActivityRecognitionClient;"}},
+    };
+    return k;
+}
+
+std::vector<PermissionUse> permissionCross(const std::vector<std::string>& perms, const std::vector<std::string>& methodRefs,
+                                           bool requested) {
+    std::set<std::string> have(perms.begin(), perms.end());
+    std::vector<PermissionUse> out;
+    for (const PermApi& pa : permApis()) {
+        const bool asked = have.count(pa.permission) != 0;
+        if (asked != requested) continue;  // requested-view vs missing-view
+        PermissionUse use{pa.permission, {}};
+        std::set<std::string> seen;
+        for (const std::string& r : methodRefs)
+            for (const char* pre : pa.prefixes)
+                if (r.rfind(pre, 0) == 0 && seen.insert(r).second) use.apis.push_back(r);
+        if (requested || !use.apis.empty()) out.push_back(std::move(use));
+    }
+    return out;
+}
+
+}  // namespace
+
+std::vector<PermissionUse> permissionUsage(const std::vector<std::string>& perms, const std::vector<std::string>& methodRefs) {
+    return permissionCross(perms, methodRefs, true);
+}
+
+std::vector<PermissionUse> missingPermissions(const std::vector<std::string>& perms, const std::vector<std::string>& methodRefs) {
+    return permissionCross(perms, methodRefs, false);
+}
+
 std::string mask(std::string_view secret) {
     if (secret.size() <= 8) return std::string(secret.size(), '*');
     return std::string(secret.substr(0, 4)) + std::string(std::min<size_t>(secret.size() - 8, 12), '*') +

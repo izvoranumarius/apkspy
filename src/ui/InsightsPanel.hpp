@@ -47,6 +47,8 @@ private:
     bool haveAudit_ = false;
     manifestaudit::Audit audit_;
     std::string auditError_;
+    std::vector<insights::PermissionUse> permUse_;      // requested permissions -> APIs used
+    std::vector<insights::PermissionUse> permMissing_;  // guarded APIs used without the permission
     bool showValues_ = false;
     std::map<std::string, std::vector<ApkAnalysis::XrefHit>> callers_;  // signature / string -> uses
     std::string status_;

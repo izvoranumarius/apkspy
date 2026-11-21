@@ -84,3 +84,8 @@ private:
     int nextId_ = 1;
     uint64_t version_ = 1;
 };
+
+// Bookmarks and comments as a Markdown report (grouped by APK, then file,
+// in location order). Variable renames/retypes/symbols are left out - they
+// are decompiler state, not notes. `multiApk` adds the APK group heading.
+std::string annotationsToMarkdown(const std::vector<Annotation>& notes, bool multiApk);
