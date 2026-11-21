@@ -262,6 +262,8 @@ bool Workspace::removeApk(Root* apkRoot) {
     analysis_.purge(group);  // frees the DEX data and xref tables
     analysisReported_.erase(group);
     treeEpochs_.erase(group);
+    // Drop edit-tracking records of the removed APK (their tabs are gone).
+    if (std::erase_if(edits_, [&](const EditRecord& e) { return e.group == group; })) ++editsVersion_;
     if (export_.busy()) export_.cancel();  // items may point into the removed tree
     bumpVersion();
     log("Removed " + group + " from the project");
