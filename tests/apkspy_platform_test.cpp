@@ -4404,6 +4404,32 @@ static void testFridaServer() {
           "run argv");
 }
 
+static void testProjectEdits() {
+    std::printf("== project edits ==\n");
+    namespace fs = std::filesystem;
+    const fs::path file = fs::temp_directory_path() / "apkspy_edits_roundtrip.apkspy";
+    Project p;
+    p.setEdits({
+        {RootKind::Virtual, "app", "smali/Lcom_a_B;.smali", "smali/Lcom_a_B;.smali", ".class public Lcom/a/B;\n    nop\n",
+         ".class public Lcom/a/B;\n    const/4 v0, 0x1\r\n    return-void\n"},
+        {RootKind::Decompiled, "app", "C:/tmp/x/sources/A.java", "sources/A.java", "class A {}\n", "class A { int \\ x = 1; }\n"},
+        {RootKind::Decompiled, "app", "C:/tmp/x/sources/Same.java", "sources/Same.java", "same\n", "same\n"},  // unchanged: not saved
+    });
+    CHECK(p.save(file.string()), "project with edits saves");
+    Project q;
+    CHECK(q.load(file.string()), "project with edits loads");
+    CHECK(q.edits().size() == 2, "only changed edits are persisted");
+    if (q.edits().size() == 2) {
+        CHECK(q.edits()[0].kind == RootKind::Virtual && q.edits()[0].nodePath == "smali/Lcom_a_B;.smali", "virtual edit kind/path");
+        CHECK(q.edits()[0].original == ".class public Lcom/a/B;\n    nop\n" &&
+                  q.edits()[0].current == ".class public Lcom/a/B;\n    const/4 v0, 0x1\r\n    return-void\n",
+              "newlines and CRLF survive the escape round trip");
+        CHECK(q.edits()[1].current == "class A { int \\ x = 1; }\n", "backslashes survive");
+    }
+    std::error_code ec;
+    fs::remove(file, ec);
+}
+
 static void testAnnotationsMarkdown() {
     std::printf("== annotations markdown ==\n");
     std::vector<Annotation> notes;
@@ -4505,6 +4531,7 @@ int main(int argc, char** argv) {
     testEmulator();
     testRepack();
     testFridaServer();
+    testProjectEdits();
     testAnnotationsMarkdown();
     testMcpToolsEndToEnd();
     std::printf("\n%d passed, %d failed\n", passes, failures);

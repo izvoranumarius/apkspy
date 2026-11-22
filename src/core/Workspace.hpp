@@ -211,6 +211,11 @@ public:
     // Copies the live text of open edited tabs into their records.
     void refreshEdits();
     const std::vector<EditRecord>& editRecords() const { return edits_; }
+    // Session restore: replaces all records (called after the project's edited files load).
+    void replaceEdits(std::vector<EditRecord> records) {
+        edits_ = std::move(records);
+        ++editsVersion_;
+    }
     // Drops records whose text equals the baseline (after a revert).
     void forgetUnchangedEdits();
     // Puts the record's original text back: the open tab is reset (in-memory

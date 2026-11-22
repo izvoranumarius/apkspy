@@ -7,6 +7,14 @@
 #include "core/Settings.hpp"
 
 // One APK entry inside an ApkSpy project.
+// An edited file (decompiled source or in-memory smali listing): its text before
+// the first edit and its current text, so the edit report and export survive
+// a restart.
+struct ProjectEdit {
+    RootKind kind = RootKind::Decompiled;
+    std::string group, nodePath, display, original, current;
+};
+
 struct ProjectApk {
     std::string path;   // absolute path of the APK on disk
     std::string group;  // unique display name, shared by the Files and
@@ -60,6 +68,10 @@ public:
     const std::vector<Annotation>& annotations() const { return annotations_; }
     void setAnnotations(std::vector<Annotation> a) { annotations_ = std::move(a); ++epoch_; }
 
+    // Edited files (the live copy is Workspace::editRecords()).
+    const std::vector<ProjectEdit>& edits() const { return edits_; }
+    void setEdits(std::vector<ProjectEdit> e) { edits_ = std::move(e); ++epoch_; }
+
     // Bumped by every mutation; lets the title bar cache its dirty check.
     uint64_t epoch() const { return epoch_; }
 
@@ -74,4 +86,5 @@ private:
     std::vector<ProjectApk> apks_;
     std::vector<Tab> tabs_;
     std::vector<Annotation> annotations_;
+    std::vector<ProjectEdit> edits_;
 };

@@ -10,6 +10,8 @@ static constexpr const char* kProjectFormat = "apkspy-project-1";
 // turn into gigabytes of allocations before the format check even runs.
 static constexpr int kMaxApkEntries = 4096;
 static constexpr int kMaxTabEntries = 10000;
+static constexpr int kMaxEditEntries = 5000;
+static constexpr size_t kMaxEditBytes = 32u << 20;  // edited text kept in a project file
 
 void Project::reset() {
     open_ = true;
@@ -17,6 +19,7 @@ void Project::reset() {
     apks_.clear();
     tabs_.clear();
     annotations_.clear();
+    edits_.clear();
     ++epoch_;
 }
 
@@ -26,6 +29,7 @@ void Project::close() {
     apks_.clear();
     tabs_.clear();
     annotations_.clear();
+    edits_.clear();
     ++epoch_;
 }
 
@@ -104,6 +108,22 @@ bool Project::save(const std::string& path) {
         out.set(k + "text", Annotations::escape(a.text));
         out.set(k + "context", Annotations::escape(a.context));
     }
+    // Edited files. Only changed ones; a cap keeps the project file bounded.
+    {
+        size_t bytes = 0, n = 0;
+        for (const ProjectEdit& e : edits_) {
+            if (e.current == e.original || bytes + e.original.size() + e.current.size() > kMaxEditBytes) continue;
+            bytes += e.original.size() + e.current.size();
+            const std::string k = "edit." + std::to_string(n++) + ".";
+            out.set(k + "kind", static_cast<int>(e.kind));
+            out.set(k + "group", e.group);
+            out.set(k + "path", e.nodePath);
+            out.set(k + "display", e.display);
+            out.set(k + "original", Annotations::escape(e.original));
+            out.set(k + "current", Annotations::escape(e.current));
+        }
+        out.set("edit.count", static_cast<int>(n));
+    }
     if (!out.save(path)) return false;
     path_ = path;
     open_ = true;
@@ -162,9 +182,28 @@ bool Project::load(const std::string& path) {
         notes.push_back(std::move(a));
     }
 
+    std::vector<ProjectEdit> edits;
+    const int editCount = in.getInt("edit.count", 0);
+    if (editCount < 0 || editCount > kMaxEditEntries) return false;
+    for (int i = 0; i < editCount; ++i) {
+        const std::string k = "edit." + std::to_string(i) + ".";
+        const int kind = in.getInt(k + "kind", 1);
+        if (kind != static_cast<int>(RootKind::Decompiled) && kind != static_cast<int>(RootKind::Virtual)) continue;
+        ProjectEdit e;
+        e.kind = static_cast<RootKind>(kind);
+        e.group = in.getString(k + "group");
+        e.nodePath = in.getString(k + "path");
+        e.display = in.getString(k + "display");
+        e.original = Annotations::unescape(in.getString(k + "original"));
+        e.current = Annotations::unescape(in.getString(k + "current"));
+        if (e.group.empty() || e.nodePath.empty() || e.current == e.original) continue;
+        edits.push_back(std::move(e));
+    }
+
     apks_ = std::move(apks);
     tabs_ = std::move(tabs);
     annotations_ = std::move(notes);
+    edits_ = std::move(edits);
     path_ = path;
     open_ = true;
     ++epoch_;

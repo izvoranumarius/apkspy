@@ -617,11 +617,27 @@ void Application::frame() {
 // Project flows
 // ---------------------------------------------------------------------------
 
+// Edited files as stored in the project (live text of open tabs included).
+static std::vector<ProjectEdit> collectEdits(Workspace& ws) {
+    ws.refreshEdits();
+    std::vector<ProjectEdit> out;
+    for (const auto& r : ws.editRecords())
+        if (r.current != r.original) out.push_back({r.kind, r.group, r.nodePath, r.display, r.original, r.current});
+    return out;
+}
+
+static std::vector<Workspace::EditRecord> editsFromProject(const std::vector<ProjectEdit>& in) {
+    std::vector<Workspace::EditRecord> out;
+    for (const ProjectEdit& e : in) out.push_back({e.group, e.kind, e.nodePath, e.display, e.original, e.current});
+    return out;
+}
+
 bool Application::projectHasUnsavedChanges() const {
     // Edited documents are part of the project (annotations).
     for (const auto& doc : workspace_.documents())
         if (doc->isDirty()) return true;
     if (workspace_.annotations().version() != savedAnnotations_) return true;  // bookmarks and comments
+    if (workspace_.editsVersion() != savedEdits_) return true;                 // edited files tracked or reverted
     // The open APK set must match the project. Entries whose file is
     // missing from disk are unresolved: they stay in the project (and in
     // the saved file) and are excluded here, so a missing APK neither
@@ -666,6 +682,7 @@ void Application::performAction(PendingAction action, const std::string& path) {
     case PendingAction::NewProject:
         workspace_.closeAll();
         savedAnnotations_ = workspace_.annotations().version();
+    savedEdits_ = workspace_.editsVersion();
         project_.reset();
         workspace_.log("New project created");
         break;
@@ -676,6 +693,7 @@ void Application::performAction(PendingAction action, const std::string& path) {
     case PendingAction::CloseProject:
         workspace_.closeAll();
         savedAnnotations_ = workspace_.annotations().version();
+    savedEdits_ = workspace_.editsVersion();
         project_.close();
         workspace_.log("Project closed");
         break;
@@ -740,11 +758,13 @@ bool Application::saveProject() {
     project_.setApks(collectApks(workspace_, project_));
     project_.setTabs(collectTabs(workspace_));
     project_.setAnnotations(workspace_.annotations().all());
+    project_.setEdits(collectEdits(workspace_));
     if (!project_.save(project_.path())) {
         workspace_.log("Could not save the project - see the Output panel");
         return false;
     }
     savedAnnotations_ = workspace_.annotations().version();
+    savedEdits_ = workspace_.editsVersion();
     addRecent(project_.path());
     saveSettings();
     workspace_.log("Project saved: " + project_.path());
@@ -755,11 +775,13 @@ bool Application::saveProjectAs(const std::string& path) {
     project_.setApks(collectApks(workspace_, project_));
     project_.setTabs(collectTabs(workspace_));
     project_.setAnnotations(workspace_.annotations().all());
+    project_.setEdits(collectEdits(workspace_));
     if (!project_.save(path)) {
         workspace_.log("Could not save the project - see the Output panel");
         return false;
     }
     savedAnnotations_ = workspace_.annotations().version();
+    savedEdits_ = workspace_.editsVersion();
     addRecent(project_.path());
     saveSettings();
     workspace_.log("Project saved: " + project_.path());
@@ -775,7 +797,9 @@ bool Application::openProject(const std::string& path) {
     workspace_.closeAll();
     project_ = std::move(loaded);
     workspace_.annotations().replaceAll(project_.annotations());
+    workspace_.replaceEdits(editsFromProject(project_.edits()));
     savedAnnotations_ = workspace_.annotations().version();
+    savedEdits_ = workspace_.editsVersion();
     // Queued first: addApk opens the tabs of each APK as its trees attach.
     std::vector<PendingTab> pending;
     for (const Project::Tab& tab : project_.tabs()) {
