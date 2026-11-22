@@ -185,5 +185,34 @@ std::string annotationsToMarkdown(const std::vector<Annotation>& notes, bool mul
         if (!a->context.empty()) out += "  - `" + oneLine(a->context) + "`\n";
     }
     if (items.empty()) out += "\n_No bookmarks or comments._\n";
+    // Decompiler renames: whole-APK symbol renames and per-method variable renames.
+    std::vector<const Annotation*> symbols, variables;
+    for (const Annotation& a : notes) {
+        if (a.kind == Annotation::Kind::Symbol && !a.context.empty() && !a.text.empty()) symbols.push_back(&a);
+        if (a.kind == Annotation::Kind::Rename && !a.context.empty() && !a.text.empty()) variables.push_back(&a);
+    }
+    const auto byLocation = [](const Annotation* a, const Annotation* b) {
+        if (a->group != b->group) return a->group < b->group;
+        if (a->path != b->path) return a->path < b->path;
+        return a->context < b->context;
+    };
+    std::sort(symbols.begin(), symbols.end(), byLocation);
+    std::sort(variables.begin(), variables.end(), byLocation);
+    if (!symbols.empty()) {
+        out += "\n## Symbol renames\n\n| Original | New |\n|---|---|\n";
+        for (const Annotation* a : symbols) out += "| `" + a->context + "` | `" + a->text + "` |\n";
+    }
+    if (!variables.empty()) {
+        out += "\n## Variable renames\n";
+        std::string cur;
+        for (const Annotation* a : variables) {
+            const std::string where = a->group + (a->path.empty() ? "" : " " + a->path);
+            if (where != cur) {
+                cur = where;
+                out += "\n`" + where + "`\n\n";
+            }
+            out += "- `" + a->context + "` -> `" + a->text + "`\n";
+        }
+    }
     return out;
 }

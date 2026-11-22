@@ -9,6 +9,8 @@ constexpr uint32_t SHT_DYNSYM = 11;
 constexpr uint32_t SHT_NOBITS = 8;
 constexpr uint32_t SHT_RELA = 4;
 constexpr uint32_t SHT_REL = 9;
+constexpr uint32_t SHT_RELR = 19;
+constexpr uint32_t PF_X = 1;
 constexpr uint32_t PT_LOAD = 1;
 constexpr uint32_t PT_DYNAMIC = 2;
 constexpr uint64_t DT_NULL = 0;
@@ -141,8 +143,11 @@ std::shared_ptr<ElfFile> ElfFile::parse(std::shared_ptr<const std::vector<uint8_
             if (s.type == SHT_DYNSYM) e->readSymbols(s, true);
             else if (s.type == SHT_SYMTAB) e->readSymbols(s, false);
         }
-        for (const Section& s : e->sections_)
+        for (const Section& s : e->sections_) {
             if (s.type == SHT_RELA || s.type == SHT_REL) e->readRelocations(s);
+            if (s.type == SHT_RELA || s.type == SHT_REL || s.type == SHT_RELR) e->readRelative(s);
+        }
+        std::sort(e->relative_.begin(), e->relative_.end());
     } else if (shnum) {
         e->warnings_.push_back("section header table out of bounds or too large");
     }
@@ -237,6 +242,146 @@ void ElfFile::readDynamic() {
     for (uint64_t off : neededOffs)
         if (strOff + off < end) needed_.push_back(cstr(strOff + off, end));
     if (sonameOff != UINT64_MAX && strOff + sonameOff < end) soname_ = cstr(strOff + sonameOff, end);
+}
+
+// RELATIVE relocations (no symbol): the pointer at `offset` becomes load-base + addend.
+// Position-independent libraries keep their pointer tables (JNI registrations,
+// vtables, string tables) only in this form; RELR packs the same information.
+void ElfFile::readRelative(const Section& rel) {
+    if (!inBounds(rel.offset, rel.size)) return;
+    const size_t ws = is64_ ? 8 : 4;
+    constexpr size_t kMaxRelative = 4000000;
+    if (rel.type == SHT_RELR) {
+        uint64_t where = 0;
+        const uint64_t count = rel.size / ws;
+        for (uint64_t i = 0; i < count && relative_.size() < kMaxRelative; ++i) {
+            const uint64_t entry = word(rel.offset + i * ws);
+            if ((entry & 1) == 0) {  // an address
+                where = entry;
+                uint64_t off = 0, target = 0;
+                if (vaddrToOffset(where, off) && inBounds(off, ws)) target = word(off);
+                relative_.emplace_back(where, target);
+                where += ws;
+            } else {  // a bitmap of the next (ws*8 - 1) words
+                uint64_t bits = entry >> 1;
+                for (uint64_t b = 0; bits; ++b, bits >>= 1)
+                    if ((bits & 1) && relative_.size() < kMaxRelative) {
+                        const uint64_t at = where + b * ws;
+                        uint64_t off = 0, target = 0;
+                        if (vaddrToOffset(at, off) && inBounds(off, ws)) target = word(off);
+                        relative_.emplace_back(at, target);
+                    }
+                where += (ws * 8 - 1) * ws;
+            }
+        }
+        return;
+    }
+    const bool rela = rel.type == SHT_RELA;
+    const uint64_t entsize = is64_ ? (rela ? 24 : 16) : (rela ? 12 : 8);
+    uint32_t relativeType = 0;
+    switch (machine_) {
+    case 183: relativeType = 1027; break;  // R_AARCH64_RELATIVE
+    case 62: relativeType = 8; break;      // R_X86_64_RELATIVE
+    case 3: relativeType = 8; break;       // R_386_RELATIVE
+    case 40: relativeType = 23; break;     // R_ARM_RELATIVE
+    default: return;
+    }
+    const uint64_t count = rel.size / entsize;
+    for (uint64_t i = 0; i < count && relative_.size() < kMaxRelative; ++i) {
+        const uint64_t p = rel.offset + i * entsize;
+        const uint64_t info = word(p + ws);
+        const uint32_t type = static_cast<uint32_t>(is64_ ? info & 0xffffffffu : info & 0xffu);
+        if (type != relativeType) continue;
+        const uint64_t where = word(p);
+        uint64_t target = 0;
+        if (rela) {
+            target = is64_ ? u64(p + 16) : static_cast<uint64_t>(u32(p + 8));
+        } else {
+            uint64_t off = 0;
+            if (vaddrToOffset(where, off) && inBounds(off, ws)) target = word(off);
+        }
+        relative_.emplace_back(where, target);
+    }
+}
+
+// The pointer stored at `vaddr`: its RELATIVE relocation target, else the raw word.
+bool ElfFile::pointerAt(uint64_t vaddr, uint64_t& value) const {
+    const auto it = std::lower_bound(relative_.begin(), relative_.end(), std::make_pair(vaddr, uint64_t{0}));
+    if (it != relative_.end() && it->first == vaddr) {
+        value = it->second;
+        return true;
+    }
+    uint64_t off = 0;
+    const size_t ws = is64_ ? 8 : 4;
+    if (!vaddrToOffset(vaddr, off) || !inBounds(off, ws)) return false;
+    value = word(off);
+    return true;
+}
+
+bool ElfFile::cstrAtVaddr(uint64_t vaddr, std::string& out) const {
+    uint64_t off = 0;
+    if (!vaddrToOffset(vaddr, off)) return false;
+    out = cstr(off, std::min<uint64_t>(off + 512, data_->size()));
+    return !out.empty() && off + out.size() < data_->size();
+}
+
+bool ElfFile::executable(uint64_t vaddr) const {
+    for (const Segment& s : segments_)
+        if (s.type == PT_LOAD && (s.flags & PF_X) && vaddr >= s.vaddr && vaddr < s.vaddr + s.memsz) return true;
+    return false;
+}
+
+namespace {
+bool plausibleJavaName(const std::string& n) {
+    if (n.empty() || n.size() > 128) return false;
+    if (!(std::isalpha(static_cast<unsigned char>(n[0])) || n[0] == '_' || n[0] == '$' || n[0] == '<')) return false;
+    for (char c : n)
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$' || c == '<' || c == '>')) return false;
+    return true;
+}
+// "(ILjava/lang/String;[B)V": parameters and a return type, JNI characters only.
+bool plausibleJniSignature(const std::string& s) {
+    if (s.size() < 3 || s[0] != '(') return false;
+    const size_t close = s.find(')');
+    if (close == std::string::npos || close + 1 >= s.size()) return false;
+    for (char c : s)
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '(' || c == ')' || c == '[' || c == ';' || c == '/' || c == '$' ||
+              c == '_'))
+            return false;
+    return true;
+}
+}  // namespace
+
+std::vector<ElfFile::NativeRegistration> ElfFile::jniRegistrations() const {
+    std::vector<NativeRegistration> out;
+    const size_t ws = is64_ ? 8 : 4, entry = 3 * ws;
+    uint64_t scanned = 0;
+    constexpr uint64_t kMaxScan = 64ull << 20;
+    for (const Section& s : sections_) {
+        // Pointer tables live in writable or relro data; skip code and plain strings.
+        if (s.type == SHT_NOBITS || s.addr == 0 || s.size < entry) continue;
+        const bool data = s.name == ".data" || s.name.rfind(".data.rel", 0) == 0 || s.name == ".init_array" || s.name == ".rodata";
+        if (!data) continue;
+        for (uint64_t a = (s.addr + ws - 1) & ~(ws - 1); a + entry <= s.addr + s.size && scanned < kMaxScan;) {
+            scanned += ws;
+            uint64_t pName = 0, pSig = 0, pFn = 0;
+            std::string name, sig;
+            if (pointerAt(a, pName) && pName && pointerAt(a + ws, pSig) && pSig && pointerAt(a + 2 * ws, pFn) && pFn &&
+                executable(pFn & ~uint64_t{1}) && cstrAtVaddr(pName, name) && plausibleJavaName(name) && cstrAtVaddr(pSig, sig) &&
+                plausibleJniSignature(sig)) {
+                NativeRegistration r;
+                r.name = std::move(name);
+                r.signature = std::move(sig);
+                r.fnAddr = pFn & ~uint64_t{1};  // ARM Thumb marker
+                r.tableAddr = a;
+                out.push_back(std::move(r));
+                a += entry;
+            } else {
+                a += ws;
+            }
+        }
+    }
+    return out;
 }
 
 bool ElfFile::vaddrToOffset(uint64_t vaddr, uint64_t& offset) const {

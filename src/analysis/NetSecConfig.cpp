@@ -85,9 +85,13 @@ void Collector::endElement(const std::string& rawName) {
     }
 }
 
-std::vector<std::string> notes(const Config& c, int targetSdk) {
+std::vector<std::string> notes(const Config& c, int targetSdk, bool manifestCleartext) {
     std::vector<std::string> out;
     if (!c.present) {
+        if (manifestCleartext) {
+            out.push_back("No network security config, but android:usesCleartextTraffic=\"true\" allows cleartext HTTP for every domain.");
+            return out;
+        }
         out.push_back(targetSdk >= 28 ? "No network security config: defaults apply (HTTPS only, system CAs; user CAs are not trusted from API 24)."
                                       : "No network security config: below API 28 cleartext HTTP is allowed.");
         return out;

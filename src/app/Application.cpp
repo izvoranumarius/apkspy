@@ -17,6 +17,7 @@
 #include "ui/EditorPanel.hpp"
 #include "ui/ExplorerPanel.hpp"
 #include "ui/McpSettings.hpp"
+#include "app/ShortcutKeys.hpp"
 #include "app/SystemTheme.hpp"
 #include "core/Bundle.hpp"
 #include "ui/BookmarksPanel.hpp"
@@ -119,6 +120,7 @@ Application::Application()
     settingsDialog_.setMcp(mcpSettings_.get());
     settingsDialog_.setZoomControl([this] { return zoomTarget(); }, [this](float zoom) { setZoom(zoom); });
     settingsDialog_.setResetLayout([this] { resetLayout_ = true; });
+    settingsDialog_.setShortcuts(&shortcuts_);
     auto scriptPanel = std::make_unique<ScriptPanel>(workspace_, settings_, *mcp_);
     scriptPanel_ = scriptPanel.get();
     panels_.push_back(std::move(scriptPanel));
@@ -252,6 +254,7 @@ void Application::initImGui() {
 void Application::loadSettings() {
     migrateLegacyConfig("apkspy.settings");
     settings_.load(pathutil::configFile("apkspy.settings"));
+    shortcuts_.load(settings_);
     workspace_.setJadxPath(settings_.getString(Settings::kJadxPath, "jadx"));
     workspace_.setJadxArgs(settings_.getString(Settings::kJadxArgs, ""));
     devices_.setAdbPath(settings_.getString(Settings::kAdbPath, "adb"));
@@ -316,6 +319,7 @@ void Application::saveSettings() {
     settings_.set(Settings::kAdbPath, devices_.adbPath());
     settings_.set(Settings::kUiZoomPercent, static_cast<int>(std::lround(uiZoom_ * 100.f)));
     if (mcpSettings_) mcpSettings_->storeSettings();
+    shortcuts_.save(settings_);
     settings_.set(Settings::kLastProject, project_.isOpen() ? project_.path() : "");
     const int n = static_cast<int>(std::min<size_t>(recents_.size(), 10));
     settings_.set(Settings::kRecentCount, n);
@@ -493,21 +497,22 @@ void Application::frame() {
     ImGui::NewFrame();
 
     ImGuiIO& io = ImGui::GetIO();
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) requestAction(PendingAction::OpenProject);
-    // VS Code keys: Ctrl+P quick open, Ctrl+Shift+P commands, Ctrl+` terminal.
-    if (io.KeyCtrl && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_P, false)) palette_->open(io.KeyShift ? ">" : "");
-    // Find in project (as in VS Code): the Search sidebar with its query focused.
-    if (io.KeyCtrl && io.KeyShift && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_F, false) && showPanel("Search") && searchPanel_)
-        searchPanel_->focusQuery();
-    if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false)) toggleTerminal();
-    if (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_GraveAccent, false)) newTerminal();
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) saveRequested_ = true;
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Comma, false)) settingsRequested_ = true;
-    // Back/Forward (M2): Alt+Left / Alt+Right and mouse buttons 4/5. Alt+Arrow
-    // is not used by ImGui text input, so no WantTextInput guard is needed -
-    // adding one would block the legitimate case of focus in the editor.
-    if (io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) workspace_.navBack();
-    if (io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) workspace_.navForward();
+    // Global shortcuts (Settings > Keyboard changes them): the chords come from shortcuts_.
+    if (!settingsDialog_.capturingShortcut() && (!io.WantTextInput || io.KeyCtrl || io.KeyAlt)) {  // a bare chord never fires while typing
+        using shortcuts::pressed;
+        if (pressed(shortcuts_.chord("open-project"))) requestAction(PendingAction::OpenProject);
+        // VS Code keys: quick open, commands, find in project, terminal.
+        if (pressed(shortcuts_.chord("quick-open"))) palette_->open("");
+        if (pressed(shortcuts_.chord("command-palette"))) palette_->open(">");
+        if (pressed(shortcuts_.chord("find-in-project")) && showPanel("Search") && searchPanel_) searchPanel_->focusQuery();
+        if (pressed(shortcuts_.chord("toggle-terminal"))) toggleTerminal();
+        if (pressed(shortcuts_.chord("new-terminal"))) newTerminal();
+        if (pressed(shortcuts_.chord("save-project"))) saveRequested_ = true;
+        if (pressed(shortcuts_.chord("settings"))) settingsRequested_ = true;
+        // Back/Forward (M2) and mouse buttons 4/5.
+        if (pressed(shortcuts_.chord("nav-back"))) workspace_.navBack();
+        if (pressed(shortcuts_.chord("nav-forward"))) workspace_.navForward();
+    }
     if (ImGui::IsMouseClicked(3)) workspace_.navBack();
     if (ImGui::IsMouseClicked(4)) workspace_.navForward();
     debuggerPanel_->processShortcuts();  // F7/F8/F9/F12 while a debug session is attached
@@ -871,18 +876,18 @@ void Application::addRecent(const std::string& path) {
 
 void Application::drawFileMenu() {
     if (ImGui::MenuItem("New Project")) requestAction(PendingAction::NewProject);
-    if (ImGui::MenuItem("Open Project...", "Ctrl+O")) requestAction(PendingAction::OpenProject);
+    if (ImGui::MenuItem("Open Project...", shortcuts_.label("open-project").c_str())) requestAction(PendingAction::OpenProject);
     drawRecentProjects();
     ImGui::Separator();
     if (ImGui::MenuItem("Add APK(s) to Project...", nullptr, false, project_.isOpen())) addApkRequested_ = true;
     ImGui::Separator();
-    if (ImGui::MenuItem("Save Project", "Ctrl+S", false, project_.isOpen())) saveRequested_ = true;
+    if (ImGui::MenuItem("Save Project", shortcuts_.label("save-project").c_str(), false, project_.isOpen())) saveRequested_ = true;
     ImGui::Separator();
     if (ImGui::MenuItem("Close Project", nullptr, false, project_.isOpen()))
         requestAction(PendingAction::CloseProject);
     if (ImGui::MenuItem("Exit")) requestAction(PendingAction::Exit);
     ImGui::Separator();
-    if (ImGui::MenuItem("Settings...", "Ctrl+,")) settingsRequested_ = true;
+    if (ImGui::MenuItem("Settings...", shortcuts_.label("settings").c_str())) settingsRequested_ = true;
 }
 
 void Application::drawRecentProjects() {
@@ -934,8 +939,8 @@ void Application::drawViewMenu() {
 void Application::drawNavigateMenu() {
     const Document* active = workspace_.activeDocument();
     const bool codeActive = active && active->mode() == Document::Mode::Code;
-    if (ImGui::MenuItem("Back", "Alt+Left", false, workspace_.canNavBack())) workspace_.navBack();
-    if (ImGui::MenuItem("Forward", "Alt+Right", false, workspace_.canNavForward())) workspace_.navForward();
+    if (ImGui::MenuItem("Back", shortcuts_.label("nav-back").c_str(), false, workspace_.canNavBack())) workspace_.navBack();
+    if (ImGui::MenuItem("Forward", shortcuts_.label("nav-forward").c_str(), false, workspace_.canNavForward())) workspace_.navForward();
     ImGui::Separator();
     if (ImGui::MenuItem("Find in File...", "Ctrl+F", false, codeActive)) editor_->requestFind();
     if (ImGui::MenuItem("Find in Project...")) showPanel("Search");
@@ -1288,23 +1293,23 @@ std::vector<CommandPalette::Command> Application::paletteCommands() {
     for (int i = 0; i < static_cast<int>(perspectives_.size()); ++i)
         add("Workspace: " + perspectives_[static_cast<size_t>(i)].name, "Ctrl+" + std::to_string(i + 1), Perspective::workspaceIcon(perspectives_[static_cast<size_t>(i)].name),
             [this, i] { pendingPerspective_ = i; });
-    add("Go to File...", "Ctrl+P", icons::FILE, [this] { palette_->open(""); });
+    add("Go to File...", shortcuts_.label("quick-open"), icons::FILE, [this] { palette_->open(""); });
     add("Go to Class...", "", icons::CODE, [this] { palette_->open("@"); });
     add("Go to Line...", "Ctrl+G", icons::LIST, [this] { palette_->open(":"); });
     add("Find in Files", "", icons::SEARCH, [this] { showPanel("Search"); });
     add("Find in File", "Ctrl+F", icons::SEARCH, [this] { editor_->requestFind(); });
-    add("Navigate Back", "Alt+Left", icons::BACK, [this] { workspace_.navBack(); });
-    add("Navigate Forward", "Alt+Right", icons::FORWARD, [this] { workspace_.navForward(); });
+    add("Navigate Back", shortcuts_.label("nav-back"), icons::BACK, [this] { workspace_.navBack(); });
+    add("Navigate Forward", shortcuts_.label("nav-forward"), icons::FORWARD, [this] { workspace_.navForward(); });
     add("Terminal: Toggle", "Ctrl+`", icons::TERMINAL, [this] { toggleTerminal(); });
-    add("Terminal: New Terminal", "Ctrl+Shift+`", icons::ADD, [this] { newTerminal(); });
+    add("Terminal: New Terminal", shortcuts_.label("new-terminal"), icons::ADD, [this] { newTerminal(); });
     add("Terminal: Restart Shell", "", icons::REFRESH, [this] { terminal_->restart(); showPanel("Terminal"); });
     add("Terminal: Kill Terminal", "", icons::TRASH, [this] { terminal_->killActive(); });
-    add("File: Open Project...", "Ctrl+O", icons::FOLDER_OPEN, [this] { requestAction(PendingAction::OpenProject); });
+    add("File: Open Project...", shortcuts_.label("open-project"), icons::FOLDER_OPEN, [this] { requestAction(PendingAction::OpenProject); });
     add("File: New Project", "", icons::ADD, [this] { requestAction(PendingAction::NewProject); });
     add("File: Add APK to Project...", "", icons::PACKAGE, [this] { addApkRequested_ = true; });
-    add("File: Save Project", "Ctrl+S", icons::SAVE, [this] { saveRequested_ = true; });
+    add("File: Save Project", shortcuts_.label("save-project"), icons::SAVE, [this] { saveRequested_ = true; });
     add("File: Close Project", "", icons::CLOSE, [this] { requestAction(PendingAction::CloseProject); });
-    add("Preferences: Settings", "Ctrl+,", icons::SETTINGS, [this] { settingsRequested_ = true; });
+    add("Preferences: Settings", shortcuts_.label("settings"), icons::SETTINGS, [this] { settingsRequested_ = true; });
     add("View: Reset Workspace Layout", "", icons::REFRESH, [this] { resetLayout_ = true; });
     add("View: Zoom In", "Ctrl+=", nullptr, [this] { setZoom(zoomTarget() + 0.1f); });
     add("View: Zoom Out", "Ctrl+-", nullptr, [this] { setZoom(zoomTarget() - 0.1f); });
@@ -1354,7 +1359,7 @@ void Application::drawWelcome() {
     };
     ImGui::TextColored(theme::vec(Col::Info), "Start");
     if (link(icons::PACKAGE, "Open an APK...", nullptr)) addApkRequested_ = true;
-    if (link(icons::FOLDER_OPEN, "Open Project...", "Ctrl+O")) requestAction(PendingAction::OpenProject);
+    if (link(icons::FOLDER_OPEN, "Open Project...", shortcuts_.label("open-project").c_str())) requestAction(PendingAction::OpenProject);
     if (link(icons::ADD, "New Project", nullptr)) requestAction(PendingAction::NewProject);
     ImGui::Dummy(ImVec2(0, ui::em(0.8f)));
 
@@ -1373,9 +1378,9 @@ void Application::drawWelcome() {
     }
 
     ImGui::TextColored(theme::vec(Col::Info), "Get around");
-    if (link(icons::FILE, "Go to file", "Ctrl+P")) palette_->open("");
-    if (link(icons::SEARCH, "Run a command", "Ctrl+Shift+P")) palette_->open(">");
-    if (link(icons::SEARCH, "Find in project", "Ctrl+Shift+F") && showPanel("Search") && searchPanel_) searchPanel_->focusQuery();
+    if (link(icons::FILE, "Go to file", shortcuts_.label("quick-open").c_str())) palette_->open("");
+    if (link(icons::SEARCH, "Run a command", shortcuts_.label("command-palette").c_str())) palette_->open(">");
+    if (link(icons::SEARCH, "Find in project", shortcuts_.label("find-in-project").c_str()) && showPanel("Search") && searchPanel_) searchPanel_->focusQuery();
     if (link(icons::TERMINAL, "Terminal", "Ctrl+`")) toggleTerminal();
     if (link(icons::ANALYSIS, "Analyse the code", "Ctrl+2")) pendingPerspective_ = 1;
     ImGui::Dummy(ImVec2(0, ui::em(0.6f)));

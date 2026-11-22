@@ -61,8 +61,9 @@ private:
 };
 
 // One human-readable line per notable fact (cleartext, user CAs, pinning,
-// debug overrides). `targetSdk` decides the platform default: cleartext is
+// debug overrides). `manifestCleartext` is android:usesCleartextTraffic from the manifest
+// (only meaningful without a config). `targetSdk` decides the platform default: cleartext is
 // allowed below API 28 and blocked from 28, user CAs trusted below 24.
-std::vector<std::string> notes(const Config& c, int targetSdk);
+std::vector<std::string> notes(const Config& c, int targetSdk, bool manifestCleartext = false);
 
 }  // namespace netsec

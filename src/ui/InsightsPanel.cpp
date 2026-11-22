@@ -55,6 +55,7 @@ void InsightsPanel::runScan() {
     result_ = insights::scan(in);
     strings_ = std::move(in.strings);
     endpoints_ = insights::endpoints(strings_);
+    decoded_ = insights::decodeStrings(strings_);
     callers_.clear();
     constArgs_.clear();
 
@@ -303,6 +304,36 @@ void InsightsPanel::drawEndpoints() {
     }
 }
 
+void InsightsPanel::drawDecoded() {
+    if (decoded_.empty()) {
+        ImGui::TextDisabled("No base64 / hex / URL-encoded text constants.");
+        return;
+    }
+    ImGui::TextDisabled("Constants that decode to readable text. Click one for the code that uses it.");
+    for (size_t i = 0; i < decoded_.size(); ++i) {
+        const auto& d = decoded_[i];
+        ImGui::PushID(static_cast<int>(i));
+        std::string shown = d.decoded.substr(0, 120);
+        for (char& c : shown)
+            if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+        const bool open = ImGui::TreeNodeEx("##d", ImGuiTreeNodeFlags_SpanAvailWidth, "[%s] %s", d.method.c_str(), shown.c_str());
+        if (ImGui::BeginPopupContextItem("##dctx")) {
+            if (ImGui::MenuItem("Copy decoded text")) ImGui::SetClipboardText(d.decoded.c_str());
+            if (ImGui::MenuItem("Copy original")) ImGui::SetClipboardText(d.original.c_str());
+            ImGui::EndPopup();
+        }
+        if (open) {
+            ImGui::TextDisabled("%s", d.original.substr(0, 200).c_str());
+            const std::string key = "d:" + d.original;
+            auto it = callers_.find(key);
+            if (it == callers_.end()) it = callers_.emplace(key, analysis_->stringUses(d.original, false, 50)).first;
+            drawXrefs(it->second);
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+}
+
 void InsightsPanel::drawRules() {
     if (result_.rules.empty()) {
         ImGui::TextDisabled("No rule matched.");
@@ -389,7 +420,7 @@ void InsightsPanel::drawManifest() {
     }
     {
         // Network security config: trust anchors, cleartext, pins.
-        const auto lines = netsec::notes(netsec_, a.targetSdk);
+        const auto lines = netsec::notes(netsec_, a.targetSdk, a.usesCleartext);
         if (ImGui::CollapsingHeader("Network security config###netsec")) {
             if (!netsecFile_.empty()) ImGui::TextDisabled("%s", netsecFile_.c_str());
             else if (!a.networkSecurityConfig.empty())
@@ -443,7 +474,7 @@ void InsightsPanel::drawManifest() {
         return dot == std::string::npos ? p : p.substr(dot + 1);
     };
     char usage[64];
-    std::snprintf(usage, sizeof usage, "Permission \xE2\x86\x92 API usage (%zu)###permuse", permUse_.size());
+    std::snprintf(usage, sizeof usage, "Permission -> API usage (%zu)###permuse", permUse_.size());
     if (!permUse_.empty() && ImGui::CollapsingHeader(usage)) {
         ImGui::TextDisabled("Which guarded APIs the app actually calls for each requested permission.");
         for (const auto& u : permUse_) {
@@ -468,7 +499,7 @@ void InsightsPanel::drawManifest() {
         char miss[72];
         std::snprintf(miss, sizeof miss, "Guarded APIs used WITHOUT the permission (%zu)###permmiss", permMissing_.size());
         if (ImGui::CollapsingHeader(miss)) {
-            ImGui::TextColored(theme::vec(Col::Warning), "These calls need a permission the manifest does not request.");
+            ImGui::TextColored(theme::vec(Col::Warning), "These calls need a permission the manifest does not request (library code often guards them at run time, so check the callers).");
             for (const auto& u : permMissing_) {
                 ImGui::PushID(u.permission.c_str());
                 if (ImGui::TreeNodeEx("##m", ImGuiTreeNodeFlags_SpanAvailWidth, "%s  (%zu)", shortPerm(u.permission).c_str(),
@@ -607,6 +638,13 @@ void InsightsPanel::drawContents() {
         if (ImGui::BeginTabItem(label)) {
             ImGui::BeginChild("##endpoints");
             drawEndpoints();
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        std::snprintf(label, sizeof label, "Decoded (%zu)###decoded", decoded_.size());
+        if (ImGui::BeginTabItem(label)) {
+            ImGui::BeginChild("##decoded");
+            drawDecoded();
             ImGui::EndChild();
             ImGui::EndTabItem();
         }

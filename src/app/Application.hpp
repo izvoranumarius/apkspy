@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include "app/Perspective.hpp"
+#include "app/Shortcuts.hpp"
 #include "app/WindowFrame.hpp"
 #include "ui/Panel.hpp"
 #include "ui/TitleBar.hpp"
@@ -142,6 +143,7 @@ private:
     std::unique_ptr<Texture> appIcon_;      // favicon frame drawn in the title bar
     std::unique_ptr<Texture> appIconDark_;  // its light variant for dark themes
     SettingsDialog settingsDialog_;
+    shortcuts::Map shortcuts_;  // customisable global shortcuts (Settings > Keyboard)
     FileBrowser projOpenBrowser_;
     FileBrowser projSaveBrowser_;
     FileBrowser apkBrowser_;

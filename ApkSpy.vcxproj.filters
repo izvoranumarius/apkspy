@@ -636,6 +636,12 @@
     <ClInclude Include="src\analysis\AnalysisService.hpp">
       <Filter>Header Files\analysis</Filter>
     </ClInclude>
+    <ClInclude Include="src\app\Shortcuts.hpp">
+      <Filter>Header Files\app</Filter>
+    </ClInclude>
+    <ClInclude Include="src\app\ShortcutKeys.hpp">
+      <Filter>Header Files\app</Filter>
+    </ClInclude>
     <ClInclude Include="src\app\SystemTheme.hpp">
       <Filter>Header Files\app</Filter>
     </ClInclude>
@@ -973,6 +979,12 @@
     </ClCompile>
     <ClCompile Include="src\analysis\AnalysisService.cpp">
       <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\app\Shortcuts.cpp">
+      <Filter>Source Files\app</Filter>
+    </ClCompile>
+    <ClCompile Include="src\app\ShortcutKeys.cpp">
+      <Filter>Source Files\app</Filter>
     </ClCompile>
     <ClCompile Include="src\app\SystemTheme.cpp">
       <Filter>Source Files\app</Filter>

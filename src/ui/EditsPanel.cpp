@@ -146,7 +146,10 @@ void EditsPanel::drawContents() {
     const auto now = std::chrono::steady_clock::now();
     const bool changed = builtEdits_ != workspace_.editsVersion() || builtSerial_ != Document::editSerial() ||
                          builtState_ != workspace_.stateVersion();
-    if (changed && now - lastBuild_ > std::chrono::milliseconds(400)) {
+    // Typing is throttled; a change of the record SET (revert, removal, project open) is not: the
+    // rows index the workspace's records, so a stale list could point a click at the wrong file.
+    const bool recordsChanged = builtEdits_ != workspace_.editsVersion();
+    if (changed && (recordsChanged || now - lastBuild_ > std::chrono::milliseconds(400))) {
         builtEdits_ = workspace_.editsVersion();
         builtSerial_ = Document::editSerial();
         builtState_ = workspace_.stateVersion();

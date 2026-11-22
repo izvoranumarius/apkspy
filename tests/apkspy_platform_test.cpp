@@ -42,6 +42,7 @@
 #include "core/Annotations.hpp"
 #include "core/ApkRepack.hpp"
 #include "core/Bundle.hpp"
+#include "app/Shortcuts.hpp"
 #include "core/Process.hpp"
 #include "core/Project.hpp"
 #include "core/ScriptRunner.hpp"
@@ -162,7 +163,7 @@ static std::vector<uint8_t> buildDex() {
                                    0x0038, 0x0004,           // if-eqz v0, :9
                                    0x0060, 0x0000,           // sget v0, count
                                    0x000e});                 // return-void
-    const uint32_t bazCode = code(1, 1, 0, {0x000e});
+    const uint32_t bazCode = code(1, 1, 0, {0x0015, 0x7f0e, 0x000e});  // const/high16 v0, 0x7f0e0000; return-void
     // class data
     d.put32(classDataPatch, (uint32_t)d.b.size());
     d.uleb(1), d.uleb(0), d.uleb(2), d.uleb(0);
@@ -397,6 +398,15 @@ static void testDexAndAnalysis() {
     CHECK(listing.find("if-eqz v0, :L0009") != std::string::npos && listing.find(":L0009") != std::string::npos,
           "branch target label");
     CHECK(listing.find("sget v0, LFoo;->count:I") != std::string::npos, "field reference");
+    // App resource ids (0x7f...) loaded as constants are named when a resolver is supplied.
+    std::string plainBaz, namedBaz;
+    dalvik::disassembleMethod(*dex, data.methods[1], dalvik::ListingOptions{}, plainBaz);
+    dalvik::ListingOptions named;
+    named.resourceName = [](uint32_t id) { return id == 0x7f0e0000u ? std::string("@string/app_name") : std::string(); };
+    dalvik::disassembleMethod(*dex, data.methods[1], named, namedBaz);
+    CHECK(plainBaz.find("const/high16 v0, 0x7f0e0000") != std::string::npos && plainBaz.find("# @") == std::string::npos,
+          "resource id literal without a resolver");
+    CHECK(namedBaz.find("const/high16 v0, 0x7f0e0000  # @string/app_name") != std::string::npos, "resource id annotated with its name");
 
     std::atomic<bool> stop{false};
     auto a = ApkAnalysis::build({dex}, stop);
@@ -2732,9 +2742,10 @@ static void testWebSocketCapture() {
     Socket originListener;
     originListener.listenLoopback(0, error);
     // Serve one connection manually: 101, then echo frames until close.
-    int port = 0;
+    // Read before the thread starts: the client below needs it immediately (assigning it
+    // inside the thread raced with the connect and sometimes connected to port 0).
+    const int port = originListener.localPort();
     std::thread originThread([&] {
-        port = originListener.localPort();
         while (!wsDone.load()) {
             Socket c = originListener.accept(250);
             if (!c.valid()) continue;
@@ -2775,7 +2786,14 @@ static void testWebSocketCapture() {
 
     {
         ProxyTlsClient client;
-        CHECK(client.connect(proxy.port(), "127.0.0.1", port, "ws.test", &roots, error), "wss client");
+        const bool connected = client.connect(proxy.port(), "127.0.0.1", port, "ws.test", &roots, error);
+        CHECK(connected, "wss client");
+        if (!connected || !client.stream) {  // report the failure instead of crashing on a null stream
+            wsDone = true;
+            originThread.join();
+            proxy.stop();
+            return;
+        }
         const std::string resp = client.exchange("GET /chat HTTP/1.1\r\nHost: ws.test\r\nUpgrade: websocket\r\n"
                                                  "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
                                                  "Sec-WebSocket-Version: 13\r\n\r\n");
@@ -4410,6 +4428,144 @@ static std::vector<uint8_t> readAll(const fs::path& p) {
     return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
+// An ELF64 AArch64 shared object whose .data.rel.ro holds a JNINativeMethod table
+// ({name, signature, fnPtr} x2). The pointers are bound either through RELA RELATIVE
+// relocations (in-place words are zero) or through a packed RELR section.
+static std::vector<uint8_t> buildJniElf(bool relr) {
+    Buf e;
+    e.b.resize(64 + 56, 0);  // ELF header + one program header (filled in at the end)
+    const auto addStr = [&](const std::string& str) {
+        const size_t off = e.b.size();
+        for (char c : str) e.u8(static_cast<uint8_t>(c));
+        e.u8(0);
+        return off;
+    };
+    const size_t sName1 = addStr("nativeAdd"), sSig1 = addStr("(II)I");
+    const size_t sName2 = addStr("nativeName"), sSig2 = addStr("()Ljava/lang/String;");
+    const size_t rodataEnd = e.b.size();
+    e.align(16);
+    const size_t codeOff = e.b.size();
+    for (int i = 0; i < 32; ++i) e.u8(0x1f);
+    e.align(8);
+    const size_t tableOff = e.b.size();
+    const uint64_t targets[6] = {sName1, sSig1, codeOff, sName2, sSig2, codeOff + 8};
+    for (uint64_t t : targets) e.u64(relr ? t : 0);  // RELR keeps the target in place
+    const size_t tableEnd = e.b.size();
+    const size_t relOff = e.b.size();
+    if (relr) {
+        e.u64(tableOff);   // an address entry
+        e.u64(0x3Full);    // bitmap: the next five words ((0b11111 << 1) | 1)
+    } else {
+        for (int i = 0; i < 6; ++i) e.u64(tableOff + 8 * i), e.u64(1027), e.u64(targets[i]);  // r_offset, R_AARCH64_RELATIVE, addend
+    }
+    const size_t relEnd = e.b.size();
+    const std::string names = std::string("\0.rodata\0.data.rel.ro\0", 22) + (relr ? ".relr.dyn" : ".rela.dyn") + std::string("\0.shstrtab\0", 11);
+    const size_t namesOff = e.b.size();
+    for (char c : names) e.u8(static_cast<uint8_t>(c));
+    e.align(8);
+    const size_t shOff = e.b.size();
+    const auto sh = [&](uint32_t name, uint32_t type, uint64_t flags, uint64_t addr, uint64_t off, uint64_t size, uint64_t entsize) {
+        e.u32(name), e.u32(type), e.u64(flags), e.u64(addr), e.u64(off), e.u64(size), e.u32(0), e.u32(0), e.u64(8), e.u64(entsize);
+    };
+    const uint32_t nRodata = 1, nData = 9, nRel = 22, nStr = static_cast<uint32_t>(names.find(".shstrtab"));
+    for (int i = 0; i < 8; ++i) e.u64(0);  // null section header (64 bytes)
+    sh(nRodata, 1, 2, sName1, sName1, rodataEnd - sName1, 0);
+    sh(nData, 1, 3, tableOff, tableOff, tableEnd - tableOff, 0);
+    sh(nRel, relr ? 19 : 4, 2, relOff, relOff, relEnd - relOff, relr ? 8 : 24);
+    sh(nStr, 3, 0, 0, namesOff, names.size(), 0);
+    const uint64_t fileSize = e.b.size();
+    // ELF header
+    std::memcpy(e.b.data(), "\x7f" "ELF", 4);
+    e.b[4] = 2, e.b[5] = 1, e.b[6] = 1;
+    const auto put = [&](size_t at, uint64_t v, int bytes) {
+        for (int i = 0; i < bytes; ++i) e.b[at + i] = static_cast<uint8_t>(v >> (8 * i));
+    };
+    put(16, 3, 2), put(18, 183, 2), put(20, 1, 4), put(32, 64, 8), put(40, shOff, 8);
+    put(52, 64, 2), put(54, 56, 2), put(56, 1, 2), put(58, 64, 2), put(60, 5, 2), put(62, 4, 2);
+    // PT_LOAD, read + write + execute, vaddr == file offset
+    put(64, 1, 4), put(68, 7, 4), put(72, 0, 8), put(80, 0, 8), put(88, 0, 8), put(96, fileSize, 8), put(104, fileSize, 8), put(112, 0x1000, 8);
+    return e.b;
+}
+
+static void testShortcuts() {
+    std::printf("== shortcuts ==\n");
+    using namespace shortcuts;
+    Chord c;
+    CHECK(parse("ctrl+shift+p", c) && c.ctrl && c.shift && !c.alt && c.key == "P", "parse modifiers and key");
+    CHECK(format(c) == "Ctrl+Shift+P", "format is canonical");
+    CHECK(parse("Ctrl+,", c) && c.key == "Comma" && format(c) == "Ctrl+,", "punctuation by symbol");
+    CHECK(parse("Ctrl+`", c) && c.key == "GraveAccent", "backtick");
+    CHECK(parse("Alt+Left", c) && format(c) == "Alt+Left", "named key");
+    CHECK(parse("F5", c) && c.key == "F5", "a bare function key is allowed");
+    CHECK(!parse("P", c) && !parse("Ctrl+", c) && !parse("Ctrl+Nope", c) && !parse("", c) && !parse("Hyper+P", c),
+          "invalid chords are rejected (bare letter, no key, unknown key / modifier)");
+
+    Map m;
+    CHECK(m.label("quick-open") == "Ctrl+P" && m.label("settings") == "Ctrl+," && m.label("nav-back") == "Alt+Left", "defaults");
+    Chord mine;
+    parse("Ctrl+Shift+O", mine);
+    std::string conflict;
+    CHECK(m.set("open-project", mine, conflict) && m.isCustom("open-project") && m.label("open-project") == "Ctrl+Shift+O", "override set");
+    Chord taken;
+    parse("Ctrl+S", taken);
+    CHECK(!m.set("quick-open", taken, conflict) && conflict == "save-project" && m.label("quick-open") == "Ctrl+P", "conflicting chord refused");
+    Chord freed;
+    parse("Ctrl+O", freed);  // open-project's old default is free now
+    CHECK(m.set("quick-open", freed, conflict), "a chord freed by an override can be reused");
+    m.disable("save-project");
+    CHECK(m.label("save-project").empty() && !m.chord("save-project").valid(), "an action can be disabled");
+
+    Settings st;
+    m.save(st);
+    CHECK(st.getString("shortcut.open-project") == "Ctrl+Shift+O" && st.getString("shortcut.save-project") == "none" &&
+              st.getString("shortcut.settings").empty(),
+          "only overrides are saved");
+    Map n;
+    n.load(st);
+    CHECK(n.label("open-project") == "Ctrl+Shift+O" && !n.chord("save-project").valid() && n.label("quick-open") == "Ctrl+O", "settings round trip");
+    m.reset("open-project");
+    m.resetAll();
+    CHECK(m.label("open-project") == "Ctrl+O" && !m.isCustom("quick-open"), "reset and reset all");
+
+    Settings dup;  // a hand-edited file: quick-open on find-in-project's default chord
+    dup.set("shortcut.quick-open", "Ctrl+Shift+F");
+    Map d;
+    d.load(dup);
+    CHECK(d.label("find-in-project") == "Ctrl+Shift+F" && d.label("quick-open") == "Ctrl+P", "a colliding override in the file is ignored");
+    Settings junk;
+    junk.set("shortcut.settings", "Ctrl+Banana");
+    Map j;
+    j.load(junk);
+    CHECK(j.label("settings") == "Ctrl+," && !j.isCustom("settings"), "an unparsable value falls back to the default");
+}
+
+static void testJniRegistrations() {
+    std::printf("== jni registrations ==\n");
+    for (bool relr : {false, true}) {
+        auto bytes = std::make_shared<std::vector<uint8_t>>(buildJniElf(relr));
+        std::string err;
+        auto elf = ElfFile::parse(bytes, "libjni.so", err);
+        CHECK(elf != nullptr, relr ? "RELR elf parses" : "RELA elf parses");
+        if (!elf) continue;
+        const auto regs = elf->jniRegistrations();
+        const char* mode = relr ? "RELR: " : "RELA: ";
+        CHECK(regs.size() == 2, (std::string(mode) + "two registered natives").c_str());
+        if (regs.size() == 2) {
+            CHECK(regs[0].name == "nativeAdd" && regs[0].signature == "(II)I", (std::string(mode) + "first entry name and signature").c_str());
+            CHECK(regs[1].name == "nativeName" && regs[1].signature == "()Ljava/lang/String;",
+                  (std::string(mode) + "second entry name and signature").c_str());
+            CHECK(regs[1].fnAddr == regs[0].fnAddr + 8 && regs[0].tableAddr + 24 == regs[1].tableAddr,
+                  (std::string(mode) + "function addresses and table layout").c_str());
+        }
+    }
+    // Without relocations the in-place words are zero: nothing to resolve.
+    std::vector<uint8_t> plain = buildJniElf(false);
+    auto stripped = std::make_shared<std::vector<uint8_t>>(plain);
+    std::string err;
+    auto elf = ElfFile::parse(stripped, "x", err);
+    CHECK(elf && elf->jniRegistrations().size() == 2, "RELA is what resolves the zeroed words");
+}
+
 static void testBundle() {
     std::printf("== bundle ==\n");
     CHECK(bundle::isBundle("a.xapk") && bundle::isBundle("B.APKS") && bundle::isBundle("c.apkm") && !bundle::isBundle("d.apk"),
@@ -4540,12 +4696,20 @@ static void testAnnotationsMarkdown() {
     cm.line = 9;
     cm.text = "decrypts the\nconfig";
     notes.push_back(cm);
-    Annotation rn;  // a rename: must NOT appear in notes markdown
+    Annotation rn;  // a variable rename: not a bookmark/comment, listed under "Variable renames"
     rn.kind = Annotation::Kind::Rename;
     rn.group = "app";
-    rn.path = "x";
+    rn.path = "Lcom/a/B;->m()V";
+    rn.context = "v3";
     rn.text = "newName";
     notes.push_back(rn);
+    Annotation sy;
+    sy.kind = Annotation::Kind::Symbol;
+    sy.group = "app";
+    sy.path = "*";
+    sy.context = "baz";
+    sy.text = "sendLogin";
+    notes.push_back(sy);
 
     const std::string md = annotationsToMarkdown(notes, false);
     CHECK(md.find("1 bookmark(s), 1 comment(s)") != std::string::npos, "counts exclude renames");
@@ -4553,13 +4717,22 @@ static void testAnnotationsMarkdown() {
     CHECK(md.find("**comment:10**") != std::string::npos && md.find("**bookmark:42**") != std::string::npos,
           "1-based line numbers, comment before bookmark");
     CHECK(md.find("decrypts the config") != std::string::npos, "multi-line text flattened");
-    CHECK(md.find("newName") == std::string::npos, "renames excluded");
+    CHECK(md.find("## Variable renames") != std::string::npos && md.find("- `v3` -> `newName`") != std::string::npos, "variable renames listed");
+    CHECK(md.find("## Symbol renames") != std::string::npos && md.find("| `baz` | `sendLogin` |") != std::string::npos, "symbol renames listed");
+    CHECK(md.find("1 bookmark(s), 1 comment(s)") != std::string::npos, "renames do not count as notes");
     CHECK(annotationsToMarkdown({}, false).find("No bookmarks or comments") != std::string::npos, "empty report");
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
+    // Unbuffered: when a test crashes, the sections printed so far are not lost with the buffer.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    if (const char* only = std::getenv("APKSPY_TEST_ONLY"); only && std::string(only) == "websocket") {
+        testWebSocketCapture();
+        std::printf("%d passed, %d failed\n", passes, failures);
+        return failures == 0 ? 0 : 1;
+    }
     // `--write-sample <dir>`: writes sample.apk + sample.apkspy (the
     // synthetic inputs used above) for manual / smoke testing of the app.
     if (argc == 3 && std::string(argv[1]) == "--write-sample") {
@@ -4623,6 +4796,8 @@ int main(int argc, char** argv) {
     testEmulator();
     testRepack();
     testFridaServer();
+    testShortcuts();
+    testJniRegistrations();
     testBundle();
     testDexContainer();
     testProjectEdits();

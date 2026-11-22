@@ -1,4 +1,5 @@
 #pragma once
+#include "app/Shortcuts.hpp"
 #include <functional>
 #include <future>
 #include <string>
@@ -31,7 +32,12 @@ public:
     bool render();
     bool isOpen() const { return open_; }
 
-    enum class Page { General, Appearance, Editor, Decompiler, Android, Network, Terminal, Ai, Count };
+    enum class Page { General, Appearance, Editor, Decompiler, Android, Network, Terminal, Keyboard, Ai, Count };
+
+    // The global shortcut table (Settings > Keyboard edits it live; Cancel restores it).
+    void setShortcuts(shortcuts::Map* map) { shortcuts_ = map; }
+    // True while a shortcut is being rebound: the application must not fire shortcuts then.
+    bool capturingShortcut() const { return !capturing_.empty(); }
 
 private:
     void drawGeneralPage();
@@ -43,6 +49,7 @@ private:
     void drawAndroidPage();
     void drawNetworkPage();
     void drawTerminalPage();
+    void drawKeyboardPage();
     void drawAiPage();
     void commit();  // working copies -> settings / services
     void revertPreview();
@@ -51,6 +58,10 @@ private:
     Settings& settings_;
     DeviceService& devices_;
     McpSettings* mcp_ = nullptr;
+    shortcuts::Map* shortcuts_ = nullptr;
+    shortcuts::Map shortcutsAtOpen_;  // restored by Cancel
+    std::string capturing_;           // action id being rebound (empty: none)
+    std::string shortcutNote_;        // result of the last rebinding attempt
     std::function<float()> getZoom_;
     std::function<void(float)> setZoom_;
     std::function<void()> resetLayout_;

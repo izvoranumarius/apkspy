@@ -71,6 +71,20 @@ public:
     // JNI entry points: Java_* exports plus JNI_OnLoad / JNI_OnUnload.
     std::vector<const Symbol*> jniSymbols() const;
 
+    // A JNI RegisterNatives table entry (JNINativeMethod { name, signature, fnPtr }).
+    struct NativeRegistration {
+        std::string name;       // Java method name
+        std::string signature;  // JNI descriptor "(ILjava/lang/String;)V"
+        uint64_t fnAddr = 0;    // native implementation (Thumb bit cleared)
+        uint64_t tableAddr = 0; // where the entry sits
+    };
+    // Natives registered through RegisterNatives, found by scanning the data
+    // sections for JNINativeMethod arrays (pointers resolved through the
+    // RELATIVE / RELR relocations of position-independent libraries).
+    // Heuristic: an entry needs a plausible name, a JNI descriptor and a
+    // function pointer into executable code.
+    std::vector<NativeRegistration> jniRegistrations() const;
+
     // Maps a virtual address to a file offset through the PT_LOAD segments.
     bool vaddrToOffset(uint64_t vaddr, uint64_t& offset) const;
     // Raw bytes [offset, offset+len) clipped to the file.
@@ -103,6 +117,10 @@ private:
     void readSymbols(const Section& symtab, bool dynamic);
     void readDynamic();
     void readRelocations(const Section& rel);
+    void readRelative(const Section& rel);
+    bool pointerAt(uint64_t vaddr, uint64_t& value) const;
+    bool cstrAtVaddr(uint64_t vaddr, std::string& out) const;
+    bool executable(uint64_t vaddr) const;
 
     std::shared_ptr<const std::vector<uint8_t>> data_;
     std::string name_;
@@ -115,6 +133,7 @@ private:
     std::vector<Segment> segments_;
     std::vector<Symbol> symbols_;
     std::vector<Relocation> relocations_;
+    std::vector<std::pair<uint64_t, uint64_t>> relative_;  // (patched vaddr, target), sorted by vaddr
     std::vector<std::string> needed_;
     std::string soname_;
     std::vector<std::string> warnings_;

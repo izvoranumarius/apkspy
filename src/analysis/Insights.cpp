@@ -385,7 +385,9 @@ const std::vector<Api>& apis() {
         {"insecure-random", Severity::Info, "java.util.Random", "MASVS-CRYPTO-1",
          "Not suitable for keys, tokens or nonces.", {"Ljava/util/Random;-><init>("}},
         {"logging", Severity::Info, "Debug logging", "MASVS-STORAGE-2", "Log output can leak data to logcat.",
-         {"Landroid/util/Log;->d(", "Landroid/util/Log;->v(", "Landroid/util/Log;->i("}},
+         {"Landroid/util/Log;->d(", "Landroid/util/Log;->v(", "Landroid/util/Log;->i(", "Landroid/util/Log;->w(",
+          "Landroid/util/Log;->e(", "Landroid/util/Log;->wtf(", "Ljava/lang/Throwable;->printStackTrace(",
+          "Ljava/io/PrintStream;->println(", "Ljava/io/PrintStream;->print("}},
         {"native-load", Severity::Info, "Native libraries loaded", "MASVS-CODE-4", "System.loadLibrary / load.",
          {"Ljava/lang/System;->loadLibrary(", "Ljava/lang/System;->load("}},
         {"reflection", Severity::Info, "Reflection", "MASVS-RESILIENCE-3", "Reflective calls hide call targets from static analysis.",
@@ -597,6 +599,103 @@ std::vector<EndpointHost> endpoints(const std::vector<std::string>& strings) {
         if (a.kind.empty() != b.kind.empty()) return !a.kind.empty();  // cloud backends first
         return a.host < b.host;
     });
+    return out;
+}
+
+namespace {
+
+int b64Value(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+' || c == '-') return 62;
+    if (c == '/' || c == '_') return 63;
+    return -1;
+}
+
+bool decodeBase64(const std::string& s, std::string& out) {
+    size_t end = s.size();
+    while (end > 0 && s[end - 1] == '=') --end;
+    if (s.size() - end > 2) return false;
+    out.clear();
+    uint32_t acc = 0;
+    int bits = 0;
+    for (size_t i = 0; i < end; ++i) {
+        const int v = b64Value(s[i]);
+        if (v < 0) return false;
+        acc = (acc << 6) | static_cast<uint32_t>(v);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<char>((acc >> bits) & 0xff));
+        }
+    }
+    return true;
+}
+
+int hexValue(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// Mostly printable ASCII / UTF-8 text: >= 95% of the bytes are printable or whitespace, and it has letters.
+bool readable(const std::string& d) {
+    if (d.size() < 6) return false;
+    size_t good = 0, letters = 0;
+    for (unsigned char c : d) {
+        if ((c >= 0x20 && c < 0x7f) || c == '\n' || c == '\r' || c == '\t' || c >= 0xc2) ++good;
+        if (std::isalpha(c)) ++letters;
+    }
+    return good * 100 >= d.size() * 95 && letters * 4 >= d.size();
+}
+
+}  // namespace
+
+std::vector<DecodedString> decodeStrings(const std::vector<std::string>& strings, size_t limit) {
+    std::vector<DecodedString> out;
+    std::set<std::string> seen;
+    for (const std::string& s : strings) {
+        if (out.size() >= limit) break;
+        if (s.size() < 8 || s.size() > 4096 || !seen.insert(s).second) continue;
+        std::string d;
+        // URL-encoded: at least three %XX escapes.
+        size_t escapes = 0;
+        for (size_t i = 0; i + 2 < s.size(); ++i)
+            if (s[i] == '%' && hexValue(s[i + 1]) >= 0 && hexValue(s[i + 2]) >= 0) ++escapes;
+        if (escapes >= 3) {
+            for (size_t i = 0; i < s.size(); ++i) {
+                if (s[i] == '%' && i + 2 < s.size() && hexValue(s[i + 1]) >= 0 && hexValue(s[i + 2]) >= 0) {
+                    d.push_back(static_cast<char>(hexValue(s[i + 1]) * 16 + hexValue(s[i + 2])));
+                    i += 2;
+                } else {
+                    d.push_back(s[i] == '+' ? ' ' : s[i]);
+                }
+            }
+            if (readable(d) && d != s) {
+                out.push_back({s, d, "url"});
+                continue;
+            }
+        }
+        // Hex: even length, only hex digits, at least one letter a-f or a pair that is not all digits.
+        if (s.size() >= 12 && s.size() % 2 == 0 && std::all_of(s.begin(), s.end(), [](char c) { return hexValue(c) >= 0; })) {
+            d.clear();
+            for (size_t i = 0; i < s.size(); i += 2) d.push_back(static_cast<char>(hexValue(s[i]) * 16 + hexValue(s[i + 1])));
+            if (readable(d)) {
+                out.push_back({s, d, "hex"});
+                continue;
+            }
+        }
+        // Base64 (standard or URL-safe): a multiple of four when padded, only the alphabet.
+        if (s.size() >= 12 && std::all_of(s.begin(), s.end(), [](char c) { return b64Value(c) >= 0 || c == '='; }) &&
+            (s.find('=') == std::string::npos || s.size() % 4 == 0)) {
+            // A plain lowercase / uppercase word is not base64.
+            const bool mixed = std::any_of(s.begin(), s.end(), [](char c) { return std::isupper(static_cast<unsigned char>(c)); }) &&
+                               std::any_of(s.begin(), s.end(), [](char c) { return std::islower(static_cast<unsigned char>(c)); });
+            if (mixed && decodeBase64(s, d) && readable(d)) out.push_back({s, d, "base64"});
+        }
+    }
     return out;
 }
 

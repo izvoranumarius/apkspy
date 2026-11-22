@@ -192,6 +192,8 @@ private:
     std::shared_ptr<const ElfFile> elf_;
     std::string elfError_;
     char symbolFilter_[128] = {};
+    std::vector<ElfFile::NativeRegistration> jniRegs_;  // RegisterNatives tables of elf_ (scanned once)
+    const ElfFile* jniRegsFor_ = nullptr;
     int symbolView_ = 5;  // 0-2 JNI / exports / imports, 3-4 sections / segments, 5 functions, 6 strings
 
     // Native code (AArch64): built on a worker, shared with MCP through AnalysisService.

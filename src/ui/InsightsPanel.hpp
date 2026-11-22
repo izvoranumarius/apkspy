@@ -30,6 +30,7 @@ private:
     void drawSecrets();
     void drawSdks();
     void drawEndpoints();
+    void drawDecoded();
     void drawRules();
     void drawManifest();
     void drawRetrace();
@@ -52,6 +53,7 @@ private:
     netsec::Config netsec_;
     std::string netsecFile_;  // the entry the config was read from
     std::vector<insights::EndpointHost> endpoints_;
+    std::vector<insights::DecodedString> decoded_;
     std::vector<insights::PermissionUse> permUse_;      // requested permissions -> APIs used
     std::vector<insights::PermissionUse> permMissing_;  // guarded APIs used without the permission
     bool showValues_ = false;

@@ -1,4 +1,6 @@
 #include "ui/SettingsDialog.hpp"
+#include <cctype>
+#include "app/ShortcutKeys.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -28,6 +30,7 @@ constexpr PageInfo kPages[] = {
     {Page::Android, icons::PHONE, "Android & Devices", "adb for the Devices, Logcat and Debugger panels."},
     {Page::Network, icons::GLOBE, "Network Capture", "The proxy the Traffic panel routes a device through."},
     {Page::Terminal, icons::TERMINAL, "Terminal & Scripts", "The shell of the Terminal panel and the Python for scripts."},
+    {Page::Keyboard, icons::LIST, "Keyboard", "Global shortcuts."},
     {Page::Ai, icons::LINK, "AI (MCP)", "Let AI assistants use the open project."},
 };
 
@@ -96,12 +99,17 @@ void SettingsDialog::open() {
     caStatus_.clear();
     adbTestResult_.clear();
     themeAtOpen_ = Theme::state();
+    if (shortcuts_) shortcutsAtOpen_ = *shortcuts_;
+    capturing_.clear();
+    shortcutNote_.clear();
     zoomAtOpen_ = getZoom_ ? getZoom_() : 1.f;
     colorFilter_[0] = '\0';
 }
 
 void SettingsDialog::revertPreview() {
     Theme::restore(themeAtOpen_);
+    if (shortcuts_) *shortcuts_ = shortcutsAtOpen_;
+    capturing_.clear();
     if (setZoom_ && getZoom_ && std::fabs(getZoom_() - zoomAtOpen_) > 0.001f) setZoom_(zoomAtOpen_);
 }
 
@@ -191,6 +199,7 @@ bool SettingsDialog::render() {
     case Page::Android: drawAndroidPage(); break;
     case Page::Network: drawNetworkPage(); break;
     case Page::Terminal: drawTerminalPage(); break;
+    case Page::Keyboard: drawKeyboardPage(); break;
     case Page::Ai: drawAiPage(); break;
     case Page::Count: break;
     }
@@ -568,6 +577,81 @@ void SettingsDialog::drawTerminalPage() {
     section("Scripts");
     pathInput("Python executable", "##pythonpath", pythonPath_, sizeof pythonPath_, "python", false);
     hint("Scripts run with your installed Python. Leave \"python\" to use the one on PATH.");
+}
+
+// ---- Keyboard -----------------------------------------------------------------
+
+void SettingsDialog::drawKeyboardPage() {
+    if (!shortcuts_) {
+        hint("Shortcuts are not available here.");
+        return;
+    }
+    section("Global shortcuts");
+    hint("Click a shortcut, then press the new keys. Esc cancels, Backspace disables it. Editor keys (find, go to line, "
+         "bookmarks), the debugger F-keys, zoom and workspace switching (Ctrl+1..5) are fixed.");
+    // Key capture: the pressed chord, or Esc / Backspace.
+    if (!capturing_.empty()) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            capturing_.clear();
+            shortcutNote_.clear();
+        } else if (shortcuts::Chord c; shortcuts::captureChord(c)) {
+            const bool bare = !c.ctrl && !c.shift && !c.alt;
+            const bool fkey = c.key.size() >= 2 && c.key[0] == 'F' && std::isdigit(static_cast<unsigned char>(c.key[1]));
+            if (bare && c.key == "Backspace") {
+                shortcuts_->disable(capturing_);
+                shortcutNote_ = "Disabled.";
+                capturing_.clear();
+            } else if (bare && !fkey) {
+                shortcutNote_ = "Use Ctrl, Shift or Alt with that key (a bare key would take over typing).";  // keep capturing
+            } else {
+                std::string conflict;
+                if (shortcuts_->set(capturing_, c, conflict)) {
+                    shortcutNote_ = "Set to " + shortcuts::format(c) + ".";
+                    capturing_.clear();
+                } else if (!conflict.empty()) {
+                    std::string other = conflict;
+                    for (const auto& act : shortcuts::actions())
+                        if (conflict == act.id) other = act.label;
+                    shortcutNote_ = shortcuts::format(c) + " is already used by \"" + other + "\". Press another chord.";  // keep capturing
+                } else {
+                    capturing_.clear();
+                }
+            }
+        }
+    }
+    if (ImGui::BeginTable("##shortcuts", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch, 3.f);
+        ImGui::TableSetupColumn("Shortcut", ImGuiTableColumnFlags_WidthFixed, ui::em(12.f));
+        ImGui::TableSetupColumn("##reset", ImGuiTableColumnFlags_WidthFixed, ui::em(5.f));
+        for (const auto& a : shortcuts::actions()) {
+            ImGui::TableNextRow();
+            ImGui::PushID(a.id);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(a.label);
+            ImGui::TableNextColumn();
+            const bool capturing = capturing_ == a.id;
+            std::string label = capturing ? std::string("Press keys...") : shortcuts_->label(a.id);
+            if (label.empty()) label = "(none)";
+            if (shortcuts_->isCustom(a.id) && !capturing) label += "  *";
+            if (ImGui::Button(label.c_str(), ImVec2(ui::em(11.f), 0))) {
+                capturing_ = capturing ? std::string() : std::string(a.id);
+                shortcutNote_.clear();
+            }
+            ImGui::TableNextColumn();
+            ImGui::BeginDisabled(!shortcuts_->isCustom(a.id));
+            if (ui::smallButton("Reset")) shortcuts_->reset(a.id);
+            ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    if (!shortcutNote_.empty()) hint(shortcutNote_.c_str());
+    if (ImGui::Button("Reset all shortcuts")) {
+        shortcuts_->resetAll();
+        capturing_.clear();
+        shortcutNote_.clear();
+    }
+    hint("* marks a shortcut you changed. Changes apply with OK / Apply and are kept in the settings file.");
 }
 
 // ---- AI -----------------------------------------------------------------------

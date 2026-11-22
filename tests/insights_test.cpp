@@ -237,6 +237,30 @@ void testEndpoints() {
     CHECK(!e.empty() && !e[0].kind.empty() && !e[1].kind.empty() && e[2].kind.empty(), "cloud backends sort first");
 }
 
+void testDecodedStrings() {
+    const std::vector<std::string> strings = {
+        "aHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20vdjEvbG9naW4=",  // base64 of a URL
+        "68747470733a2f2f6170692e6578616d706c652e636f6d",  // hex of a URL
+        "https%3A%2F%2Fexample.com%2Fa%20b",              // URL-encoded
+        "com/google/android/gms/internal/ads/zzcfu",      // looks base64-ish but is a class path
+        "AAAAAAAAAAAAAAAA",                               // base64 of zero bytes
+        "123456789012345678",                             // digits only
+        "helloWorldFooBar",                               // a plain camelCase word
+        "short",
+    };
+    const auto d = insights::decodeStrings(strings);
+    const auto find = [&](const char* method) -> const insights::DecodedString* {
+        for (const auto& x : d)
+            if (x.method == method) return &x;
+        return nullptr;
+    };
+    CHECK(find("base64") && find("base64")->decoded == "https://api.example.com/v1/login", "base64 URL decoded");
+    CHECK(find("hex") && find("hex")->decoded == "https://api.example.com", "hex URL decoded");
+    CHECK(find("url") && find("url")->decoded == "https://example.com/a b", "URL-encoded text decoded");
+    CHECK(d.size() == 3, "class paths, zero bytes, digits, plain words and short strings are not reported");
+    CHECK(insights::decodeStrings(strings, 1).size() == 1, "limit respected");
+}
+
 void testNetSec() {
     using A = std::vector<AxmlDecoder::Attr>;
     netsec::Collector c;
@@ -285,6 +309,8 @@ void testNetSec() {
     CHECK(has("debug-overrides present: user CAs are trusted in debuggable builds"), "debug overrides noted");
     CHECK(!has("No certificate pins"), "no 'no pins' note when pins exist");
     CHECK(netsec::notes(netsec::Config{}, 33)[0].find("No network security config") != std::string::npos, "absent config note");
+    CHECK(netsec::notes(netsec::Config{}, 33, true)[0].find("usesCleartextTraffic") != std::string::npos,
+          "manifest cleartext flag explained when there is no config");
 }
 
 }  // namespace
@@ -300,6 +326,7 @@ int main() {
     testPermissions();
     testNetSec();
     testEndpoints();
+    testDecodedStrings();
     std::printf("%d passed, %d failed\n", passes, failures);
     return failures == 0 ? 0 : 1;
 }

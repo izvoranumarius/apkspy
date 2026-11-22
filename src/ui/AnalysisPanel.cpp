@@ -395,7 +395,7 @@ void AnalysisPanel::flattenTree(const ApkAnalysis& a) {
             // An applied mapping.txt: show the original name next to the obfuscated one.
             const std::string java = DexFile::descriptorToJava(desc);
             const std::string original = map->originalClass(java);
-            if (original != java) label += "  \xE2\x86\x92 " + (fullName ? original : original.substr(original.rfind('.') + 1));
+            if (original != java) label += "  -> " + (fullName ? original : original.substr(original.rfind('.') + 1));
         }
         rows_.push_back({TreeRow::Class, depth, cls, 0, std::move(label)});
         if (classOpen_.count(cls)) addMethods(cls, static_cast<uint8_t>(depth + 1));
@@ -1405,6 +1405,48 @@ void AnalysisPanel::drawNative(Root& apk) {
         } else if (symbolView_ == 6) {
             drawNativeStrings(apk);
         } else if (symbolView_ <= 2) {
+            if (symbolView_ == 0) {
+                // Natives bound at run time with RegisterNatives (no Java_* export to find them by).
+                if (jniRegsFor_ != elf_.get()) {
+                    jniRegs_ = elf_->jniRegistrations();
+                    jniRegsFor_ = elf_.get();
+                }
+                if (!jniRegs_.empty()) {
+                    char header[64];
+                    std::snprintf(header, sizeof header, "Registered natives (%zu)###regnatives", jniRegs_.size());
+                    if (ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen)) {
+                        if (ImGui::BeginTable("##regs", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
+                                              ImVec2(0, std::min(ui::em(14.f), ImGui::GetTextLineHeightWithSpacing() * (jniRegs_.size() + 2.f))))) {
+                            ImGui::TableSetupScrollFreeze(0, 1);
+                            ImGui::TableSetupColumn("Java method", ImGuiTableColumnFlags_WidthStretch, 2.f);
+                            ImGui::TableSetupColumn("Signature", ImGuiTableColumnFlags_WidthStretch, 3.f);
+                            ImGui::TableSetupColumn("Function", ImGuiTableColumnFlags_WidthFixed, ui::em(6.f));
+                            ImGui::TableHeadersRow();
+                            for (size_t i = 0; i < jniRegs_.size(); ++i) {
+                                const auto& r = jniRegs_[i];
+                                if (!filter.empty() && tex::ciFind(r.name, filter) == std::string_view::npos &&
+                                    tex::ciFind(r.signature, filter) == std::string_view::npos)
+                                    continue;
+                                ImGui::TableNextRow();
+                                ImGui::TableNextColumn();
+                                ImGui::PushID(static_cast<int>(i));
+                                if (ImGui::Selectable(r.name.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_SpanAllColumns) &&
+                                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                                    symbolView_ = 5;
+                                    gotoNative(r.fnAddr);
+                                }
+                                if (ImGui::IsItemHovered()) ImGui::SetTooltip("double-click: disassemble the native implementation");
+                                ImGui::PopID();
+                                ImGui::TableNextColumn();
+                                ImGui::TextDisabled("%s", r.signature.c_str());
+                                ImGui::TableNextColumn();
+                                ImGui::Text("0x%llx", static_cast<unsigned long long>(r.fnAddr));
+                            }
+                            ImGui::EndTable();
+                        }
+                    }
+                }
+            }
             const auto syms = symbolView_ == 0 ? elf_->jniSymbols() : symbolView_ == 1 ? elf_->exports() : elf_->imports();
             std::vector<const ElfFile::Symbol*> shown;
             for (const auto* s : syms)

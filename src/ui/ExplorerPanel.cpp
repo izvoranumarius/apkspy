@@ -357,8 +357,12 @@ void ExplorerPanel::drawRemoveConfirm() {
         Root* root = removeRequest_;
         removeRequest_ = nullptr;
         pressNode_ = nullptr;
+        pressRoot_ = nullptr;
+        anchorNode_ = nullptr;   // all of these point into the tree that is about to be freed
+        exportRequest_ = {};
         selection_.clear();
         drawnSelection_.clear();
+        allRows_.clear();
         workspace_.removeApk(root);
         ImGui::CloseCurrentPopup();
     }

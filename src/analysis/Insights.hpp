@@ -87,6 +87,17 @@ struct EndpointHost {
 };
 std::vector<EndpointHost> endpoints(const std::vector<std::string>& strings);
 
+// --- Encoded strings --------------------------------------------------------
+// String constants that are base64, hex or URL-encoded text: apps hide URLs,
+// keys and messages this way. Only readable results are reported (mostly
+// printable text, at least 6 bytes), so random-looking identifiers are skipped.
+struct DecodedString {
+    std::string original;
+    std::string decoded;
+    std::string method;  // "base64", "hex" or "url"
+};
+std::vector<DecodedString> decodeStrings(const std::vector<std::string>& strings, size_t limit = 500);
+
 // --- Permission -> API usage ------------------------------------------------
 // Which guarded APIs an app actually calls for each dangerous permission it
 // requests - the gap between what it asks for and what it uses.
