@@ -40,7 +40,7 @@ started (with the reason).
 | 22 | Sensitive-logging finder | **partial**: the logging rule lists every Log / println / printStackTrace caller with the constant arguments it passes |
 | 23 | JNI RegisterNatives tables mapped to natives | **done** (Analysis > Native > JNI > Registered natives; RELA and RELR relocations). Validated on synthetic libraries only: the one real library available registers its natives at run time |
 | 24 | String decryption helper | **partial**: Insights > Decoded lists base64 / hex / URL-encoded constants that decode to text. Running an app's own decryption routine is not done (it would mean executing app code) |
-| 25 | Switch-over-strings and nested-structure clean-up in the built-in decompiler | - (a decompiler rewrite, not an incremental change) |
+| 25 | Switch-over-strings and nested-structure clean-up in the built-in decompiler | **partial**: `switch (s) { case "a": ... }` is recovered for the javac/D8 (hash switch, equals, index, second switch) and kotlinc (direct) shapes: 80 of 117 such methods in one large app, 27 of 44 in another, versus 9 and 0 before. Odd shapes stay as the hash switch. Nested-structure clean-up is not done |
 | 26 | Per-method smali diff between two APK versions | **done** (Analysis > Compare: click a changed method) |
 | 27 | Network-security-config viewer | **done** (Insights > Manifest) |
 | 28 | Backend endpoint inventory | **done** (Insights > Endpoints: hosts grouped, cloud backends classified, links to code) |

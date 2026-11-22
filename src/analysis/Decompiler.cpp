@@ -359,6 +359,8 @@ struct Term {
     std::vector<uint64_t> addrs;
     std::string text;  // Cond: condition; Switch: value; Return/Throw: value; Stop: statement
     std::vector<std::pair<std::vector<int64_t>, int>> cases;  // Switch: keys -> block
+    // Switch over a string: label texts (quoted literals) per case, parallel to `cases` (whose keys are then empty).
+    std::vector<std::vector<std::string>> caseLabels;
     CondTree cond;     // Cond, after folding
 };
 
@@ -607,6 +609,31 @@ void mergeConditions(Fn& fn) {
     }
 }
 
+// Developer aid: APKSPY_DECOMPILER_DUMP=1 prints the blocks after simplification to stderr.
+void dumpFn(const Fn& fn) {
+    for (size_t i = 0; i < fn.blocks.size(); ++i) {
+        const Block& b = fn.blocks[i];
+        std::fprintf(stderr, "B%zu @%llx\n", i, static_cast<unsigned long long>(b.addr));
+        for (const Stmt& st : b.stmts) {
+            if (st.removed) continue;
+            std::fprintf(stderr, "    %s def=%d %s%s\n", st.def >= 0 ? st.defName.c_str() : "-", st.def, render(st.rhs).c_str(),
+                         st.constant ? "  [const]" : "");
+        }
+        const Term& t = b.term;
+        const char* kinds[] = {"Fall", "Cond", "Switch", "Return", "Throw", "Stop"};
+        std::string text = t.kind == TermKind::Cond ? renderCond(t.text) : render(t.text);
+        std::fprintf(stderr, "    -> %s '%s' succ:", kinds[static_cast<int>(t.kind)], text.c_str());
+        for (int sc : b.succ) std::fprintf(stderr, " %d", sc);
+        if (t.kind == TermKind::Switch)
+            for (const auto& [keys, target] : t.cases) {
+                std::fprintf(stderr, " [");
+                for (int64_t k : keys) std::fprintf(stderr, "%lld,", static_cast<long long>(k));
+                std::fprintf(stderr, "]=>%d", target);
+            }
+        std::fprintf(stderr, "\n");
+    }
+}
+
 void simplify(Fn& fn) {
     for (int round = 0; round < 2; ++round) {
         removeDead(fn, liveness(fn));
@@ -617,6 +644,371 @@ void simplify(Fn& fn) {
         if (b.term.kind == TermKind::Cond) b.term.cond = CondTree{0, b.term.text, {}};
     mergeConditions(fn);
 }
+
+// ===========================================================================
+// switch (string)
+// ===========================================================================
+//
+// javac, D8 and kotlinc compile a switch over a string into a switch over
+// s.hashCode() whose cases test s.equals("a") (a hash collision is a chain of such
+// tests). Two shapes follow:
+//   indexed: the matching test stores the case's index and a second switch over that
+//            index holds the bodies (javac / D8; D8 often reuses the string's own
+//            register for the index);
+//   direct:  the matching test jumps straight into the body (kotlinc's when).
+// Left alone the output is a hash switch, an index variable and gotos to the shared
+// "no match" block. When the graph has exactly one of these shapes, this pass
+// rebuilds a single switch over the string.
+
+struct StringSwitchPass {
+    Fn& fn;
+    std::vector<std::vector<int>> preds;
+
+    explicit StringSwitchPass(Fn& f) : fn(f) {}
+
+    static bool endsWith(const std::string& s, const std::string& suffix) {
+        return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+    }
+    static bool numeric(const std::string& t, int64_t& v) {
+        if (t.empty()) return false;
+        char* end = nullptr;
+        const long long x = std::strtoll(t.c_str(), &end, 10);
+        if (end != t.c_str() + t.size()) return false;
+        v = x;
+        return true;
+    }
+    static bool simpleSubject(const std::string& e) {
+        if (e.empty()) return false;
+        for (char c : e)
+            if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$' || c == '.')) return false;
+        return true;
+    }
+
+    // The value of a register that is assigned exactly once in the function, to a number
+    // (D8 hoists shared constants into registers: "v6 = v2" then stands for "v6 = 4").
+    bool constValue(const std::string& name, int64_t& out) const {
+        const Stmt* only = nullptr;
+        for (const Block& b : fn.blocks)
+            for (const Stmt& st : b.stmts) {
+                if (st.removed || st.def < 0 || st.defName != name) continue;
+                if (only) return false;
+                only = &st;
+            }
+        return only && numeric(render(only->rhs), out);
+    }
+    // A number written out, or a register that holds one.
+    bool valueOf(const std::string& text, int64_t& out) const { return numeric(text, out) || constValue(text, out); }
+
+    // The number register `reg` holds on entry to block `b`: its last assignment, found by walking back
+    // through blocks that have a single predecessor.
+    bool reachingConst(int b, int reg, int64_t& out) const {
+        for (int steps = 0; steps < 16; ++steps) {
+            const Block& bb = fn.blocks[static_cast<size_t>(b)];
+            for (size_t i = bb.stmts.size(); i-- > 0;) {
+                const Stmt& st = bb.stmts[i];
+                if (st.removed || st.def != reg) continue;
+                return valueOf(render(st.rhs), out);
+            }
+            if (preds[static_cast<size_t>(b)].size() != 1) return false;
+            b = preds[static_cast<size_t>(b)][0];
+        }
+        return false;
+    }
+
+    int liveStmts(const Block& b) const {
+        int n = 0;
+        for (const Stmt& st : b.stmts) n += st.removed ? 0 : 1;
+        return n;
+    }
+    // A block that only jumps on (a compiler's goto trampoline).
+    bool trampoline(int b) const {
+        const Block& bb = fn.blocks[static_cast<size_t>(b)];
+        return liveStmts(bb) == 0 && bb.term.kind == TermKind::Fall && bb.succ.size() == 1 && bb.notes.empty() && bb.exc.empty();
+    }
+    int skipTrampolines(int b, std::vector<int>& visited) const {
+        for (int hops = 0; hops < 8 && trampoline(b); ++hops) {
+            visited.push_back(b);
+            b = fn.blocks[static_cast<size_t>(b)].succ[0];
+        }
+        return b;
+    }
+
+    // "<subject>.equals(\"lit\")", possibly negated, as the condition of a block.
+    struct Equals {
+        std::string subject, literal;
+        int match = -1, noMatch = -1;
+    };
+    bool parseEquals(int b, Equals& out) const {
+        const Block& bb = fn.blocks[static_cast<size_t>(b)];
+        if (bb.term.kind != TermKind::Cond || bb.succ.size() != 2 || liveStmts(bb) != 0 || !bb.notes.empty() || !bb.exc.empty()) return false;
+        std::string a, op, rhs;
+        splitCond(bb.term.text, a, op, rhs);
+        if (op != "?" && op != "!") return false;
+        const std::string shown = render(a);
+        const size_t at = shown.find(".equals(\"");
+        if (at == std::string::npos || shown.compare(shown.size() - 1, 1, ")") != 0) return false;
+        out.subject = shown.substr(0, at);
+        out.literal = shown.substr(at + 8, shown.size() - (at + 8) - 1);  // the quoted literal
+        if (out.literal.size() < 2 || out.literal.front() != '"' || out.literal.back() != '"') return false;
+        // The literal must be one string: no unescaped quote inside.
+        for (size_t i = 1; i + 1 < out.literal.size(); ++i) {
+            if (out.literal[i] == '\\') ++i;
+            else if (out.literal[i] == '"') return false;
+        }
+        out.match = op == "?" ? bb.succ[0] : bb.succ[1];
+        out.noMatch = op == "?" ? bb.succ[1] : bb.succ[0];
+        return true;
+    }
+
+    // What the hash switch's cases test.
+    struct Collected {
+        std::string value;       // "s.hashCode()" as shown
+        std::string subjectRaw;  // the subject expression, placeholders kept
+        std::set<int> chain;     // the equals tests and the trampolines after them
+        std::vector<std::pair<std::string, int>> matches;  // literal -> block the match enters
+        std::vector<int> testOf;                           // the equals block of each match
+        int noMatch = -1;        // where every failed test, and an unknown hash, ends up
+    };
+
+    bool run() {
+        bool any = false;
+        for (size_t h = 0; h < fn.blocks.size(); ++h) any |= tryBlock(static_cast<int>(h));
+        return any;
+    }
+
+    void computePreds() {
+        preds.assign(fn.blocks.size(), {});
+        for (size_t i = 0; i < fn.blocks.size(); ++i)
+            for (int sc : fn.blocks[i].succ)
+                if (sc >= 0 && static_cast<size_t>(sc) < fn.blocks.size()) preds[static_cast<size_t>(sc)].push_back(static_cast<int>(i));
+    }
+
+    bool collect(int h, Collected& c) {
+        const Block& H = fn.blocks[static_cast<size_t>(h)];
+        if (H.term.kind != TermKind::Switch || H.term.cases.empty() || !H.term.caseLabels.empty()) return false;
+        c.value = render(H.term.text);
+        const std::string suffix = ".hashCode()";
+        if (!endsWith(c.value, suffix) || !endsWith(H.term.text, suffix)) return false;
+        const std::string subject = c.value.substr(0, c.value.size() - suffix.size());
+        if (!simpleSubject(subject)) return false;
+        c.subjectRaw = H.term.text.substr(0, H.term.text.size() - suffix.size());
+
+        for (const auto& [keys, target] : H.term.cases) {
+            (void)keys;
+            int cur = target;
+            for (int step = 0; step < 16; ++step) {
+                Equals eq;
+                if (!parseEquals(cur, eq) || eq.subject != subject) return false;
+                if (step > 0 && preds[static_cast<size_t>(cur)].size() != 1) return false;
+                c.chain.insert(cur);
+                c.matches.push_back({eq.literal, eq.match});
+                c.testOf.push_back(cur);
+                std::vector<int> hops;
+                const int next = skipTrampolines(eq.noMatch, hops);
+                // A further test on the same subject continues a hash-collision chain.
+                Equals follow;
+                if (parseEquals(next, follow) && follow.subject == subject && preds[static_cast<size_t>(next)].size() == 1) {
+                    for (int t : hops) c.chain.insert(t);
+                    cur = next;
+                    continue;
+                }
+                if (c.noMatch >= 0 && c.noMatch != next) return false;
+                c.noMatch = next;
+                for (int t : hops) c.chain.insert(t);
+                break;
+            }
+        }
+        if (c.matches.empty() || c.noMatch < 0) return false;
+        // An unmatched hash takes the head's default edge: it must end at the same no-match block.
+        std::vector<int> hops;
+        if (H.succ.empty() || skipTrampolines(H.succ[0], hops) != c.noMatch) return false;
+        for (int t : hops) c.chain.insert(t);
+        return true;
+    }
+
+    bool tryBlock(int h) {
+        computePreds();
+        Collected c;
+        if (!collect(h, c)) return false;
+        return tryIndexed(h, c) || tryDirect(h, c);
+    }
+
+    struct Group {
+        int target;
+        int64_t order;
+        std::vector<std::string> labels;
+    };
+
+    // Installs the rebuilt switch in the head and retires the blocks that carried the old one.
+    void install(int h, const Collected& c, std::vector<Group> groups, int defaultTarget, std::set<int> retire) {
+        Block& H = fn.blocks[static_cast<size_t>(h)];
+        // Source order, equal-bodied labels together.
+        std::stable_sort(groups.begin(), groups.end(), [](const Group& a, const Group& b) { return a.order < b.order; });
+        Term t;
+        t.kind = TermKind::Switch;
+        t.addrs = H.term.addrs;
+        t.text = c.subjectRaw;
+        std::vector<int> succ = {defaultTarget};
+        for (const Group& g : groups) {
+            t.cases.push_back({{}, g.target});
+            t.caseLabels.push_back(g.labels);
+            succ.push_back(g.target);
+        }
+        for (Stmt& st : H.stmts)  // the null-check call kept in front of the switch
+            if (!st.removed && st.def < 0 && render(st.rhs) == c.value) st.removed = true;
+        H.term = std::move(t);
+        H.succ = std::move(succ);
+        retire.erase(h);
+        for (int b : retire) {
+            Block& dead = fn.blocks[static_cast<size_t>(b)];
+            dead.stmts.clear();
+            dead.succ.clear();
+            dead.exc.clear();
+            dead.term = Term{};
+            dead.term.kind = TermKind::Stop;
+        }
+    }
+
+    // --- indexed: equals -> "idx = k" -> switch (idx) { bodies } -----------------------------
+    bool tryIndexed(int h, const Collected& c) {
+        Block& H = fn.blocks[static_cast<size_t>(h)];
+        std::set<int> chain = c.chain;
+        // Every match block sets the index register to a constant and continues to the index switch.
+        int idxReg = -1, s2 = -1;
+        std::string idxName;
+        std::vector<std::pair<std::string, int64_t>> indexed;  // literal -> index value
+        std::vector<std::pair<std::string, int>> straight;  // matches that jump into the index switch itself
+        for (const auto& [literal, mb] : c.matches) {
+            const Block& M = fn.blocks[static_cast<size_t>(mb)];
+            if (M.term.kind == TermKind::Switch) {  // the index already holds this case's value
+                straight.push_back({literal, mb});
+                continue;
+            }
+            if (M.term.kind != TermKind::Fall || M.succ.size() != 1 || !M.notes.empty() || !M.exc.empty() || liveStmts(M) != 1) return false;
+            const Stmt* set = nullptr;
+            for (const Stmt& st : M.stmts)
+                if (!st.removed) set = &st;
+            int64_t k = 0;
+            if (!set || set->def < 0 || !valueOf(render(set->rhs), k)) return false;
+            if (idxReg >= 0 && (idxReg != set->def || s2 != M.succ[0])) return false;
+            idxReg = set->def;
+            idxName = set->defName;
+            s2 = M.succ[0];
+            indexed.push_back({literal, k});
+            chain.insert(mb);
+        }
+        if (s2 < 0 || chain.count(s2)) return false;
+        for (const auto& [literal, mb] : straight) {
+            int64_t k = 0;
+            if (mb != s2 || !reachingConst(h, idxReg, k)) return false;
+            indexed.push_back({literal, k});
+        }
+
+        // The no-match path leaves the index at a value no case uses (-1), straight or through one assignment.
+        int64_t noMatchValue = 0;
+        bool haveNoMatch = false;
+        if (c.noMatch == s2) {
+            // javac form: the index was initialised in the head, before the hash switch.
+            for (const Stmt& st : H.stmts)
+                if (!st.removed && st.def == idxReg && valueOf(render(st.rhs), noMatchValue)) haveNoMatch = true;
+        } else {
+            const Block& D = fn.blocks[static_cast<size_t>(c.noMatch)];
+            if (D.term.kind != TermKind::Fall || D.succ.size() != 1 || D.succ[0] != s2 || liveStmts(D) != 1 || !D.notes.empty() || !D.exc.empty())
+                return false;
+            const Stmt* set = nullptr;
+            for (const Stmt& st : D.stmts)
+                if (!st.removed) set = &st;
+            if (!set || set->def != idxReg) return false;
+            haveNoMatch = valueOf(render(set->rhs), noMatchValue);
+            chain.insert(c.noMatch);
+        }
+        if (!haveNoMatch) return false;
+
+        // The index switch: only the switch, nothing else, and nothing but this chain enters it.
+        const Block& S2 = fn.blocks[static_cast<size_t>(s2)];
+        if (S2.term.kind != TermKind::Switch || liveStmts(S2) != 0 || !S2.notes.empty() || !S2.exc.empty() || !S2.term.caseLabels.empty()) return false;
+        if (render(S2.term.text) != idxName) return false;
+        for (int p : preds[static_cast<size_t>(s2)])
+            if (!chain.count(p)) return false;
+        for (int b : chain)  // nothing else may jump into the chain either
+            for (int p : preds[static_cast<size_t>(b)])
+                if (p != h && !chain.count(p)) return false;
+        for (const auto& [keys, t] : S2.term.cases) {
+            (void)t;
+            for (int64_t k : keys)
+                if (k == noMatchValue) return false;  // the "no match" index would hit a case
+        }
+
+        // The index value must not be read after the switch (it is about to disappear).
+        const Liveness lv = liveness(fn);
+        std::vector<int> bodies = {S2.succ.empty() ? -1 : S2.succ[0]};
+        for (const auto& [keys, t] : S2.term.cases) {
+            (void)keys;
+            bodies.push_back(t);
+        }
+        for (int t : bodies)
+            if (t >= 0 && lv.in[static_cast<size_t>(t)].test(idxReg)) return false;
+
+        // Literal -> target: the index switch's case for that index, else its default.
+        const int defaultTarget = S2.succ.empty() ? -1 : S2.succ[0];
+        if (defaultTarget < 0) return false;
+        std::vector<Group> groups;
+        for (const auto& [literal, k] : indexed) {
+            int target = defaultTarget;
+            for (const auto& [keys, t] : S2.term.cases)
+                if (std::find(keys.begin(), keys.end(), k) != keys.end()) target = t;
+            auto it = std::find_if(groups.begin(), groups.end(), [&](const Group& g) { return g.target == target; });
+            if (it == groups.end()) {
+                groups.push_back({target, k, {}});
+                it = groups.end() - 1;
+            }
+            it->order = std::min(it->order, k);
+            it->labels.push_back(literal);
+        }
+        for (Group& g : groups) std::sort(g.labels.begin(), g.labels.end());
+        chain.insert(s2);
+        install(h, c, std::move(groups), defaultTarget, chain);
+        return true;
+    }
+
+    // --- direct: equals -> body (kotlinc's when over a string) -------------------------------
+    bool tryDirect(int h, const Collected& c) {
+        // A body may be entered only by its own test, and the tests only from the head's cases.
+        for (size_t i = 0; i < c.matches.size(); ++i) {
+            const int mb = c.matches[i].second;
+            if (c.chain.count(mb) || mb == h || mb == c.noMatch) return false;
+            const auto& pr = preds[static_cast<size_t>(mb)];
+            for (int p : pr)
+                if (!std::count(c.testOf.begin(), c.testOf.end(), p)) return false;
+        }
+        for (int b : c.chain)
+            for (int p : preds[static_cast<size_t>(b)])
+                if (p != h && !c.chain.count(p)) return false;
+        std::vector<Group> groups;
+        int64_t order = 0;
+        for (const auto& [literal, mb] : c.matches) {
+            auto it = std::find_if(groups.begin(), groups.end(), [&](const Group& g) { return g.target == mb; });
+            if (it == groups.end()) {
+                groups.push_back({mb, order++, {}});
+                it = groups.end() - 1;
+            }
+            it->labels.push_back(literal);
+        }
+        // Source order is not recoverable here: keep the bodies in address order.
+        std::stable_sort(groups.begin(), groups.end(), [&](const Group& a, const Group& b) {
+            return fn.blocks[static_cast<size_t>(a.target)].addr < fn.blocks[static_cast<size_t>(b.target)].addr;
+        });
+        int64_t n = 0;
+        for (Group& g : groups) {
+            g.order = n++;
+            std::sort(g.labels.begin(), g.labels.end());
+        }
+        install(h, c, std::move(groups), c.noMatch, c.chain);
+        return true;
+    }
+};
+
+bool recoverStringSwitches(Fn& fn) { return StringSwitchPass(fn).run(); }
 
 // ===========================================================================
 // Structuring
@@ -1015,8 +1407,12 @@ private:
             if (jumpEdge(target, sc, indent + 2, {})) return;
             if (emitSeq(target, follow, sc, indent + 2, depth + 1)) emit("break;", indent + 2, {});
         };
-        for (const auto& [keys, target] : bb.term.cases) {
-            for (int64_t k : keys) emit("case " + std::to_string(k) + ":", indent + 1, {});
+        for (size_t i = 0; i < bb.term.cases.size(); ++i) {
+            const auto& [keys, target] = bb.term.cases[i];
+            if (i < bb.term.caseLabels.size() && !bb.term.caseLabels[i].empty())
+                for (const std::string& label : bb.term.caseLabels[i]) emit("case " + label + ":", indent + 1, {});
+            else
+                for (int64_t k : keys) emit("case " + std::to_string(k) + ":", indent + 1, {});
             body(target);
         }
         if (!bb.succ.empty() && bb.succ[0] != follow) {
@@ -1267,6 +1663,12 @@ public:
 
         if (!build(out.error)) return out;
         simplify(fn_);
+        if (recoverStringSwitches(fn_)) {  // the index variable is gone: let single-use values fold again
+            removeDead(fn_, liveness(fn_));
+            foldTemporaries(fn_, liveness(fn_));
+            removeDead(fn_, liveness(fn_));
+        }
+        if (std::getenv("APKSPY_DECOMPILER_DUMP")) dumpFn(fn_);
         Structurer(fn_, out.lines).run(1);
         if (retDesc_ == "V") dropTrailingReturn(out.lines);
         out.lines.push_back({"}", 0, {}});

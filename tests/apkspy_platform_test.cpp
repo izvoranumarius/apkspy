@@ -41,6 +41,7 @@
 #include "debug/FridaBridge.hpp"
 #include "core/Annotations.hpp"
 #include "core/ApkRepack.hpp"
+#include "core/ApkArchive.hpp"
 #include "core/Bundle.hpp"
 #include "app/Shortcuts.hpp"
 #include "core/Process.hpp"
@@ -4539,6 +4540,153 @@ static void testShortcuts() {
     CHECK(j.label("settings") == "Ctrl+," && !j.isCustom("settings"), "an unparsable value falls back to the default");
 }
 
+// A DEX with one class, LSw;, and two static methods that switch over a string the way compilers
+// emit it (hand-assembled, so the decompiler can be tested without an APK):
+//   f(String)I  - javac / D8 shape: hash switch -> equals -> "idx = k" -> packed-switch (idx)
+//   g(String)I  - kotlinc shape: hash switch -> equals -> the body directly
+// f: "a" -> 3, "b" -> 4, else 7.   g: "a" -> 5, "b" -> 6, else 0.
+static std::vector<uint8_t> buildStringSwitchDex() {
+    const std::vector<std::string> strings = {"I", "IL", "LSw;", "Ljava/lang/Object;", "Ljava/lang/String;", "Z", "ZL",
+                                              "a", "b",  "equals", "f", "g", "hashCode"};
+    Buf d;
+    d.b.resize(0x70, 0);
+    std::memcpy(d.b.data(), "dex\n035\0", 8);
+    d.put32(0x28, 0x12345678);
+    const size_t stringIdsOff = d.b.size();
+    for (size_t i = 0; i < strings.size(); ++i) d.u32(0);
+    const size_t typeIdsOff = d.b.size();
+    for (uint32_t sidx : {0u, 2u, 3u, 4u, 5u}) d.u32(sidx);  // T0 I, T1 LSw;, T2 Object, T3 String, T4 Z
+    const size_t protoIdsOff = d.b.size();
+    d.u32(0), d.u32(0), d.u32(0);  // P0 ()I
+    d.u32(1), d.u32(0), d.u32(0);  // P1 (String)I   params patched below
+    d.u32(6), d.u32(4), d.u32(0);  // P2 (Object)Z   params patched below
+    const size_t p1Params = protoIdsOff + 12 + 8, p2Params = protoIdsOff + 24 + 8;
+    const size_t fieldIdsOff = d.b.size();
+    const size_t methodIdsOff = d.b.size();
+    d.u16(1), d.u16(1), d.u32(10);  // M0 LSw;.f(String)I
+    d.u16(1), d.u16(1), d.u32(11);  // M1 LSw;.g(String)I
+    d.u16(3), d.u16(2), d.u32(9);   // M2 String.equals(Object)Z
+    d.u16(3), d.u16(0), d.u32(12);  // M3 String.hashCode()I
+    const size_t classDefsOff = d.b.size();
+    d.u32(1), d.u32(1), d.u32(2), d.u32(0), d.u32(DexFile::kNoIndex), d.u32(0);
+    const size_t classDataPatch = d.b.size();
+    d.u32(0), d.u32(0);
+    for (size_t i = 0; i < strings.size(); ++i) {
+        d.put32(stringIdsOff + 4 * i, static_cast<uint32_t>(d.b.size()));
+        d.uleb(static_cast<uint32_t>(strings[i].size()));
+        for (char c : strings[i]) d.u8(static_cast<uint8_t>(c));
+        d.u8(0);
+    }
+    d.align(4);
+    d.put32(p1Params, static_cast<uint32_t>(d.b.size()));
+    d.u32(1), d.u16(3), d.u16(0);  // (String)
+    d.put32(p2Params, static_cast<uint32_t>(d.b.size()));
+    d.u32(1), d.u16(2), d.u16(0);  // (Object)
+    d.align(4);
+    const auto codeItem = [&](const std::vector<uint16_t>& insns) {
+        d.align(4);
+        const uint32_t off = static_cast<uint32_t>(d.b.size());
+        d.u16(3), d.u16(1), d.u16(2), d.u16(0), d.u32(0), d.u32(static_cast<uint32_t>(insns.size()));
+        for (uint16_t u : insns) d.u16(u);
+        return off;
+    };
+    const auto w32 = [](std::vector<uint16_t>& v, uint32_t x) {
+        v.push_back(static_cast<uint16_t>(x));
+        v.push_back(static_cast<uint16_t>(x >> 16));
+    };
+    // --- f: the index form ---
+    std::vector<uint16_t> f = {
+        0xF012,                          // u0  const/4 v0, -1              (the index, "no match")
+        0x106e, 0x0003, 0x0002,          // u1  invoke-virtual {v2}, String.hashCode()I
+        0x010a,                          // u4  move-result v1
+        0x012c, 33, 0,                   // u5  sparse-switch v1, payload (u38)
+        0x1428,                          // u8  goto join (u28)
+        0x011a, 7,                       // u9  const-string v1, "a"
+        0x206e, 0x0002, 0x0012,          // u11 invoke-virtual {v2, v1}, String.equals
+        0x010a,                          // u14 move-result v1
+        0x0138, 13,                      // u15 if-eqz v1, join
+        0x0012,                          // u17 const/4 v0, 0
+        0x0a28,                          // u18 goto join
+        0x011a, 8,                       // u19 const-string v1, "b"
+        0x206e, 0x0002, 0x0012,          // u21 invoke-virtual {v2, v1}, String.equals
+        0x010a,                          // u24 move-result v1
+        0x0138, 3,                       // u25 if-eqz v1, join
+        0x1012,                          // u27 const/4 v0, 1
+        0x002b, 20, 0,                   // u28 join: packed-switch v0, payload (u48)
+        0x7012, 0x000f,                  // u31 default: const/4 v0, 7; return v0
+        0x3012, 0x000f,                  // u33 case 0: const/4 v0, 3; return v0
+        0x4012, 0x000f,                  // u35 case 1: const/4 v0, 4; return v0
+        0x0000,                          // u37 nop (payload alignment)
+    };
+    f.push_back(0x0200), f.push_back(2);  // u38 sparse-switch payload: keys 97, 98 -> u9, u19
+    w32(f, 97), w32(f, 98), w32(f, 4), w32(f, 14);
+    f.push_back(0x0100), f.push_back(2);  // u48 packed-switch payload: first key 0, targets u33, u35
+    w32(f, 0), w32(f, 5), w32(f, 7);
+    const uint32_t fCode = codeItem(f);
+    // --- g: the direct form ---
+    std::vector<uint16_t> g = {
+        0x106e, 0x0003, 0x0002,          // u0  invoke-virtual {v2}, String.hashCode()I
+        0x010a,                          // u3  move-result v1
+        0x012c, 26, 0,                   // u4  sparse-switch v1, payload (u30)
+        0x1528,                          // u7  goto default (u28)
+        0x011a, 7,                       // u8  const-string v1, "a"
+        0x206e, 0x0002, 0x0012,          // u10 invoke-virtual {v2, v1}, String.equals
+        0x010a,                          // u13 move-result v1
+        0x0138, 14,                      // u14 if-eqz v1, default
+        0x5012, 0x000f,                  // u16 const/4 v0, 5; return v0
+        0x011a, 8,                       // u18 const-string v1, "b"
+        0x206e, 0x0002, 0x0012,          // u20 invoke-virtual {v2, v1}, String.equals
+        0x010a,                          // u23 move-result v1
+        0x0138, 4,                       // u24 if-eqz v1, default
+        0x6012, 0x000f,                  // u26 const/4 v0, 6; return v0
+        0x0012, 0x000f,                  // u28 default: const/4 v0, 0; return v0
+    };
+    g.push_back(0x0200), g.push_back(2);  // u30 payload: keys 97, 98 -> u8, u18
+    w32(g, 97), w32(g, 98), w32(g, 4), w32(g, 14);
+    const uint32_t gCode = codeItem(g);
+    d.put32(classDataPatch, static_cast<uint32_t>(d.b.size()));
+    d.uleb(0), d.uleb(0), d.uleb(2), d.uleb(0);
+    d.uleb(0), d.uleb(0x9), d.uleb(fCode);  // f
+    d.uleb(1), d.uleb(0x9), d.uleb(gCode);  // g
+    d.put32(0x38, static_cast<uint32_t>(strings.size())), d.put32(0x3C, static_cast<uint32_t>(stringIdsOff));
+    d.put32(0x40, 5), d.put32(0x44, static_cast<uint32_t>(typeIdsOff));
+    d.put32(0x48, 3), d.put32(0x4C, static_cast<uint32_t>(protoIdsOff));
+    d.put32(0x50, 0), d.put32(0x54, static_cast<uint32_t>(fieldIdsOff));
+    d.put32(0x58, 4), d.put32(0x5C, static_cast<uint32_t>(methodIdsOff));
+    d.put32(0x60, 1), d.put32(0x64, static_cast<uint32_t>(classDefsOff));
+    d.put32(0x20, static_cast<uint32_t>(d.b.size()));
+    return d.b;
+}
+
+static void testStringSwitch() {
+    std::printf("== switch over strings ==\n");
+    auto bytes = std::make_shared<std::vector<uint8_t>>(buildStringSwitchDex());
+    std::string err;
+    auto dex = DexFile::parse(bytes, "sw.dex", err);
+    CHECK(dex != nullptr, "string-switch dex parses");
+    if (!dex) return;
+    std::atomic<bool> stop{false};
+    auto a = ApkAnalysis::build({dex}, stop);
+    CHECK(a != nullptr, "analysis builds");
+    if (!a) return;
+    const auto text = [&](const char* name) {
+        const auto defs = a->findMethodDefs("LSw;", name);
+        return defs.empty() ? std::string("<missing>") : decompiler::toText(decompiler::decompileMethod(*a, defs.front()));
+    };
+    const auto has = [](const std::string& t, const char* needle) { return t.find(needle) != std::string::npos; };
+
+    const std::string f = text("f");
+    CHECK(has(f, "switch (arg0) {") && has(f, "case \"a\":") && has(f, "case \"b\":"), "indexed form: one switch over the string");
+    CHECK(has(f, "return 3;") && has(f, "return 4;") && has(f, "default:") && has(f, "return 7;"), "indexed form: bodies and default");
+    CHECK(!has(f, "hashCode") && !has(f, "equals") && !has(f, "goto"), "indexed form: no hash, equals or goto left");
+    CHECK(f.find("case \"a\":") < f.find("case \"b\":"), "indexed form: cases in source order");
+
+    const std::string g = text("g");
+    CHECK(has(g, "switch (arg0) {") && has(g, "case \"a\":") && has(g, "case \"b\":"), "direct form: one switch over the string");
+    CHECK(has(g, "return 5;") && has(g, "return 6;") && has(g, "default:") && has(g, "return 0;"), "direct form: bodies and default");
+    CHECK(!has(g, "hashCode") && !has(g, "equals") && !has(g, "goto"), "direct form: no hash, equals or goto left");
+}
+
 static void testJniRegistrations() {
     std::printf("== jni registrations ==\n");
     for (bool relr : {false, true}) {
@@ -4725,9 +4873,96 @@ static void testAnnotationsMarkdown() {
 
 }  // namespace
 
+// Developer mode (not a test): `--decompile <apk> find` lists the methods that switch over a
+// string (String.hashCode() feeding a switch); `--decompile <apk> <Lcls;->name(proto)>` prints
+// the built-in decompiler's output for one method. Used to look at real output while working
+// on the decompiler.
+static std::shared_ptr<ApkAnalysis> loadApkForDev(const std::string& path) {
+    ApkArchive zip;
+    if (!zip.open(path)) {
+        std::printf("cannot open %s\n", path.c_str());
+        return nullptr;
+    }
+    std::vector<std::shared_ptr<DexFile>> dexes;
+    for (const auto& e : zip.entries()) {
+        if (e.path.rfind("classes", 0) != 0 || e.path.size() < 4 || e.path.compare(e.path.size() - 4, 4, ".dex") != 0) continue;
+        auto bytes = std::make_shared<std::vector<uint8_t>>();
+        std::string err;
+        if (!zip.readEntry(e.path, *bytes)) continue;
+        for (auto& d : DexFile::parseAll(bytes, e.path, err)) dexes.push_back(std::move(d));
+    }
+    std::atomic<bool> stop{false};
+    return ApkAnalysis::build(std::move(dexes), stop);
+}
+
+static int devDecompile(const std::string& apk, const std::string& what) {
+    auto a = loadApkForDev(apk);
+    if (!a) return 1;
+    if (what == "find") {
+        int shown = 0;
+        for (const auto& c : a->classes()) {
+            for (const auto& m : a->methodsOf(c)) {
+                bool hash = false;
+                for (const auto& callee : a->calleesOf(m))
+                    if (callee.signature == "Ljava/lang/String;->hashCode()I") hash = true;
+                if (!hash) continue;
+                const std::string listing = a->disassemble(m);
+                if (listing.find("-switch") == std::string::npos) continue;
+                std::printf("%s\n", a->methodSignature(m).c_str());
+                if (++shown >= 60) return 0;
+            }
+        }
+        std::printf("%d method(s)\n", shown);
+        return 0;
+    }
+    if (what == "stats") {
+        // Every method that switches over a string: decompile it and see whether it came out as one switch.
+        int total = 0, converted = 0, raw = 0, failed = 0;
+        for (const auto& c : a->classes()) {
+            for (const auto& m : a->methodsOf(c)) {
+                bool hash = false;
+                for (const auto& callee : a->calleesOf(m))
+                    if (callee.signature == "Ljava/lang/String;->hashCode()I") hash = true;
+                if (!hash || a->disassemble(m).find("-switch") == std::string::npos) continue;
+                ++total;
+                const auto out = decompiler::decompileMethod(*a, m);
+                if (!out.error.empty()) {
+                    ++failed;
+                    continue;
+                }
+                const std::string text = decompiler::toText(out);
+                const bool hasCase = text.find("case \"") != std::string::npos;
+                const bool hasHash = text.find(".hashCode()) {") != std::string::npos;  // a switch still over the hash
+                if (hasCase && !hasHash) ++converted;
+                else if (hasHash) {
+                    ++raw;
+                    std::printf("RAW   %s\n", a->methodSignature(m).c_str());
+                }
+            }
+        }
+        std::printf("string-switch methods: %d, converted: %d, still raw: %d, failed: %d, other: %d\n", total, converted, raw, failed,
+                    total - converted - raw - failed);
+        return 0;
+    }
+    std::string cls, name, proto;
+    if (!ApkAnalysis::splitMethodRef(what, cls, name, proto)) {
+        std::printf("bad method reference\n");
+        return 1;
+    }
+    const auto defs = a->findMethodDefs(cls, name, proto);
+    if (defs.empty()) {
+        std::printf("not found\n");
+        return 1;
+    }
+    std::printf("%s\n", a->disassemble(defs.front()).c_str());
+    std::printf("-------- decompiled --------\n%s\n", decompiler::toText(decompiler::decompileMethod(*a, defs.front())).c_str());
+    return 0;
+}
+
 int main(int argc, char** argv) {
     // Unbuffered: when a test crashes, the sections printed so far are not lost with the buffer.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+    if (argc == 4 && std::string(argv[1]) == "--decompile") return devDecompile(argv[2], argv[3]);
     if (const char* only = std::getenv("APKSPY_TEST_ONLY"); only && std::string(only) == "websocket") {
         testWebSocketCapture();
         std::printf("%d passed, %d failed\n", passes, failures);
@@ -4797,6 +5032,7 @@ int main(int argc, char** argv) {
     testRepack();
     testFridaServer();
     testShortcuts();
+    testStringSwitch();
     testJniRegistrations();
     testBundle();
     testDexContainer();
