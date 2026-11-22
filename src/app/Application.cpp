@@ -18,6 +18,7 @@
 #include "ui/ExplorerPanel.hpp"
 #include "ui/McpSettings.hpp"
 #include "app/SystemTheme.hpp"
+#include "core/Bundle.hpp"
 #include "ui/BookmarksPanel.hpp"
 #include "ui/EditsPanel.hpp"
 #include "ui/InsightsPanel.hpp"
@@ -375,7 +376,7 @@ void Application::onDrop(GLFWwindow* window, int count, const char** paths) {
     std::vector<std::string> apks;
     for (int i = 0; i < count; ++i) {
         std::string ext = tex::asciiLower(fs::path(paths[i]).extension().string());
-        if (ext == ".apk") apks.push_back(paths[i]);
+        if (ext == ".apk" || ext == ".xapk" || ext == ".apks" || ext == ".apkm") apks.push_back(paths[i]);
     }
     if (!apks.empty()) {
         app->addApkPaths(apks);
@@ -826,8 +827,25 @@ bool Application::openProject(const std::string& path) {
     return true;
 }
 
-void Application::addApkPaths(const std::vector<std::string>& paths) {
+void Application::addApkPaths(const std::vector<std::string>& requested) {
     if (!project_.isOpen()) project_.reset();
+    // Bundles (.xapk / .apks / .apkm) are unpacked: their base APK and the splits that carry code or
+    // native libraries are added like ordinary APKs.
+    std::vector<std::string> paths;
+    for (const std::string& path : requested) {
+        if (!bundle::isBundle(path)) {
+            paths.push_back(path);
+            continue;
+        }
+        const bundle::Result r = bundle::extract(path, Workspace::jadxCacheRoot() + "/bundles");
+        if (!r.ok()) {
+            workspace_.log("Cannot open bundle " + path + ": " + r.error);
+            continue;
+        }
+        for (const auto& e : r.apks) paths.push_back(e.path);
+        workspace_.log("Opened bundle " + path + ": " + std::to_string(r.apks.size()) + " APK(s), " +
+                       std::to_string(r.skipped) + " resource-only split(s) skipped");
+    }
     for (const std::string& path : paths) {
         std::string group = project_.uniqueGroupName(
             pathutil::toUtf8(fs::path(pathutil::fromUtf8(path)).stem()));

@@ -88,7 +88,7 @@ private:
     bool saveProject();
     bool saveProjectAs(const std::string& path);
     bool openProject(const std::string& path);
-    void addApkPaths(const std::vector<std::string>& paths);
+    void addApkPaths(const std::vector<std::string>& requested);
     void addRecent(const std::string& path);
     void drawRecentProjects();
 

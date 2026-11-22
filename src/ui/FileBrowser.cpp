@@ -65,7 +65,8 @@ void FileBrowser::applyFilter() {
             continue;
         }
         if (mode_ == Mode::OpenApkMulti) {
-            if (hasExtension(e.name, ".apk")) entries_.push_back(e);
+            if (hasExtension(e.name, ".apk") || hasExtension(e.name, ".xapk") || hasExtension(e.name, ".apks") || hasExtension(e.name, ".apkm"))
+                entries_.push_back(e);
         } else if (mode_ == Mode::OpenProject) {
             if (hasExtension(e.name, ".apkspy")) entries_.push_back(e);
         } else {

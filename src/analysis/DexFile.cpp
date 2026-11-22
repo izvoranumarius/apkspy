@@ -138,11 +138,45 @@ const char* primitiveName(char c) {
 
 std::shared_ptr<DexFile> DexFile::parse(std::shared_ptr<const std::vector<uint8_t>> bytes, std::string name,
                                         std::string& error) {
-    if (!bytes || bytes->size() < kHeaderSize) {
+    return parseAt(std::move(bytes), std::move(name), 0, error);
+}
+
+std::vector<std::shared_ptr<DexFile>> DexFile::parseAll(std::shared_ptr<const std::vector<uint8_t>> bytes,
+                                                       const std::string& name, std::string& error) {
+    std::vector<std::shared_ptr<DexFile>> out;
+    auto first = parseAt(bytes, name, 0, error);
+    if (!first) return out;
+    out.push_back(first);
+    // Version 41 containers: header_size (0x24) is 0x78 and container_size (0x70) /
+    // header_offset (0x74) follow the standard header. The next section starts where
+    // this one ends.
+    if (first->version() >= 41 && bytes->size() >= 0x78) {
+        const uint8_t* base = bytes->data();
+        const uint64_t container = rd32(base + 0x70);
+        uint64_t next = static_cast<uint64_t>(first->fileSize_);
+        for (int index = 2; index < 1024 && next + 0x78 <= container && next + 0x78 <= bytes->size(); ++index) {
+            next = (next + 3) & ~uint64_t{3};  // sections are 4-byte aligned
+            std::string sectionError;
+            auto section = parseAt(bytes, name + "#" + std::to_string(index), static_cast<size_t>(next), sectionError);
+            if (!section || section->fileSize_ == 0) {
+                if (error.empty()) error = sectionError;
+                break;
+            }
+            next += section->fileSize_;
+            out.push_back(std::move(section));
+        }
+    }
+    return out;
+}
+
+std::shared_ptr<DexFile> DexFile::parseAt(std::shared_ptr<const std::vector<uint8_t>> bytes, std::string name,
+                                          size_t headerOffset, std::string& error) {
+    if (!bytes || bytes->size() < headerOffset + kHeaderSize) {
         error = "file too small for a DEX header";
         return nullptr;
     }
-    const uint8_t* d = bytes->data();
+    const uint8_t* base = bytes->data();
+    const uint8_t* d = base + headerOffset;  // this section's header
     if (std::memcmp(d, "dex\n", 4) != 0 || d[7] != 0 || d[4] < '0' || d[4] > '9' || d[5] < '0' ||
         d[5] > '9' || d[6] < '0' || d[6] > '9') {
         error = "bad DEX magic";
@@ -156,6 +190,7 @@ std::shared_ptr<DexFile> DexFile::parse(std::shared_ptr<const std::vector<uint8_
     dex->data_ = std::move(bytes);
     dex->name_ = std::move(name);
     dex->version_ = static_cast<uint32_t>((d[4] - '0') * 100 + (d[5] - '0') * 10 + (d[6] - '0'));
+    dex->fileSize_ = rd32(d + 0x20);
     dex->stringIdsSize_ = rd32(d + 0x38);
     dex->stringIdsOff_ = rd32(d + 0x3C);
     dex->typeIdsSize_ = rd32(d + 0x40);
@@ -195,7 +230,7 @@ std::shared_ptr<DexFile> DexFile::parse(std::shared_ptr<const std::vector<uint8_
     }
     dex->classDefs_.reserve(classDefsSize);
     for (uint32_t i = 0; i < classDefsSize; ++i) {
-        const uint8_t* p = d + classDefsOff + static_cast<size_t>(i) * 32;
+        const uint8_t* p = base + classDefsOff + static_cast<size_t>(i) * 32;
         ClassDef c;
         c.classIdx = rd32(p);
         c.accessFlags = rd32(p + 4);

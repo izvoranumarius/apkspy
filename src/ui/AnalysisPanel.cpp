@@ -9,6 +9,7 @@
 #include "analysis/Dalvik.hpp"
 #include "app/Theme.hpp"
 #include "core/ApkInfo.hpp"
+#include "edit/Edits.hpp"
 #include "core/TextUtils.hpp"
 #include "document/SyntaxHighlighter.hpp"
 #include "ui/UiUtil.hpp"
@@ -1486,6 +1487,30 @@ void AnalysisPanel::drawNative(Root& apk) {
 // Compare
 // ---------------------------------------------------------------------------
 
+// Opens a unified diff of one method between two APKs (the same normalised
+// listing the version diff compares: no offsets, no line numbers).
+void AnalysisPanel::openMethodDiff(Root& a, Root& b, const std::string& signature) {
+    auto anA = workspace_.analysis().get(a.title), anB = workspace_.analysis().get(b.title);
+    std::string cls, name, proto;
+    if (!anA || !anB || !ApkAnalysis::splitMethodRef(signature, cls, name, proto)) return;
+    const auto listing = [&](const ApkAnalysis& an) {
+        std::string text;
+        dalvik::ListingOptions opt;
+        opt.showOffsets = false;
+        opt.showLines = false;
+        for (const auto& def : an.findMethodDefs(cls, name, proto)) dalvik::disassembleMethod(*an.dexes()[def.dex], def.method, opt, text);
+        return text;
+    };
+    const std::string left = listing(*anA), right = listing(*anB);
+    std::string text = "# " + signature + "\n# --- " + a.title + "   +++ " + b.title + "\n\n";
+    const std::string d = edits::unifiedDiff(a.title + " -> " + b.title, left, right, 4);
+    text += d.empty() ? "(no textual difference once offsets and line numbers are ignored)\n" : d;
+    std::string path = "diff/" + signature + ".diff";
+    for (char& c : path)
+        if (c == '\\' || c == ':' || c == '<' || c == '>' || c == '|' || c == '?' || c == '*' || c == '"') c = '_';
+    workspace_.openGenerated(a.title, path, shortName(cls) + "." + name + ".diff", std::move(text), 0);
+}
+
 void AnalysisPanel::drawCompare(Root& apk) {
     std::vector<Root*> apks = workspace_.apkRoots();
     if (apks.size() < 2) {
@@ -1577,7 +1602,23 @@ void AnalysisPanel::drawCompare(Root& apk) {
     if (diff_.codeCompared) {
         list("Classes added", diff_.classesAdded);
         list("Classes removed", diff_.classesRemoved);
-        list("Methods changed", diff_.methodsChanged);
+        {
+            const auto& items = diff_.methodsChanged;
+            char header[96];
+            std::snprintf(header, sizeof header, "Methods changed (%zu) - click one for its smali diff###Methods changed", items.size());
+            if (ImGui::CollapsingHeader(header)) {
+                ImGui::BeginChild("##changedMethods", ImVec2(0, std::min(240.f, 20.f + 18.f * static_cast<float>(items.size()))), ImGuiChildFlags_Borders);
+                ImGuiListClipper clipper;
+                clipper.Begin(static_cast<int>(items.size()));
+                while (clipper.Step())
+                    for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+                        ImGui::PushID(i);
+                        if (ImGui::Selectable(items[static_cast<size_t>(i)].c_str())) openMethodDiff(apk, other, items[static_cast<size_t>(i)]);
+                        ImGui::PopID();
+                    }
+                ImGui::EndChild();
+            }
+        }
         list("Methods added", diff_.methodsAdded);
         list("Methods removed", diff_.methodsRemoved);
     }

@@ -112,12 +112,12 @@ void AnalysisService::run(Job* job) {
             continue;
         }
         std::string error;
-        auto dex = DexFile::parse(std::move(bytes), name, error);
-        if (!dex) {
+        auto sections = DexFile::parseAll(std::move(bytes), name, error);
+        if (sections.empty()) {
             warnings += name + ": " + error + "; ";
             continue;
         }
-        dexes.push_back(std::move(dex));
+        for (auto& dex : sections) dexes.push_back(std::move(dex));
     }
     archive.close();
     if (dexes.empty()) {

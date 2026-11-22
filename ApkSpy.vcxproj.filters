@@ -615,6 +615,9 @@
     <ClInclude Include="src\mcp\Json.hpp">
       <Filter>Header Files\mcp</Filter>
     </ClInclude>
+    <ClInclude Include="src\core\Bundle.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
     <ClInclude Include="src\core\Process.hpp">
       <Filter>Header Files\core</Filter>
     </ClInclude>
@@ -949,6 +952,9 @@
     </ClCompile>
     <ClCompile Include="src\mcp\Json.cpp">
       <Filter>Source Files\mcp</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\Bundle.cpp">
+      <Filter>Source Files\core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\Process.cpp">
       <Filter>Source Files\core</Filter>

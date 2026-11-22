@@ -347,6 +347,7 @@
     <ClCompile Include="..\src\analysis\KotlinMetadata.cpp" />
     <ClCompile Include="..\src\debug\FridaBridge.cpp" />
     <ClCompile Include="..\src\core\ApkRepack.cpp" />
+    <ClCompile Include="..\src\core\Bundle.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

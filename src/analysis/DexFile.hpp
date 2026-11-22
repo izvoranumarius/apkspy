@@ -69,6 +69,14 @@ public:
                                           std::string& error);
 
     const std::string& name() const { return name_; }
+    // Every DEX of one file. A plain DEX yields one; a version 41 container
+    // (several DEX sections in one file, all offsets relative to the file
+    // start) yields one DexFile per section, named `name`, `name#2`, ...
+    // Parses the DEX whose header sits at `headerOffset` (0 except inside a v41 container).
+    static std::shared_ptr<DexFile> parseAt(std::shared_ptr<const std::vector<uint8_t>> bytes, std::string name,
+                                            size_t headerOffset, std::string& error);
+    static std::vector<std::shared_ptr<DexFile>> parseAll(std::shared_ptr<const std::vector<uint8_t>> bytes,
+                                                          const std::string& name, std::string& error);
     uint32_t version() const { return version_; }  // 35, 37, 38, 39, 40, ...
     size_t sizeBytes() const { return data_->size(); }
     const uint8_t* data() const { return data_->data(); }
@@ -140,6 +148,7 @@ private:
     std::shared_ptr<const std::vector<uint8_t>> data_;
     std::string name_;
     uint32_t version_ = 0;
+    uint32_t fileSize_ = 0;  // header file_size of this section
     uint32_t stringIdsSize_ = 0, stringIdsOff_ = 0;
     uint32_t typeIdsSize_ = 0, typeIdsOff_ = 0;
     uint32_t protoIdsSize_ = 0, protoIdsOff_ = 0;

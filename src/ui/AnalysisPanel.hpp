@@ -93,6 +93,7 @@ private:
     void showGraph(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m);
     void showCallGraph(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m);
     void resetCaches(bool keepNative = false);
+    void openMethodDiff(Root& a, Root& b, const std::string& signature);
     bool isExcluded(std::string_view javaName) const;
     void loadExcludes();
     void saveExcludes();

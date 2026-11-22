@@ -41,6 +41,7 @@
 #include "debug/FridaBridge.hpp"
 #include "core/Annotations.hpp"
 #include "core/ApkRepack.hpp"
+#include "core/Bundle.hpp"
 #include "core/Process.hpp"
 #include "core/Project.hpp"
 #include "core/ScriptRunner.hpp"
@@ -4404,6 +4405,97 @@ static void testFridaServer() {
           "run argv");
 }
 
+static std::vector<uint8_t> readAll(const fs::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+
+static void testBundle() {
+    std::printf("== bundle ==\n");
+    CHECK(bundle::isBundle("a.xapk") && bundle::isBundle("B.APKS") && bundle::isBundle("c.apkm") && !bundle::isBundle("d.apk"),
+          "bundle extensions");
+    const fs::path dir = fs::temp_directory_path() / "apkspy_bundle_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    // Inner APKs: a base with code, a native split, a resource-only split.
+    writeApk(dir / "base.apk", {{"classes.dex", buildDex()}, {"AndroidManifest.xml", {1, 2, 3}}});
+    writeApk(dir / "native.apk", {{"lib/arm64-v8a/libx.so", buildElf()}});
+    writeApk(dir / "res.apk", {{"res/values/strings.arsc", {9, 9}}});
+    writeApk(dir / "evil.apk", {{"classes.dex", buildDex()}});
+    const fs::path bundlePath = dir / "My App.xapk";
+    writeApk(bundlePath, {{"splits/split_config.arm64_v8a.apk", readAll(dir / "native.apk")},
+                          {"base.apk", readAll(dir / "base.apk")},
+                          {"split_config.xxhdpi.apk", readAll(dir / "res.apk")},
+                          {"../../escape/split_feature.apk", readAll(dir / "evil.apk")},
+                          {"icon.png", {1}}});
+    const bundle::Result r = bundle::extract(bundlePath.string(), (dir / "out").string());
+    CHECK(r.ok(), "bundle extracts");
+    CHECK(r.apks.size() == 3 && r.skipped == 1, "base + native + code split kept, resource split skipped");
+    if (!r.apks.empty()) {
+        CHECK(r.apks[0].base && r.apks[0].hasCode && fs::path(r.apks[0].path).filename() == "My App.apk", "base first, named after the bundle");
+        bool native = false, inside = true;
+        for (const auto& a : r.apks) {
+            native |= a.hasNative;
+            const std::string rel = fs::relative(a.path, dir / "out", ec).generic_string();
+            inside &= rel.rfind("..", 0) != 0 && fs::exists(a.path);
+        }
+        CHECK(native, "native split detected");
+        CHECK(inside, "every extracted file stays inside the destination");
+    }
+    CHECK(!fs::exists(dir / "escape") && !fs::exists(dir.parent_path() / "escape"), "'..' entry name did not escape");
+    // Re-extraction reuses the files.
+    CHECK(bundle::extract(bundlePath.string(), (dir / "out").string()).apks.size() == 3, "second extraction works");
+
+    writeApk(dir / "empty.apks", {{"readme.txt", {1}}});
+    CHECK(!bundle::extract((dir / "empty.apks").string(), (dir / "out").string()).ok(), "bundle without APKs is an error");
+    fs::remove_all(dir, ec);
+}
+
+static void testDexContainer() {
+    std::printf("== dex v41 container ==\n");
+    // A plain DEX still yields exactly one section.
+    auto plain = std::make_shared<std::vector<uint8_t>>(buildDex());
+    std::string err;
+    CHECK(DexFile::parseAll(plain, "classes.dex", err).size() == 1, "plain dex: one section");
+
+    // Version 41: [real dex][minimal empty dex], all offsets container-relative.
+    std::vector<uint8_t> first = buildDex();
+    std::memcpy(first.data(), "dex\n041\0", 8);
+    first.resize((first.size() + 3) & ~size_t{3}, 0);
+    const uint32_t firstSize = static_cast<uint32_t>(first.size());
+    const auto put32 = [](std::vector<uint8_t>& v, size_t at, uint32_t x) {
+        for (int i = 0; i < 4; ++i) v[at + i] = static_cast<uint8_t>(x >> (8 * i));
+    };
+    std::vector<uint8_t> second(0x78, 0);
+    std::memcpy(second.data(), "dex\n041\0", 8);
+    put32(second, 0x20, 0x78);         // file_size of this section
+    put32(second, 0x24, 0x78);         // header_size
+    put32(second, 0x28, 0x12345678);   // endian tag
+    std::vector<uint8_t> all = first;
+    all.insert(all.end(), second.begin(), second.end());
+    const uint32_t total = static_cast<uint32_t>(all.size());
+    put32(all, 0x24, 0x78);
+    put32(all, 0x70, total);           // container_size
+    put32(all, 0x74, 0);               // header_offset of the first section
+    put32(all, firstSize + 0x70, total);
+    put32(all, firstSize + 0x74, firstSize);
+
+    auto bytes = std::make_shared<std::vector<uint8_t>>(all);
+    auto sections = DexFile::parseAll(bytes, "classes.dex", err);
+    CHECK(sections.size() == 2, "v41 container: two sections");
+    if (sections.size() == 2) {
+        CHECK(sections[0]->version() == 41 && sections[0]->name() == "classes.dex", "first section keeps the entry name");
+        CHECK(sections[1]->name() == "classes.dex#2" && sections[1]->classes().empty(), "second section named #2, empty");
+        CHECK(sections[0]->classes().size() == 1, "first section classes intact");
+    }
+    // A container_size smaller than the file stops the walk after one section.
+    std::vector<uint8_t> clipped = all;
+    put32(clipped, 0x70, firstSize);
+    CHECK(DexFile::parseAll(std::make_shared<std::vector<uint8_t>>(clipped), "x", err).size() == 1, "container_size bounds the walk");
+}
+
 static void testProjectEdits() {
     std::printf("== project edits ==\n");
     namespace fs = std::filesystem;
@@ -4531,6 +4623,8 @@ int main(int argc, char** argv) {
     testEmulator();
     testRepack();
     testFridaServer();
+    testBundle();
+    testDexContainer();
     testProjectEdits();
     testAnnotationsMarkdown();
     testMcpToolsEndToEnd();

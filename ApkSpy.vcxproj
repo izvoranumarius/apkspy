@@ -203,7 +203,9 @@
     <ClCompile Include="src\debug\FridaBridge.cpp" />
     <ClInclude Include="src\debug\FridaBridge.hpp" />
     <ClCompile Include="src\core\ApkRepack.cpp" />
+    <ClCompile Include="src\core\Bundle.cpp" />
     <ClInclude Include="src\core\ApkRepack.hpp" />
+    <ClInclude Include="src\core\Bundle.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\debug\CaStore.cpp" />
