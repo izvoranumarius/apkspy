@@ -500,11 +500,12 @@ void AnalysisPanel::drawNativeStrings(Root& apk) {
     }
     ImGui::TextDisabled("%zu references%s - double-click to open the code", nstrRows_.size(),
                         nstrRows_.size() >= 20000 ? " (first 20000)" : "");
-    if (!ImGui::BeginTable("##nstr", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable))
+    if (!ImGui::BeginTable("##nstr", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable))
         return;
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn("String", ImGuiTableColumnFlags_WidthStretch, 3.f);
     ImGui::TableSetupColumn("Used in", ImGuiTableColumnFlags_WidthStretch, 1.5f);
+    ImGui::TableSetupColumn("Encoding", ImGuiTableColumnFlags_WidthFixed, ui::em(5.f));
     ImGui::TableHeadersRow();
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(nstrRows_.size()));
@@ -532,6 +533,8 @@ void AnalysisPanel::drawNativeStrings(Root& apk) {
             ImGui::TableNextColumn();
             const std::string where = nc.symbolize(s.from);
             ImGui::TextDisabled("%s", where.empty() ? hex(s.from).c_str() : where.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", s.encoding);
             ImGui::PopID();
             if (open) {
                 symbolView_ = 5;

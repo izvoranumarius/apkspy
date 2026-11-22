@@ -828,6 +828,16 @@ void DeviceService::refreshDevices() {
         std::lock_guard<std::mutex> lock(mutex_);
         devices_ = std::move(list);
         error_ = error;
+        // Fetch what a newly seen device is (model, ABIs); a device that went away is forgotten.
+        for (auto it = info_.begin(); it != info_.end();)
+            it = std::any_of(devices_.begin(), devices_.end(), [&](const adb::Device& d) { return d.serial == it->first; }) ? std::next(it) : info_.erase(it);
+        std::vector<std::string> fresh;
+        for (const adb::Device& d : devices_)
+            if (d.state == "device" && !info_.count(d.serial)) fresh.push_back(d.serial);
+        for (const std::string& serial : fresh) {
+            info_[serial] = DeviceInfo{};  // pending: not asked for again until it answers
+            refreshDeviceInfo(serial);
+        }
         // Keep the selection valid: default to the only/first online device.
         const bool stillThere = std::any_of(devices_.begin(), devices_.end(),
                                             [&](const adb::Device& d) { return d.serial == selected_; });
@@ -840,6 +850,38 @@ void DeviceService::refreshDevices() {
                 }
         }
     });
+}
+
+DeviceService::DeviceInfo DeviceService::infoFromProperties(const std::vector<std::pair<std::string, std::string>>& props) {
+    DeviceInfo info;
+    const auto get = [&](const char* key) {
+        for (const auto& kv : props)
+            if (kv.first == key) return kv.second;
+        return std::string();
+    };
+    info.manufacturer = get("ro.product.manufacturer");
+    info.model = get("ro.product.model");
+    info.release = get("ro.build.version.release");
+    info.sdk = get("ro.build.version.sdk");
+    info.abis = adb::Adb::abisFromProperties(props);
+    info.loaded = true;
+    info.failed = !info.abis.known();
+    return info;
+}
+
+void DeviceService::refreshDeviceInfo(const std::string& serial) {
+    jobs_.post([this, serial] {
+        std::string error;
+        DeviceInfo info = infoFromProperties(adb_.properties(serial, error));
+        std::lock_guard<std::mutex> lock(mutex_);
+        info_[serial] = std::move(info);
+    });
+}
+
+DeviceService::DeviceInfo DeviceService::deviceInfo(const std::string& serial) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = info_.find(serial);
+    return it == info_.end() ? DeviceInfo{} : it->second;
 }
 
 std::vector<adb::Device> DeviceService::devices() const {

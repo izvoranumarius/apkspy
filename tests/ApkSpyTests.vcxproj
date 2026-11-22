@@ -344,6 +344,8 @@
     <ClCompile Include="..\lib\miniz\miniz_tinfl.c" />
     <ClCompile Include="..\lib\miniz\miniz_zip.c" />
     <ClCompile Include="..\src\analysis\Arm32.cpp" />
+    <ClCompile Include="..\src\analysis\Abi.cpp" />
+    <ClCompile Include="..\src\analysis\X86.cpp" />
     <ClCompile Include="..\src\analysis\KotlinMetadata.cpp" />
     <ClCompile Include="..\src\debug\FridaBridge.cpp" />
     <ClCompile Include="..\src\core\ApkRepack.cpp" />

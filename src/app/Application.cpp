@@ -37,6 +37,7 @@
 #include "core/Paths.hpp"
 #include "core/TextUtils.hpp"
 #include "image/Texture.hpp"
+#include "ui/UiUtil.hpp"
 
 namespace fs = std::filesystem;
 
@@ -443,6 +444,18 @@ void Application::frame() {
     if (inFrame_) return;
     inFrame_ = true;
 
+    // Tell the panels which ABIs the selected device runs.
+    {
+        Workspace::DeviceAbiState state;
+        const std::string serial = devices_.selected();
+        if (!serial.empty()) {
+            const DeviceService::DeviceInfo info = devices_.deviceInfo(serial);
+            state.label = (info.model.empty() ? serial : info.model + " [" + serial + "]");
+            if (info.loaded) state.abis = info.abis;
+        }
+        workspace_.setDeviceAbis(std::move(state));
+    }
+
     // Follow the system light / dark setting (polled twice a second: the registry read is cheap).
     if (glfwGetTime() - lastSystemThemeCheck_ > 0.5) {
         lastSystemThemeCheck_ = glfwGetTime();
@@ -717,7 +730,7 @@ void Application::drawProjectConfirm() {
     if (!ImGui::BeginPopupModal("Save project changes?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     ImGui::Text("The project has unsaved changes.");
     ImGui::Spacing();
-    if (ImGui::Button("Save", ImVec2(120, 0))) {
+    if (ui::dialogButton("Save")) {
         ImGui::CloseCurrentPopup();
         if (project_.hasPath()) {
             if (saveProject()) {
@@ -733,14 +746,14 @@ void Application::drawProjectConfirm() {
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Don't Save", ImVec2(120, 0))) {
+    if (ui::dialogButton("Don't Save")) {
         ImGui::CloseCurrentPopup();
         PendingAction action = pendingAction_;
         pendingAction_ = PendingAction::None;
         performAction(action, pendingOpenPath_);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+    if (ui::dialogButton("Cancel")) {
         ImGui::CloseCurrentPopup();
         pendingAction_ = PendingAction::None;
         pendingOpenPath_.clear();

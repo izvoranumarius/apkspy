@@ -315,6 +315,39 @@ void testNetSec() {
 
 }  // namespace
 
+void testMoreEncodings() {
+    std::printf("== more string encodings ==\n");
+    const std::vector<std::string> strings = {
+        "NB2HI4DTHIXS6YLQNEXGK6DBNVYGYZJOMNXW2===",                                    // base32
+        "YQBwAGkAXwBrAGUAeQBfAHYAYQBsAHUAZQA=",                                        // base64 of UTF-16LE text
+        "700061007300730077006f00720064003100",                                        // hex of UTF-16LE text
+        "\\u0068\\u0074\\u0074\\u0070\\x73\\x3a\\x2f\\x2f\\x61\\x2e\\x63\\x6f\\x6d",    // \\u and \\x escapes
+        "&#104;&#116;&#116;&#x70;&#115;&#58;//example.com",                             // HTML entities
+        "104 116 116 112 115 58 47 47 97 46 99 111 109",                               // decimal char codes
+        "01110011 01100101 01100011 01110010 01100101 01110100",                       // binary
+        "moc.elpmaxe//:sptth",                                                         // reversed
+        "uggcf://rknzcyr.pbz/ncv",                                                     // rot13
+        "NOTBASETHIRTYTWOBECAUSEOFTHE1",                                               // '1' is not base32
+        "10, 20, 30, 40, 50, 60, 70",                                                  // numbers, not text
+    };
+    const auto d = insights::decodeStrings(strings);
+    const auto get = [&](const char* method) -> std::string {
+        for (const auto& x : d)
+            if (x.method == method) return x.decoded;
+        return "<none>";
+    };
+    CHECK(get("base32") == "https://api.example.com", "base32 decoded");
+    CHECK(get("base64 (UTF-16)") == "api_key_value", "base64 of UTF-16LE text decoded");
+    CHECK(get("hex (UTF-16)") == "password1", "hex of UTF-16LE text decoded");
+    CHECK(get("escapes") == "https://a.com", "unicode and hex escapes decoded");
+    CHECK(get("html entities") == "https://example.com", "HTML entities decoded");
+    CHECK(get("char codes") == "https://a.com", "decimal char codes decoded");
+    CHECK(get("binary") == "secret", "binary decoded");
+    CHECK(get("reversed") == "https://example.com", "reversed URL decoded");
+    CHECK(get("rot13") == "https://example.com/api", "rot13 URL decoded");
+    CHECK(d.size() == 9, "ordinary numbers and non-base32 words are not reported");
+}
+
 int main() {
     std::printf("insights tests\n");
     testSecrets();
@@ -327,6 +360,7 @@ int main() {
     testNetSec();
     testEndpoints();
     testDecodedStrings();
+    testMoreEncodings();
     std::printf("%d passed, %d failed\n", passes, failures);
     return failures == 0 ? 0 : 1;
 }

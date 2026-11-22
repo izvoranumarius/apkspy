@@ -12,6 +12,7 @@
 #include "edit/Edits.hpp"
 #include "core/TextUtils.hpp"
 #include "document/SyntaxHighlighter.hpp"
+#include "ui/AbiUi.hpp"
 #include "ui/UiUtil.hpp"
 
 namespace {
@@ -1310,6 +1311,15 @@ void AnalysisPanel::drawNative(Root& apk) {
                     apk.source->sizeOf(*so, size);
                     libs_.push_back({so->path(), abi->name(), size});
                 }
+        // What each library's ELF header says it is (the directory name is only a convention).
+        libInventory_ = workspace_.analysis().nativeInventory(apk.apkPath);
+        for (LibRow& row : libs_)
+            for (const abi::NativeLib& l : libInventory_->libs)
+                if (l.path == row.path) {
+                    row.arch = l.validElf ? std::string(l.elf.id == abi::Id::Unknown ? abi::machineName(l.ident.machine).c_str() : l.elf.arch) : std::string("not an ELF file");
+                    row.mismatch = l.mismatch();
+                    row.disassemblable = l.effective().disassemblable;
+                }
     }
     if (libs_.empty()) {
         ImGui::TextDisabled("This APK ships no native libraries (lib/<abi>/*.so).");
@@ -1326,19 +1336,38 @@ void AnalysisPanel::drawNative(Root& apk) {
         pendingLib_.clear();
     }
     // Code views get the whole panel: the library list shrinks to a dropdown.
-    if (selectedLib_ < 0 && !elfLoad_.valid()) {  // open on something: arm64 can be disassembled
-        int first = 0;
-        for (int i = static_cast<int>(libs_.size()) - 1; i >= 0; --i)
-            if (libs_[static_cast<size_t>(i)].abi == "arm64-v8a") first = i;
-        selectLib(apk, first);
+    if (selectedLib_ < 0 && !elfLoad_.valid()) {
+        // Open on the library the connected device would load, else the first one ApkSpy can disassemble
+        // (arm64-v8a, armeabi-v7a, x86_64, x86 in that order).
+        const Workspace::DeviceAbiState& device = workspace_.deviceAbis();
+        const std::string chosen = !device.label.empty() && device.abis.known() && libInventory_ ? abi::check(*libInventory_, device.abis).chosen : std::string();
+        int first = -1, bestRank = 99;
+        for (int i = 0; i < static_cast<int>(libs_.size()); ++i) {
+            const LibRow& row = libs_[static_cast<size_t>(i)];
+            static const char* const kOrder[] = {"arm64-v8a", "armeabi-v7a", "x86_64", "x86"};
+            int rank = row.disassemblable ? 10 : 50;
+            for (int k = 0; k < 4; ++k)
+                if (row.abi == kOrder[k]) rank += k;
+            if (!chosen.empty() && row.abi == chosen) rank -= 8;
+            if (rank < bestRank) bestRank = rank, first = i;
+        }
+        selectLib(apk, first < 0 ? 0 : first);
     }
     const bool compactLibs = true;  // the navigator is narrow: a dropdown
     const bool sideBySide = false;
     const auto libLabel = [&](int i) {
         char label[512];
-        std::snprintf(label, sizeof label, "%s  (%.0f KB)", libs_[static_cast<size_t>(i)].path.c_str(), static_cast<double>(libs_[static_cast<size_t>(i)].size) / 1024.0);
+        const LibRow& row = libs_[static_cast<size_t>(i)];
+        std::snprintf(label, sizeof label, "%s  (%s%s, %.0f KB)", row.path.c_str(), row.arch.empty() ? "?" : row.arch.c_str(),
+                      row.mismatch ? ", not what the directory says" : "", static_cast<double>(row.size) / 1024.0);
         return std::string(label);
     };
+    if (libInventory_) {
+        ImGui::PushTextWrapPos(0.f);
+        ImGui::TextDisabled("%s", abiui::shipsLine(*libInventory_).c_str());
+        ImGui::PopTextWrapPos();
+        if (!workspace_.deviceAbis().label.empty()) abiui::drawDeviceCompat(*libInventory_, workspace_.deviceAbis());
+    }
     if (compactLibs) {
         ImGui::SetNextItemWidth(-FLT_MIN);
         if (ImGui::BeginCombo("##lib", libLabel(selectedLib_).c_str())) {

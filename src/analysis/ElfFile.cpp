@@ -424,6 +424,48 @@ std::vector<const ElfFile::Symbol*> ElfFile::jniSymbols() const {
     return out;
 }
 
+namespace {
+
+// Characters worth reporting in a wide (UTF-16 / UTF-32) string: printable ASCII plus the common scripts.
+// Narrow enough that random binary rarely forms a run, wide enough for real text.
+bool plausibleWide(uint32_t c) {
+    if (c >= 0x20 && c < 0x7F) return true;
+    if (c < 0xA0) return false;
+    return c <= 0x24F || (c >= 0x370 && c <= 0x52F) || (c >= 0x590 && c <= 0x6FF) || (c >= 0x900 && c <= 0x97F) ||
+           (c >= 0xE00 && c <= 0xE7F) || (c >= 0x1E00 && c <= 0x1FFF) || (c >= 0x2010 && c <= 0x205E) ||
+           (c >= 0x20A0 && c <= 0x20CF) || (c >= 0x3000 && c <= 0x30FF) || (c >= 0x3400 && c <= 0x4DBF) ||
+           (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0xAC00 && c <= 0xD7A3) || (c >= 0xFF01 && c <= 0xFF5E) ||
+           (c >= 0x1F300 && c <= 0x1FAFF);
+}
+
+void appendUtf8(std::string& s, uint32_t c) {
+    if (c < 0x80) s += static_cast<char>(c);
+    else if (c < 0x800) s += static_cast<char>(0xC0 | (c >> 6)), s += static_cast<char>(0x80 | (c & 0x3F));
+    else if (c < 0x10000)
+        s += static_cast<char>(0xE0 | (c >> 12)), s += static_cast<char>(0x80 | ((c >> 6) & 0x3F)), s += static_cast<char>(0x80 | (c & 0x3F));
+    else
+        s += static_cast<char>(0xF0 | (c >> 18)), s += static_cast<char>(0x80 | ((c >> 12) & 0x3F)),
+            s += static_cast<char>(0x80 | ((c >> 6) & 0x3F)), s += static_cast<char>(0x80 | (c & 0x3F));
+}
+
+// Length of the valid UTF-8 multi-byte sequence at p (2..4), 0 when there is none. Overlong forms, surrogates
+// and values past U+10FFFF are rejected.
+size_t utf8Sequence(const uint8_t* p, size_t left) {
+    const uint8_t b = p[0];
+    size_t n = b >= 0xC2 && b <= 0xDF ? 2 : (b >= 0xE0 && b <= 0xEF ? 3 : (b >= 0xF0 && b <= 0xF4 ? 4 : 0));
+    if (!n || n > left) return 0;
+    uint32_t c = n == 2 ? b & 0x1F : (n == 3 ? b & 0x0F : b & 0x07);
+    for (size_t k = 1; k < n; ++k) {
+        if ((p[k] & 0xC0) != 0x80) return 0;
+        c = (c << 6) | (p[k] & 0x3F);
+    }
+    if ((n == 3 && c < 0x800) || (n == 4 && (c < 0x10000 || c > 0x10FFFF)) || (c >= 0xD800 && c < 0xE000)) return 0;
+    if (c >= 0x80 && c < 0xA0) return 0;  // C1 controls
+    return n;
+}
+
+}  // namespace
+
 std::vector<ElfFile::StringHit> ElfFile::strings(size_t minLen, size_t limit) const {
     std::vector<StringHit> out;
     std::vector<std::pair<uint64_t, uint64_t>> ranges;
@@ -433,21 +475,105 @@ std::vector<ElfFile::StringHit> ElfFile::strings(size_t minLen, size_t limit) co
             ranges.emplace_back(s.offset, s.size);
     }
     if (ranges.empty()) ranges.emplace_back(0, data_->size());
+    const size_t kMaxRun = 2048;
     for (const auto& r : ranges) {
         if (!inBounds(r.first, r.second)) continue;
-        std::string cur;
-        uint64_t start = r.first;
-        for (uint64_t i = r.first; i < r.first + r.second && out.size() < limit; ++i) {
-            const unsigned char c = (*data_)[i];
-            if (c >= 0x20 && c < 0x7F) {
-                if (cur.empty()) start = i;
-                if (cur.size() < 2048) cur.push_back(static_cast<char>(c));
-            } else {
-                if (cur.size() >= minLen) out.push_back({start, cur});
+        const uint8_t* d = data_->data() + r.first;
+        const size_t n = static_cast<size_t>(r.second);
+        std::vector<StringHit> hits;
+        std::vector<uint8_t> taken(n, 0);  // bytes already part of a string
+        std::vector<std::pair<size_t, size_t>> wideSpans;  // byte ranges (in this section) of wide hits
+
+        // Narrow text: printable ASCII, with valid UTF-8 sequences allowed inside.
+        {
+            std::string cur;
+            size_t start = 0, chars = 0;
+            bool multibyte = false;
+            const auto flush = [&] {
+                if (chars >= minLen) {
+                    hits.push_back({r.first + start, cur, multibyte ? "utf-8" : "ascii"});
+                    // A short narrow run could also be (part of) UTF-16 text, e.g. CJK whose bytes are printable;
+                    // only a run too long to be that blocks the wide readers.
+                    if (cur.size() >= 2 * minLen)
+                        for (size_t k = start; k < start + cur.size() && k < n; ++k) taken[k] = 1;
+                }
                 cur.clear();
+                chars = 0;
+                multibyte = false;
+            };
+            for (size_t i = 0; i < n;) {
+                const uint8_t c = d[i];
+                size_t len = 0;
+                if (c >= 0x20 && c < 0x7F) len = 1;
+                else if (c >= 0x80) len = utf8Sequence(d + i, n - i);
+                if (!len) {
+                    flush();
+                    ++i;
+                    continue;
+                }
+                if (cur.empty()) start = i;
+                if (cur.size() < kMaxRun) cur.append(reinterpret_cast<const char*>(d + i), len);
+                multibyte = multibyte || len > 1;
+                ++chars;
+                i += len;
             }
+            flush();
         }
-        if (cur.size() >= minLen && out.size() < limit) out.push_back({start, cur});
+
+        // Wide text: aligned runs of plausible characters, skipping bytes a narrow string already owns.
+        const auto wide = [&](size_t unit, bool bigEndian, const char* name) {
+            std::string cur;
+            size_t start = 0, chars = 0;
+            const auto flush = [&] {
+                if (chars >= minLen) {
+                    hits.push_back({r.first + start, cur, name});
+                    wideSpans.push_back({start, start + chars * unit});
+                    for (size_t k = start; k < start + chars * unit && k < n; ++k) taken[k] = 1;
+                }
+                cur.clear();
+                chars = 0;
+            };
+            for (size_t i = (r.first % unit == 0 ? 0 : unit - r.first % unit); i + unit <= n; i += unit) {
+                uint32_t c = 0;
+                bool free = true;
+                for (size_t k = 0; k < unit; ++k) free = free && !taken[i + k];
+                if (unit == 2) c = bigEndian ? (d[i] << 8 | d[i + 1]) : (d[i + 1] << 8 | d[i]);
+                else c = static_cast<uint32_t>(d[i]) | static_cast<uint32_t>(d[i + 1]) << 8 | static_cast<uint32_t>(d[i + 2]) << 16 |
+                         static_cast<uint32_t>(d[i + 3]) << 24;
+                bool ok = free && plausibleWide(c);
+                if (ok && unit == 2 && (c & 0xFF) == 0 && (c >> 8) >= 0x20 && (c >> 8) < 0x7F) ok = false;  // ASCII of the other byte order
+                if (ok && unit == 2 && c >= 0xD800 && c < 0xE000) ok = false;  // surrogates only matter for emoji; skip
+                if (!ok) {
+                    flush();
+                    continue;
+                }
+                if (cur.empty()) start = i;
+                if (cur.size() < kMaxRun) appendUtf8(cur, c);
+                ++chars;
+            }
+            flush();
+        };
+        // Wider units go first and claim their bytes, so one text is reported once.
+        wide(4, false, "utf-32le");
+        wide(2, false, "utf-16le");
+        wide(2, true, "utf-16be");
+
+        // Short narrow runs that are only a piece of a wide string are not separate strings.
+        hits.erase(std::remove_if(hits.begin(), hits.end(),
+                                  [&](const StringHit& h) {
+                                      if (h.encoding[0] != 'a' && h.encoding[4] != '8') return false;  // keep wide hits
+                                      const size_t at = h.offset - r.first;
+                                      for (const auto& w : wideSpans)
+                                          if (at >= w.first && at + h.value.size() <= w.second) return true;
+                                      return false;
+                                  }),
+                   hits.end());
+        std::sort(hits.begin(), hits.end(), [](const StringHit& a, const StringHit& b) { return a.offset < b.offset; });
+        for (StringHit& h : hits) {
+            if (out.size() >= limit) break;
+            out.push_back(std::move(h));
+        }
+        if (out.size() >= limit) break;
     }
     return out;
 }

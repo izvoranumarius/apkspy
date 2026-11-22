@@ -1,4 +1,5 @@
 #pragma once
+#include "analysis/Abi.hpp"
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -52,6 +53,10 @@ public:
     // Reaps finished worker threads; call periodically from the owning thread.
     void update();
 
+    // The native libraries an APK ships, by directory and by what their ELF headers say (only the headers are read).
+    // Cached per APK path; the zip is opened on the calling thread.
+    std::shared_ptr<const abi::ApkNative> nativeInventory(const std::string& apkPath);
+
     // Loads and parses one native library entry from the APK (own archive,
     // so it is safe from any thread). Results are cached per (apk, entry).
     std::shared_ptr<const ElfFile> loadElf(const std::string& apkPath, const std::string& entry, std::string& error);
@@ -84,6 +89,7 @@ private:
 
     std::mutex elfMutex_;
     std::unordered_map<std::string, std::weak_ptr<const ElfFile>> elfCache_;
+    std::unordered_map<std::string, std::shared_ptr<const abi::ApkNative>> inventoryCache_;
     std::unordered_map<std::string, std::weak_ptr<const NativeCode>> nativeCache_;
     // The most recent library stays alive so consecutive tool calls do not re-sweep it.
     std::shared_ptr<const NativeCode> lastNative_;

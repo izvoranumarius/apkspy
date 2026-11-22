@@ -2,11 +2,12 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <unordered_set>
+#include "analysis/Abi.hpp"
 #include "core/TextUtils.hpp"
 
 namespace {
-constexpr uint16_t EM_AARCH64 = 183;
 constexpr uint64_t SHF_EXECINSTR = 4;
 constexpr uint32_t SHT_NOBITS = 8;
 constexpr uint32_t PT_LOAD = 1;
@@ -23,15 +24,52 @@ std::string hex(uint64_t v) {
     return b;
 }
 
-std::string machineLabel(uint16_t m) {
-    switch (m) {
-    case 40: return "32-bit ARM (armeabi-v7a)";
-    case 3: return "x86";
-    case 62: return "x86-64";
-    default: return "machine " + std::to_string(m);
+// First operand of an ARM instruction as a register number ("r3, [r0]" -> 3, "sp!" -> 13), -1 when it is not one.
+int armReg(const std::string& token) {
+    std::string t = token;
+    while (!t.empty() && (t.back() == '!' || t.back() == ' ')) t.pop_back();
+    while (!t.empty() && t.front() == ' ') t.erase(t.begin());
+    if (t == "sp") return 13;
+    if (t == "lr") return 14;
+    if (t == "pc") return 15;
+    if (t.size() >= 2 && t[0] == 'r' && std::isdigit(static_cast<unsigned char>(t[1]))) {
+        const int n = std::atoi(t.c_str() + 1);
+        return n >= 0 && n <= 12 ? n : -1;
+    }
+    return -1;
+}
+
+std::vector<std::string> armTokens(const std::string& ops) {
+    std::vector<std::string> out;
+    size_t start = 0;
+    for (size_t i = 0; i <= ops.size(); ++i)
+        if (i == ops.size() || ops[i] == ',') {
+            out.push_back(ops.substr(start, i - start));
+            start = i + 1;
+        }
+    return out;
+}
+
+bool startsWith(const std::string& s, const char* p) { return s.compare(0, std::strlen(p), p) == 0; }
+
+}  // namespace
+
+const char* NativeCode::isaName(Isa isa) {
+    switch (isa) {
+    case Isa::Arm64: return "AArch64";
+    case Isa::Arm32: return "ARM";
+    case Isa::X86: return "x86";
+    default: return "x86-64";
     }
 }
-}  // namespace
+
+std::string NativeCode::unsupportedReason(const ElfFile& e) {
+    const abi::Info info = abi::fromElf(abi::peekElf(e.data().data(), e.data().size()));
+    if (info.disassemblable) return {};
+    if (!e.littleEndian()) return "big-endian libraries are not supported";
+    return "disassembly supports arm64-v8a, armeabi-v7a, x86 and x86_64 libraries; this one is " + abi::machineName(e.machine()) +
+           (e.is64() ? " (64-bit)" : " (32-bit)") + ". Open another ABI's copy of the library if the APK ships one.";
+}
 
 std::shared_ptr<NativeCode> NativeCode::build(std::shared_ptr<const ElfFile> elf, const std::atomic<bool>* cancel,
                                               std::string& error) {
@@ -39,29 +77,61 @@ std::shared_ptr<NativeCode> NativeCode::build(std::shared_ptr<const ElfFile> elf
         error = "no ELF";
         return nullptr;
     }
-    if (elf->machine() != EM_AARCH64 || !elf->is64() || !elf->littleEndian()) {
-        error = "disassembly supports AArch64 (arm64-v8a) libraries; this one is " + machineLabel(elf->machine()) +
-                ". Open the arm64-v8a copy of the library if the APK ships one.";
+    if (const std::string why = unsupportedReason(*elf); !why.empty()) {
+        error = why;
         return nullptr;
     }
     std::shared_ptr<NativeCode> nc(new NativeCode());
     nc->elf_ = std::move(elf);
+    const abi::Info info = abi::fromElf(abi::peekElf(nc->elf_->data().data(), nc->elf_->data().size()));
+    nc->isa_ = info.id == abi::Id::Arm64 ? Isa::Arm64 : info.id == abi::Id::Arm32 ? Isa::Arm32 : info.id == abi::Id::X86 ? Isa::X86 : Isa::X86_64;
+    const uint64_t align = nc->isa_ == Isa::Arm64 ? 4 : nc->isa_ == Isa::Arm32 ? 2 : 1;
+    const uint64_t minSize = nc->isa_ == Isa::Arm64 ? 4 : 2;
+    const auto fits = [&](uint64_t off, uint64_t size) { return size >= minSize && off + size <= nc->elf_->data().size(); };
     for (const auto& s : nc->elf_->sections())
-        if ((s.flags & SHF_EXECINSTR) && s.type != SHT_NOBITS && s.size >= 4 && s.offset + s.size <= nc->elf_->data().size())
-            nc->code_.push_back({s.addr, s.size & ~3ull, s.offset});
+        if ((s.flags & SHF_EXECINSTR) && s.type != SHT_NOBITS && fits(s.offset, s.size)) nc->code_.push_back({s.addr, s.size - s.size % align, s.offset});
     if (nc->code_.empty())  // no section table (stripped / packed): fall back to executable segments
         for (const auto& s : nc->elf_->segments())
-            if (s.type == PT_LOAD && (s.flags & 1) && s.filesz >= 4 && s.offset + s.filesz <= nc->elf_->data().size())
-                nc->code_.push_back({s.vaddr, s.filesz & ~3ull, s.offset});
+            if (s.type == PT_LOAD && (s.flags & 1) && fits(s.offset, s.filesz)) nc->code_.push_back({s.vaddr, s.filesz - s.filesz % align, s.offset});
     if (nc->code_.empty()) {
         error = "no executable code found";
         return nullptr;
     }
     std::sort(nc->code_.begin(), nc->code_.end(), [](const Range& a, const Range& b) { return a.vaddr < b.vaddr; });
+    // The relocation types of GOT slots that hold an import's address.
+    uint32_t relJump = R_AARCH64_JUMP_SLOT, relGlob = R_AARCH64_GLOB_DAT;
+    if (nc->isa_ == Isa::Arm32) relJump = 22, relGlob = 21;      // R_ARM_JUMP_SLOT, R_ARM_GLOB_DAT
+    else if (nc->isa_ != Isa::Arm64) relJump = 7, relGlob = 6;    // R_386_ / R_X86_64_ JMP_SLOT, GLOB_DAT
     for (const auto& r : nc->elf_->relocations())
-        if (r.type == R_AARCH64_JUMP_SLOT || r.type == R_AARCH64_GLOB_DAT) nc->gotNames_.emplace_back(r.offset, r.symbol);
+        if (r.type == relJump || r.type == relGlob) nc->gotNames_.emplace_back(r.offset, r.symbol);
     std::sort(nc->gotNames_.begin(), nc->gotNames_.end());
-    nc->sweep(cancel);
+    if (nc->isa_ == Isa::X86)
+        for (const auto& s : nc->elf_->sections())
+            if (s.name == ".got.plt" || (s.name == ".got" && !nc->gotBase_)) nc->gotBase_ = s.addr;
+    if (nc->isa_ == Isa::Arm32) {
+        // Thumb or ARM: mapping symbols say it exactly; function symbols carry it in their low bit.
+        size_t thumbFns = 0, armFns = 0;
+        bool mapping = false;
+        std::vector<std::pair<uint64_t, char>> fnMarks, mapMarks;
+        for (const auto& s : nc->elf_->symbols()) {
+            if (s.name.size() >= 2 && s.name[0] == '$' && (s.name[1] == 't' || s.name[1] == 'a' || s.name[1] == 'd') &&
+                (s.name.size() == 2 || s.name[2] == '.')) {
+                mapMarks.emplace_back(s.value, s.name[1]);
+                mapping = true;
+            } else if (s.type == STT_FUNC && s.shndx != 0 && s.value) {
+                const bool t = (s.value & 1) != 0;
+                (t ? thumbFns : armFns)++;
+                fnMarks.emplace_back(s.value & ~1ull, t ? 't' : 'a');
+            }
+        }
+        nc->modes_ = std::move(fnMarks);
+        nc->modes_.insert(nc->modes_.end(), mapMarks.begin(), mapMarks.end());  // later entries win at the same address
+        std::stable_sort(nc->modes_.begin(), nc->modes_.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        nc->defaultThumb_ = thumbFns >= armFns;
+        (void)mapping;
+    }
+    if (nc->isa_ == Isa::Arm64) nc->sweep(cancel);
+    else nc->sweepGeneric(cancel);
     if (cancel && cancel->load()) {
         error = "cancelled";
         return nullptr;
@@ -78,6 +148,210 @@ bool NativeCode::readWord(uint64_t vaddr, uint32_t& out) const {
             return true;
         }
     return false;
+}
+
+char NativeCode::modeAtAddr(uint64_t addr) const {
+    auto it = std::upper_bound(modes_.begin(), modes_.end(), addr, [](uint64_t a, const std::pair<uint64_t, char>& m) { return a < m.first; });
+    if (it == modes_.begin()) return defaultThumb_ ? 't' : 'a';
+    return std::prev(it)->second;
+}
+
+char NativeCode::modeAt(uint64_t addr, size_t& cursor) const {
+    while (cursor < modes_.size() && modes_[cursor].first <= addr) ++cursor;
+    return cursor ? modes_[cursor - 1].second : (defaultThumb_ ? 't' : 'a');
+}
+
+bool NativeCode::mapped(uint64_t vaddr) const {
+    uint64_t off = 0;
+    return elf_->vaddrToOffset(vaddr, off);
+}
+
+bool NativeCode::readData32(uint64_t vaddr, uint32_t& out) const {
+    uint64_t off = 0;
+    if (!elf_->vaddrToOffset(vaddr, off) || off + 4 > elf_->data().size()) return false;
+    const uint8_t* p = elf_->data().data() + off;
+    out = static_cast<uint32_t>(p[0]) | static_cast<uint32_t>(p[1]) << 8 | static_cast<uint32_t>(p[2]) << 16 | static_cast<uint32_t>(p[3]) << 24;
+    return true;
+}
+
+namespace {
+native::Insn decodeRaw(NativeCode::Isa isa, const uint8_t* p, size_t avail, uint64_t addr, bool thumb) {
+    native::Insn none;
+    none.size = 0;
+    if (isa == NativeCode::Isa::Arm32) {
+        if (avail < (thumb ? 2u : 4u)) return none;
+        const arm32::Insn a = arm32::decode(p, avail, addr, thumb);
+        native::Insn n;
+        n.addr = a.addr;
+        n.raw = a.raw;
+        n.size = a.size;
+        n.mnemonic = a.mnemonic;
+        n.operands = a.operands;
+        n.flow = static_cast<native::Flow>(a.flow);
+        n.hasTarget = a.hasTarget;
+        n.target = a.target;
+        n.memTarget = a.hasTarget && a.flow == arm32::Flow::Normal;
+        n.thumb = a.thumb;
+        n.known = a.known;
+        return n;
+    }
+    if (isa == NativeCode::Isa::Arm64) return none;
+    return x86::decode(p, avail > 15 ? 15 : avail, addr, isa == NativeCode::Isa::X86_64);
+}
+}  // namespace
+
+native::Insn NativeCode::decodeAt(uint64_t vaddr, bool thumb) const {
+    if (isa_ == Isa::Arm64) {
+        uint32_t w = 0;
+        if (!readWord(vaddr & ~3ull, w)) {
+            native::Insn none;
+            none.size = 0;
+            return none;
+        }
+        return arm64::decode(w, vaddr & ~3ull);
+    }
+    for (const Range& r : code_)
+        if (vaddr >= r.vaddr && vaddr < r.vaddr + r.size)
+            return decodeRaw(isa_, elf_->data().data() + r.offset + (vaddr - r.vaddr), r.vaddr + r.size - vaddr, vaddr, thumb);
+    native::Insn none;
+    none.size = 0;
+    return none;
+}
+
+// ARM: constants held in registers. `ldr rN, [pc, #x]` loads a literal, `movw` / `movt` build one, and an `add` of pc
+// turns an offset constant into the address it points at (the position-independent way to name a string or a GOT slot).
+bool NativeCode::armDataRef(const native::Insn& in, DataState& st, uint64_t& addr, bool& read) const {
+    const std::string& m = in.mnemonic;
+    const std::vector<std::string> tok = armTokens(in.operands);
+    const int rd = tok.empty() ? -1 : armReg(tok[0]);
+    const auto immOf = [&]() -> uint32_t {
+        const size_t h = in.operands.find('#');
+        return h == std::string::npos ? 0u : static_cast<uint32_t>(std::strtoull(in.operands.c_str() + h + 1, nullptr, 0));
+    };
+    if (in.flow == native::Flow::Call || in.flow == native::Flow::IndirectCall) {
+        for (int r : {0, 1, 2, 3, 12, 14}) st.clear(r);
+        return false;
+    }
+    if (in.hasTarget && in.flow == native::Flow::Normal && startsWith(m, "ldr") && in.operands.find("[pc") != std::string::npos) {
+        uint32_t w = 0;
+        if (rd >= 0 && readData32(in.target, w)) st.set(rd, w);
+        else st.clear(rd);
+        return false;
+    }
+    if (in.hasTarget && in.flow == native::Flow::Normal && startsWith(m, "adr")) {
+        addr = in.target;
+        read = false;
+        st.set(rd, static_cast<uint32_t>(addr));
+        return mapped(addr);
+    }
+    if (startsWith(m, "movw")) {
+        st.set(rd, immOf());
+        return false;
+    }
+    if (startsWith(m, "movt")) {
+        if (st.has(rd)) st.set(rd, (st.value[rd] & 0xffff) | (immOf() << 16));
+        else st.clear(rd);
+        return false;
+    }
+    if (startsWith(m, "add") && !startsWith(m, "adds") && rd >= 0) {
+        const uint32_t pcv = static_cast<uint32_t>(in.addr) + (in.thumb ? 4u : 8u);
+        int src = -2;
+        if (tok.size() == 2 && armReg(tok[1]) == 15) src = rd;
+        else if (tok.size() == 3 && armReg(tok[2]) == 15) src = armReg(tok[1]);
+        else if (tok.size() == 3 && armReg(tok[1]) == 15) src = armReg(tok[2]);
+        if (src >= 0 && st.has(src)) {
+            const uint32_t v = st.value[src] + pcv;
+            st.set(rd, v);
+            addr = v;
+            read = false;
+            return mapped(addr);
+        }
+        if (src != -2) {
+            st.clear(rd);
+            return false;
+        }
+    }
+    // Anything else that writes a tracked register forgets it.
+    if (rd >= 0 && !(startsWith(m, "cmp") || startsWith(m, "cmn") || startsWith(m, "tst") || startsWith(m, "teq") ||
+                     startsWith(m, "str") || startsWith(m, "push") || startsWith(m, "stm") || m[0] == 'b' || startsWith(m, "cbz") || startsWith(m, "cbnz")))
+        st.clear(rd);
+    if (!in.operands.empty() && in.operands[0] == '{') st.reset();  // pop / ldm: any of them
+    if (startsWith(m, "ldm") || startsWith(m, "pop")) st.reset();
+    if (in.flow == native::Flow::Return) st.reset();
+    return false;
+}
+
+bool NativeCode::dataRef(const native::Insn& in, DataState& st, uint64_t& addr, bool& read) const {
+    switch (isa_) {
+    case Isa::X86_64:
+        if (in.memTarget) {
+            addr = in.target;
+            read = !in.isAddImm;
+            return mapped(addr);
+        }
+        return false;
+    case Isa::X86:
+        if ((in.isAddImm || in.isLoad) && in.baseReg == 3 && gotBase_) {  // [ebx + disp]: ebx holds the GOT address
+            addr = (gotBase_ + static_cast<uint64_t>(in.offset)) & 0xffffffffull;
+            read = !in.isAddImm;
+            return mapped(addr);
+        }
+        return false;
+    case Isa::Arm32: return armDataRef(in, st, addr, read);
+    default: return false;
+    }
+}
+
+void NativeCode::annotate(Line& l, uint64_t data, bool dataRead) const {
+    l.dataAddr = data;
+    // A load reads a value (pointer, constant) from data: only address-forming instructions can point at a string.
+    bool wide = false, utf32 = false;
+    const std::string str = dataRead ? std::string() : stringAt(data, &wide, &utf32);
+    if (!str.empty()) l.comment = (utf32 ? "U\"" : wide ? "u\"" : "\"") + str + "\"";
+    else if (std::string sym = symbolize(data); !sym.empty()) l.comment = dataRead ? "[" + sym + "]" : sym;
+    else l.comment = dataRead ? "[" + hex(data) + "]" : hex(data);
+}
+
+void NativeCode::sweepGeneric(const std::atomic<bool>* cancel) {
+    size_t index = 0;
+    DataState st;
+    const auto& data = elf_->data();
+    for (const Range& r : code_) {
+        const uint8_t* base = data.data() + r.offset;
+        uint64_t off = 0;
+        size_t cursor = 0;
+        st.reset();
+        while (off < r.size) {
+            if ((index & 0xffff) == 0 && cancel && cancel->load()) return;
+            const uint64_t pc = r.vaddr + off;
+            bool thumb = false;
+            if (isa_ == Isa::Arm32) {
+                const char mode = modeAt(pc, cursor);
+                if (mode == 'd') {  // a literal pool: skip to the next marker
+                    off = cursor < modes_.size() && modes_[cursor].first > pc ? std::min<uint64_t>(modes_[cursor].first - r.vaddr, r.size) : off + 4;
+                    continue;
+                }
+                thumb = mode == 't';
+            }
+            const native::Insn in = decodeRaw(isa_, base + off, static_cast<size_t>(r.size - off), pc, thumb);
+            if (in.size == 0) break;
+            ++index;
+            if (refs_.size() < kMaxRefs) {
+                if (in.hasTarget && !in.memTarget && in.flow == native::Flow::Call) refs_.push_back({in.target, pc, RefKind::Call});
+                else if (in.hasTarget && !in.memTarget && in.flow == native::Flow::Jump) refs_.push_back({in.target, pc, RefKind::Jump});
+                uint64_t addr = 0;
+                bool read = false;
+                if (dataRef(in, st, addr, read)) refs_.push_back({addr, pc, read ? RefKind::Read : RefKind::Data});
+            }
+            if (isa_ != Isa::Arm32 && (in.flow == native::Flow::Return)) st.reset();
+            off += in.size;
+        }
+    }
+    instructions_ = index;
+    std::sort(refs_.begin(), refs_.end(), [](const Ref& a, const Ref& b) {
+        return a.target != b.target ? a.target < b.target : a.from < b.from;
+    });
+    refs_.shrink_to_fit();
 }
 
 // One pass over every executable word with cheap bit tests (no text formatting):
@@ -143,6 +417,95 @@ void NativeCode::sweep(const std::atomic<bool>* cancel) {
     refs_.shrink_to_fit();
 }
 
+// PLT stubs named after the import their GOT slot is relocated for ("strlen@plt").
+void NativeCode::discoverPlt(std::vector<Function>& fns) const {
+    const auto gotName = [&](uint64_t got, std::string& name) {
+        auto it = std::lower_bound(gotNames_.begin(), gotNames_.end(), std::make_pair(got, std::string()));
+        if (it == gotNames_.end() || it->first != got) return false;
+        name = it->second;
+        return true;
+    };
+    for (const auto& sec : elf_->sections()) {
+        if (sec.name != ".plt" && sec.name != ".plt.sec" && sec.name != ".plt.got") continue;
+        std::string name;
+        if (isa_ == Isa::Arm64) {  // adrp x16, page ; ldr x17, [x16, #off]
+            for (uint64_t a = sec.addr; a + 8 <= sec.addr + sec.size; a += 4) {
+                uint32_t w1 = 0, w2 = 0;
+                if (!readWord(a, w1) || !readWord(a + 4, w2)) break;
+                if ((w1 & 0x9f00001f) != 0x90000010 || (w2 & 0xffc003ff) != 0xf9400211) continue;
+                const arm64::Insn page = arm64::decode(w1, a);
+                const uint64_t got = page.target + (((w2 >> 10) & 0xfff) << 3);
+                if (!gotName(got, name)) continue;
+                Function f;
+                f.addr = a;
+                f.size = 16;
+                f.name = name + "@plt";
+                f.kind = FunctionKind::Plt;
+                fns.push_back(std::move(f));
+                a += 12;
+            }
+        } else if (isa_ == Isa::Arm32) {  // add ip, pc, #a ; add ip, ip, #b ; ldr pc, [ip, #c]!
+            const auto imm = [](uint32_t w) {
+                const uint32_t v = w & 0xff, rot = ((w >> 8) & 0xf) * 2;
+                return rot ? (v >> rot) | (v << (32 - rot)) : v;
+            };
+            for (uint64_t a = sec.addr; a + 12 <= sec.addr + sec.size; a += 4) {
+                uint32_t w1 = 0, w2 = 0, w3 = 0;
+                if (!readWord(a, w1) || !readWord(a + 4, w2) || !readWord(a + 8, w3)) break;
+                if ((w1 & 0xfffff000) != 0xe28fc000 || (w2 & 0xfffff000) != 0xe28cc000 || (w3 & 0xfffff000) != 0xe5bcf000) continue;
+                const uint64_t got = (a + 8 + imm(w1) + imm(w2) + (w3 & 0xfff)) & 0xffffffffull;
+                if (!gotName(got, name)) continue;
+                Function f;
+                f.addr = a;
+                f.size = 12;
+                f.name = name + "@plt";
+                f.kind = FunctionKind::Plt;
+                fns.push_back(std::move(f));
+                a += 8;
+            }
+            // Thumb PLT (lld): movw r12, #lo ; movt r12, #hi ; add r12, pc ; ldr.w pc, [r12]
+            for (uint64_t a = sec.addr; a + 12 <= sec.addr + sec.size; a += 2) {
+                native::Insn i1 = decodeAt(a, true);
+                if (i1.size != 4 || i1.mnemonic != "movw" || i1.operands.compare(0, 4, "r12,") != 0) continue;
+                native::Insn i2 = decodeAt(a + 4, true), i3 = decodeAt(a + 8, true);
+                if (i2.size != 4 || i2.mnemonic != "movt" || i3.mnemonic != "add" || i3.operands != "r12, pc") continue;
+                const auto imm = [](const native::Insn& i) { return static_cast<uint32_t>(std::strtoul(i.operands.c_str() + i.operands.find('#') + 1, nullptr, 0)); };
+                const uint64_t got = (static_cast<uint64_t>(imm(i1) | (imm(i2) << 16)) + a + 8 + 4) & 0xffffffffull;
+                if (!gotName(got, name)) continue;
+                Function f;
+                f.addr = a;
+                f.size = 16;
+                f.thumb = true;
+                f.name = name + "@plt";
+                f.kind = FunctionKind::Plt;
+                fns.push_back(std::move(f));
+                a += 14;
+            }
+        } else {  // x86 / x86-64: an indirect jump through the GOT slot, in a 16-byte entry (8 in .plt.got)
+            const uint64_t entry = sec.name == ".plt.got" ? 8 : 16;
+            for (uint64_t a = sec.addr; a < sec.addr + sec.size;) {
+                const native::Insn in = decodeAt(a, false);
+                if (in.size == 0) break;
+                uint64_t got = 0;
+                bool ok = false;
+                if (in.flow == native::Flow::IndirectJump) {
+                    if (isa_ == Isa::X86_64 && in.memTarget) got = in.target, ok = true;
+                    else if (isa_ == Isa::X86 && in.baseReg == 3 && gotBase_) got = (gotBase_ + static_cast<uint64_t>(in.offset)) & 0xffffffffull, ok = true;
+                }
+                if (ok && gotName(got, name)) {
+                    Function f;
+                    f.addr = a - (a - sec.addr) % entry;
+                    f.size = entry;
+                    f.name = name + "@plt";
+                    f.kind = FunctionKind::Plt;
+                    fns.push_back(std::move(f));
+                }
+                a += in.size;
+            }
+        }
+    }
+}
+
 void NativeCode::discoverFunctions() {
     const auto inCode = [this](uint64_t a) {
         for (const Range& r : code_)
@@ -154,31 +517,13 @@ void NativeCode::discoverFunctions() {
         if (s.type != STT_FUNC || s.shndx == 0 || s.value == 0) continue;
         Function f;
         f.addr = s.value & ~1ull;
+        f.thumb = isa_ == Isa::Arm32 && (s.value & 1);
         f.size = s.size;
         f.name = s.name;
         f.exported = s.dynamic && s.binding != 0;
         fns.push_back(std::move(f));
     }
-    // PLT stubs: adrp x16, page ; ldr x17, [x16, #off] -> the GOT slot names the import.
-    for (const auto& sec : elf_->sections()) {
-        if (sec.name != ".plt" && sec.name != ".plt.sec") continue;
-        for (uint64_t a = sec.addr; a + 8 <= sec.addr + sec.size; a += 4) {
-            uint32_t w1 = 0, w2 = 0;
-            if (!readWord(a, w1) || !readWord(a + 4, w2)) break;
-            if ((w1 & 0x9f00001f) != 0x90000010 || (w2 & 0xffc003ff) != 0xf9400211) continue;
-            const arm64::Insn page = arm64::decode(w1, a);
-            const uint64_t got = page.target + (((w2 >> 10) & 0xfff) << 3);
-            auto it = std::lower_bound(gotNames_.begin(), gotNames_.end(), std::make_pair(got, std::string()));
-            if (it == gotNames_.end() || it->first != got) continue;
-            Function f;
-            f.addr = a;
-            f.size = 16;
-            f.name = it->second + "@plt";
-            f.kind = FunctionKind::Plt;
-            fns.push_back(std::move(f));
-            a += 12;
-        }
-    }
+    discoverPlt(fns);
     std::sort(fns.begin(), fns.end(), [](const Function& a, const Function& b) {
         if (a.addr != b.addr) return a.addr < b.addr;
         if (a.exported != b.exported) return a.exported;
@@ -206,6 +551,7 @@ void NativeCode::discoverFunctions() {
         f.addr = r.target;
         f.name = "sub_" + hex(r.target).substr(2);
         f.kind = FunctionKind::Discovered;
+        f.thumb = isa_ == Isa::Arm32 && modeAtAddr(r.target) == 't';
         discovered.push_back(std::move(f));
     }
     fns.insert(fns.end(), std::make_move_iterator(discovered.begin()), std::make_move_iterator(discovered.end()));
@@ -288,7 +634,7 @@ std::string NativeCode::wideStringAt(uint64_t vaddr) const {
     if (!elf_->vaddrToOffset(vaddr, off)) return {};
     const auto& d = elf_->data();
     std::string s;
-    size_t chars = 0;
+    size_t chars = 0, latin = 0;
     for (uint64_t i = off; i + 1 < d.size() && s.size() < 240; i += 2) {
         uint32_t c = static_cast<uint32_t>(d[i]) | static_cast<uint32_t>(d[i + 1]) << 8;
         if (c == 0) break;
@@ -312,21 +658,118 @@ std::string NativeCode::wideStringAt(uint64_t vaddr) const {
             s += static_cast<char>(0xF0 | (c >> 18)), s += static_cast<char>(0x80 | ((c >> 12) & 0x3F)),
                 s += static_cast<char>(0x80 | ((c >> 6) & 0x3F)), s += static_cast<char>(0x80 | (c & 0x3F));
         ++chars;
+        if (c < 0x250) ++latin;
     }
-    if (chars < 2) return {};
+    if (chars < 2 || latin * 3 < chars * 2) return {};  // random bytes read as UTF-16 give CJK soup: want mostly Latin text
     return s;
 }
 
-std::string NativeCode::stringAt(uint64_t vaddr, bool* wide) const {
+std::string NativeCode::wide32StringAt(uint64_t vaddr) const {
+    uint64_t off = 0;
+    if (!elf_->vaddrToOffset(vaddr, off)) return {};
+    const auto& d = elf_->data();
+    std::string s;
+    size_t chars = 0, latin = 0;
+    for (uint64_t i = off; i + 3 < d.size() && s.size() < 240; i += 4) {
+        const uint32_t c = static_cast<uint32_t>(d[i]) | static_cast<uint32_t>(d[i + 1]) << 8 | static_cast<uint32_t>(d[i + 2]) << 16 |
+                           static_cast<uint32_t>(d[i + 3]) << 24;
+        if (c == 0) break;
+        if (c == '\n') s += "\\n";
+        else if (c == '\t') s += "\\t";
+        else if (c == '\r') s += "\\r";
+        else if (c < 0x20 || c == 0x7F || (c >= 0x80 && c < 0xA0) || (c >= 0xD800 && c < 0xE000) || c > 0x10FFFF) return {};
+        else if (c < 0x80) s.push_back(static_cast<char>(c));
+        else if (c < 0x800) s += static_cast<char>(0xC0 | (c >> 6)), s += static_cast<char>(0x80 | (c & 0x3F));
+        else if (c < 0x10000)
+            s += static_cast<char>(0xE0 | (c >> 12)), s += static_cast<char>(0x80 | ((c >> 6) & 0x3F)), s += static_cast<char>(0x80 | (c & 0x3F));
+        else
+            s += static_cast<char>(0xF0 | (c >> 18)), s += static_cast<char>(0x80 | ((c >> 12) & 0x3F)),
+                s += static_cast<char>(0x80 | ((c >> 6) & 0x3F)), s += static_cast<char>(0x80 | (c & 0x3F));
+        ++chars;
+        if (c < 0x250) ++latin;
+    }
+    if (chars < 2 || latin * 3 < chars * 2) return {};
+    return s;
+}
+
+std::string NativeCode::stringAt(uint64_t vaddr, bool* wide, bool* utf32) const {
     if (wide) *wide = false;
+    if (utf32) *utf32 = false;
+    for (const Range& r : code_)
+        if (vaddr >= r.vaddr && vaddr < r.vaddr + r.size) return {};  // code is not text
     std::string s = cStringAt(vaddr);
     if (!s.empty()) return s;
     s = wideStringAt(vaddr);
-    if (!s.empty() && wide) *wide = true;
+    if (!s.empty()) {
+        if (wide) *wide = true;
+        return s;
+    }
+    s = wide32StringAt(vaddr);
+    if (!s.empty()) {
+        if (wide) *wide = true;
+        if (utf32) *utf32 = true;
+    }
     return s;
 }
 
 std::vector<NativeCode::Line> NativeCode::disassemble(uint64_t start, uint64_t end, size_t maxInsns) const {
+    return isa_ == Isa::Arm64 ? disassembleArm64(start, end, maxInsns) : disassembleGeneric(start, end, maxInsns);
+}
+
+std::vector<NativeCode::Line> NativeCode::disassembleGeneric(uint64_t start, uint64_t end, size_t maxInsns) const {
+    std::vector<Line> out;
+    DataState st;
+    uint64_t a = isa_ == Isa::Arm32 ? start & ~1ull : start;
+    while (a < end && out.size() < maxInsns) {
+        const char mode = isa_ == Isa::Arm32 ? modeAtAddr(a) : 't';
+        Line l;
+        if (mode == 'd') {  // literal pool data between ARM / Thumb code
+            uint32_t w = 0;
+            if (!readData32(a, w)) break;
+            l.insn.addr = a;
+            l.insn.raw = w;
+            l.insn.size = 4;
+            l.insn.mnemonic = ".word";
+            l.insn.operands = hex(w);
+            l.insn.known = false;
+            out.push_back(std::move(l));
+            a += 4;
+            continue;
+        }
+        l.insn = decodeAt(a, mode == 't');
+        const native::Insn& in = l.insn;
+        if (in.size == 0) break;
+        uint64_t data = 0;
+        bool read = false;
+        const bool tracked = dataRef(in, st, data, read);
+        if (in.hasTarget && !in.memTarget && in.flow != native::Flow::Normal) {
+            l.targetName = symbolize(in.target);
+        } else if (tracked) {
+            annotate(l, data, read);
+        } else if (in.memTarget) {
+            uint32_t literal = 0;
+            if (isa_ == Isa::Arm32 && startsWith(in.mnemonic, "ldr") && readData32(in.target, literal)) {
+                l.dataAddr = in.target;
+                l.dataRead = true;
+                l.comment = "=" + hex(literal);
+            } else {
+                annotate(l, in.target, !in.isAddImm);
+            }
+        }
+        l.dataRead = l.dataAddr != 0 && (in.isLoad || in.memTarget) && !in.isAddImm;
+        if (in.memTarget) l.insn.hasTarget = false;  // a memory operand, not somewhere to jump
+        const uint64_t step = in.size;
+        out.push_back(std::move(l));
+        a += step;
+    }
+    std::unordered_set<uint64_t> targets;
+    for (const Line& l : out)
+        if (l.insn.hasTarget && (l.insn.flow == native::Flow::Jump || l.insn.flow == native::Flow::CondJump)) targets.insert(l.insn.target);
+    for (Line& l : out) l.label = targets.count(l.insn.addr) != 0;
+    return out;
+}
+
+std::vector<NativeCode::Line> NativeCode::disassembleArm64(uint64_t start, uint64_t end, size_t maxInsns) const {
     std::vector<Line> out;
     struct Page {
         uint64_t value = 0;
@@ -359,9 +802,9 @@ std::vector<NativeCode::Line> NativeCode::disassemble(uint64_t start, uint64_t e
             l.dataAddr = data;
             // A load reads a value (pointer, constant) from data: only address-forming instructions can
             // point at a string literal.
-            bool wide = false;
-            const std::string str = l.dataRead ? std::string() : stringAt(data, &wide);
-            if (!str.empty()) l.comment = (wide ? "u\"" : "\"") + str + "\"";  // u"..." : UTF-16 text
+            bool wide = false, utf32 = false;
+            const std::string str = l.dataRead ? std::string() : stringAt(data, &wide, &utf32);
+            if (!str.empty()) l.comment = (utf32 ? "U\"" : wide ? "u\"" : "\"") + str + "\"";  // u"..." UTF-16, U"..." UTF-32
             else if (std::string sym = symbolize(data); !sym.empty()) l.comment = l.dataRead ? "[" + sym + "]" : sym;
             else l.comment = l.dataRead ? "[" + hex(data) + "]" : hex(data);
         }
@@ -386,11 +829,9 @@ NativeCode::ControlFlow NativeCode::controlFlow(const Function& f, size_t maxIns
     cfg.lines = disassembleFunction(f, maxInsns);
     const size_t n = cfg.lines.size();
     if (!n) return cfg;
-    const uint64_t first = cfg.lines.front().insn.addr;
     const auto lineOf = [&](uint64_t addr) -> int {
-        if (addr < first || (addr - first) % 4) return -1;
-        const uint64_t i = (addr - first) / 4;
-        return i < n ? static_cast<int>(i) : -1;
+        auto it = std::lower_bound(cfg.lines.begin(), cfg.lines.end(), addr, [](const Line& l, uint64_t a) { return l.insn.addr < a; });
+        return it != cfg.lines.end() && it->insn.addr == addr ? static_cast<int>(it - cfg.lines.begin()) : -1;
     };
     const auto ends = [](Flow flow) { return flow != Flow::Normal && flow != Flow::Call && flow != Flow::IndirectCall; };
     std::vector<char> leader(n, 0);
@@ -464,15 +905,18 @@ std::vector<NativeCode::StringRef> NativeCode::stringRefs(const std::string& fil
     std::vector<StringRef> out;
     uint64_t last = UINT64_MAX;
     std::string text;
+    const char* encoding = "utf-8";
     for (const Ref& r : refs_) {
         if (out.size() >= limit) break;
         if (r.kind != RefKind::Data) continue;
         if (r.target != last) {
             last = r.target;
-            text = cStringAt(r.target);
+            bool wide = false, utf32 = false;
+            text = stringAt(r.target, &wide, &utf32);
+            encoding = utf32 ? "utf-32le" : wide ? "utf-16le" : "utf-8";
         }
         if (text.empty() || (!filter.empty() && tex::ciFind(text, filter) == std::string_view::npos)) continue;
-        out.push_back({r.target, r.from, text});
+        out.push_back({r.target, r.from, text, encoding});
     }
     return out;
 }

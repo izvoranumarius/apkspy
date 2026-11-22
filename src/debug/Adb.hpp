@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "analysis/Abi.hpp"
 
 // Thin, shell-free wrappers around the `adb` command line tool.
 //
@@ -104,6 +105,12 @@ public:
     std::string backtrace(const std::string& serial, int pid, std::string& error) const;
     // getprop summary (model, Android version, ABI).
     std::vector<std::pair<std::string, std::string>> properties(const std::string& serial, std::string& error) const;
+    // The device's ABIs (ro.product.cpu.abi / abi2 / abilist / abilist32 / abilist64); known() is false when the
+    // properties could not be read.
+    abi::DeviceAbis abis(const std::string& serial, std::string& error) const;
+    // The same from an already fetched properties() result, and the key list properties() reads (for tests).
+    static abi::DeviceAbis abisFromProperties(const std::vector<std::pair<std::string, std::string>>& props);
+    static std::vector<std::pair<std::string, std::string>> parseProperties(const std::string& getpropDump);
 
     // Parsers (exposed for tests).
     static std::vector<Device> parseDevices(const std::string& out);

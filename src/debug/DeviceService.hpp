@@ -192,6 +192,17 @@ public:
     void select(const std::string& serial);
     std::string selected() const;
 
+    // What a device is and which ABIs it runs (getprop, fetched asynchronously once per device).
+    struct DeviceInfo {
+        std::string manufacturer, model, release, sdk;
+        abi::DeviceAbis abis;
+        bool loaded = false;
+        bool failed = false;
+    };
+    void refreshDeviceInfo(const std::string& serial);  // queues a fetch
+    DeviceInfo deviceInfo(const std::string& serial) const;  // loaded = false until the fetch finished
+    static DeviceInfo infoFromProperties(const std::vector<std::pair<std::string, std::string>>& props);
+
     // Processes of the selected device (async refresh).
     void refreshProcesses();
     std::vector<adb::ProcessInfo> processes() const;
@@ -246,6 +257,7 @@ private:
     mutable std::mutex mutex_;
     adb::Adb adb_;
     std::vector<adb::Device> devices_;
+    std::map<std::string, DeviceInfo> info_;
     std::vector<adb::ProcessInfo> processes_;
     std::vector<int> jdwpPids_;
     std::string selected_;

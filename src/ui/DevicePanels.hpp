@@ -25,6 +25,7 @@ protected:
 
 private:
     void drawMonitor();
+    void drawDeviceAbis(const std::string& serial);
     void drawEmulators();
     void refreshAvds();
     void attach(const std::string& serial, int pid);

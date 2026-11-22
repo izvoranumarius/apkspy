@@ -94,7 +94,7 @@ std::vector<EndpointHost> endpoints(const std::vector<std::string>& strings);
 struct DecodedString {
     std::string original;
     std::string decoded;
-    std::string method;  // "base64", "hex" or "url"
+    std::string method;  // "base64", "hex", "url", "base32", "escapes", "html entities", "char codes", "binary", "reversed", "rot13"; "(UTF-16)" when the bytes were UTF-16 text
 };
 std::vector<DecodedString> decodeStrings(const std::vector<std::string>& strings, size_t limit = 500);
 

@@ -281,6 +281,14 @@ public:
     SearchService& search() { return search_; }
     // Bytecode analysis (DEX parsing, xrefs, call graphs) per APK group.
     AnalysisService& analysis() { return analysis_; }
+    // The device selected in the Devices panel, as far as ABIs go: the application refreshes it every frame so
+    // panels that show an APK's native libraries can say whether that device can run them.
+    struct DeviceAbiState {
+        std::string label;       // "Pixel 6 [emulator-5554]"; empty when no device is selected
+        abi::DeviceAbis abis;    // known() is false while the properties are still being read
+    };
+    void setDeviceAbis(DeviceAbiState state) { deviceAbis_ = std::move(state); }
+    const DeviceAbiState& deviceAbis() const { return deviceAbis_; }
     Annotations& annotations() { return annotations_; }
     const Annotations& annotations() const { return annotations_; }
 
@@ -359,6 +367,7 @@ private:
     JadxRunner jadx_;
     SearchService search_;
     AnalysisService analysis_;
+    DeviceAbiState deviceAbis_;
     std::unordered_set<std::string> analysisReported_;  // groups whose completion was logged
     Document* pendingFocus_ = nullptr;
     Annotations annotations_;

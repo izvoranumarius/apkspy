@@ -651,6 +651,194 @@ bool readable(const std::string& d) {
     return good * 100 >= d.size() * 95 && letters * 4 >= d.size();
 }
 
+void putUtf8(std::string& s, uint32_t c) {
+    if (c < 0x80) s += static_cast<char>(c);
+    else if (c < 0x800) s += static_cast<char>(0xC0 | (c >> 6)), s += static_cast<char>(0x80 | (c & 0x3F));
+    else if (c < 0x10000)
+        s += static_cast<char>(0xE0 | (c >> 12)), s += static_cast<char>(0x80 | ((c >> 6) & 0x3F)), s += static_cast<char>(0x80 | (c & 0x3F));
+    else
+        s += static_cast<char>(0xF0 | (c >> 18)), s += static_cast<char>(0x80 | ((c >> 12) & 0x3F)),
+            s += static_cast<char>(0x80 | ((c >> 6) & 0x3F)), s += static_cast<char>(0x80 | (c & 0x3F));
+}
+
+// UTF-16 text (either byte order, with or without a BOM) as UTF-8; false unless it is mostly ASCII-range code units
+// in one order (which is what encoded configuration text looks like) and comes out readable.
+bool utf16AsText(const std::string& d, std::string& out) {
+    if (d.size() < 8 || d.size() % 2) return false;
+    size_t le = 0, be = 0;
+    for (size_t i = 0; i < d.size(); i += 2) {
+        if (d[i + 1] == 0 && d[i] != 0) ++le;
+        if (d[i] == 0 && d[i + 1] != 0) ++be;
+    }
+    const size_t units = d.size() / 2;
+    const bool littleEndian = le * 10 >= units * 8;
+    if (!littleEndian && be * 10 < units * 8) return false;
+    std::string t;
+    for (size_t i = 0; i < d.size(); i += 2) {
+        uint32_t c = littleEndian ? static_cast<uint8_t>(d[i]) | static_cast<uint8_t>(d[i + 1]) << 8
+                                  : static_cast<uint8_t>(d[i]) << 8 | static_cast<uint8_t>(d[i + 1]);
+        if (c == 0xFEFF && i == 0) continue;
+        if (c >= 0xD800 && c < 0xDC00 && i + 3 < d.size()) {
+            const uint32_t lo = littleEndian ? static_cast<uint8_t>(d[i + 2]) | static_cast<uint8_t>(d[i + 3]) << 8
+                                             : static_cast<uint8_t>(d[i + 2]) << 8 | static_cast<uint8_t>(d[i + 3]);
+            if (lo < 0xDC00 || lo >= 0xE000) return false;
+            c = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00);
+            i += 2;
+        } else if (c >= 0xD800 && c < 0xE000) {
+            return false;
+        }
+        putUtf8(t, c);
+    }
+    if (!readable(t)) return false;
+    out = std::move(t);
+    return true;
+}
+
+// Decoded bytes as text: readable ASCII / UTF-8 as they are, else UTF-16. `utf16` says which.
+bool bytesAsText(const std::string& d, std::string& out, bool& utf16) {
+    utf16 = false;
+    if (readable(d)) {
+        out = d;
+        return true;
+    }
+    utf16 = utf16AsText(d, out);
+    return utf16;
+}
+
+int base32Value(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= '2' && c <= '7') return c - '2' + 26;
+    return -1;
+}
+
+bool decodeBase32(const std::string& s, std::string& out) {
+    out.clear();
+    uint32_t buffer = 0;
+    int bits = 0;
+    for (char c : s) {
+        if (c == '=') break;
+        const int v = base32Value(c);
+        if (v < 0) return false;
+        buffer = (buffer << 5) | static_cast<uint32_t>(v);
+        bits += 5;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<char>((buffer >> bits) & 0xFF));
+        }
+    }
+    return !out.empty();
+}
+
+// "h\x65l" -> text; false when fewer than three escapes.
+bool decodeEscapes(const std::string& s, std::string& out) {
+    out.clear();
+    size_t escapes = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 5 < s.size() + 0 && s[i + 1] == 'u' && hexValue(s[i + 2]) >= 0 && hexValue(s[i + 3]) >= 0 &&
+            hexValue(s[i + 4]) >= 0 && hexValue(s[i + 5]) >= 0) {
+            const uint32_t c = static_cast<uint32_t>(hexValue(s[i + 2]) << 12 | hexValue(s[i + 3]) << 8 | hexValue(s[i + 4]) << 4 | hexValue(s[i + 5]));
+            if (c >= 0xD800 && c < 0xE000) return false;
+            putUtf8(out, c);
+            i += 5;
+            ++escapes;
+        } else if (s[i] == '\\' && i + 3 < s.size() + 0 && s[i + 1] == 'x' && hexValue(s[i + 2]) >= 0 && hexValue(s[i + 3]) >= 0) {
+            out.push_back(static_cast<char>(hexValue(s[i + 2]) * 16 + hexValue(s[i + 3])));
+            i += 3;
+            ++escapes;
+        } else {
+            out.push_back(s[i]);
+        }
+    }
+    return escapes >= 3;
+}
+
+// "&#72;&#x65;&amp;" -> text; false when fewer than three entities.
+bool decodeEntities(const std::string& s, std::string& out) {
+    out.clear();
+    size_t entities = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] != '&') {
+            out.push_back(s[i]);
+            continue;
+        }
+        const size_t semi = s.find(';', i);
+        if (semi == std::string::npos || semi - i > 10 || semi - i < 3) {
+            out.push_back(s[i]);
+            continue;
+        }
+        const std::string body = s.substr(i + 1, semi - i - 1);
+        uint32_t c = 0;
+        bool ok = false;
+        if (body[0] == '#' && body.size() >= 2) {
+            const bool hex = body[1] == 'x' || body[1] == 'X';
+            ok = body.size() > (hex ? 2u : 1u);
+            for (size_t k = hex ? 2 : 1; ok && k < body.size(); ++k) {
+                const int v = hex ? hexValue(body[k]) : (body[k] >= '0' && body[k] <= '9' ? body[k] - '0' : -1);
+                if (v < 0) ok = false;
+                else c = c * (hex ? 16 : 10) + static_cast<uint32_t>(v);
+            }
+            ok = ok && c >= 0x20 && c <= 0x10FFFF && !(c >= 0xD800 && c < 0xE000);
+        } else if (body == "amp") c = '&', ok = true;
+        else if (body == "lt") c = '<', ok = true;
+        else if (body == "gt") c = '>', ok = true;
+        else if (body == "quot") c = '"', ok = true;
+        else if (body == "apos") c = '\'', ok = true;
+        if (!ok) {
+            out.push_back(s[i]);
+            continue;
+        }
+        putUtf8(out, c);
+        i = semi;
+        ++entities;
+    }
+    return entities >= 3;
+}
+
+// "72 101 108 108 111" or "72,101,108" -> text.
+bool decodeCharCodes(const std::string& s, std::string& out) {
+    out.clear();
+    size_t count = 0;
+    for (size_t i = 0; i < s.size();) {
+        if (s[i] == ' ' || s[i] == ',' || s[i] == ';') {
+            ++i;
+            continue;
+        }
+        size_t j = i;
+        uint32_t v = 0;
+        while (j < s.size() && s[j] >= '0' && s[j] <= '9' && j - i < 7) v = v * 10 + static_cast<uint32_t>(s[j++] - '0');
+        if (j == i || v < 9 || v > 0x10FFFF || (j < s.size() && s[j] != ' ' && s[j] != ',' && s[j] != ';')) return false;
+        putUtf8(out, v);
+        ++count;
+        i = j;
+    }
+    return count >= 6;
+}
+
+// "01001000 01101001 ..." -> text.
+bool decodeBinary(const std::string& s, std::string& out) {
+    out.clear();
+    std::string bits;
+    for (char c : s) {
+        if (c == '0' || c == '1') bits.push_back(c);
+        else if (c != ' ') return false;
+    }
+    if (bits.size() < 48 || bits.size() % 8) return false;
+    for (size_t i = 0; i < bits.size(); i += 8) {
+        unsigned v = 0;
+        for (size_t k = 0; k < 8; ++k) v = v << 1 | static_cast<unsigned>(bits[i + k] - '0');
+        out.push_back(static_cast<char>(v));
+    }
+    return true;
+}
+
+std::string rot13(std::string s) {
+    for (char& c : s) {
+        if (c >= 'a' && c <= 'z') c = static_cast<char>('a' + (c - 'a' + 13) % 26);
+        else if (c >= 'A' && c <= 'Z') c = static_cast<char>('A' + (c - 'A' + 13) % 26);
+    }
+    return s;
+}
+
 }  // namespace
 
 std::vector<DecodedString> decodeStrings(const std::vector<std::string>& strings, size_t limit) {
@@ -682,8 +870,10 @@ std::vector<DecodedString> decodeStrings(const std::vector<std::string>& strings
         if (s.size() >= 12 && s.size() % 2 == 0 && std::all_of(s.begin(), s.end(), [](char c) { return hexValue(c) >= 0; })) {
             d.clear();
             for (size_t i = 0; i < s.size(); i += 2) d.push_back(static_cast<char>(hexValue(s[i]) * 16 + hexValue(s[i + 1])));
-            if (readable(d)) {
-                out.push_back({s, d, "hex"});
+            std::string text;
+            bool wide = false;
+            if (bytesAsText(d, text, wide)) {
+                out.push_back({s, text, wide ? "hex (UTF-16)" : "hex"});
                 continue;
             }
         }
@@ -693,7 +883,47 @@ std::vector<DecodedString> decodeStrings(const std::vector<std::string>& strings
             // A plain lowercase / uppercase word is not base64.
             const bool mixed = std::any_of(s.begin(), s.end(), [](char c) { return std::isupper(static_cast<unsigned char>(c)); }) &&
                                std::any_of(s.begin(), s.end(), [](char c) { return std::islower(static_cast<unsigned char>(c)); });
-            if (mixed && decodeBase64(s, d) && readable(d)) out.push_back({s, d, "base64"});
+            std::string text;
+            bool wide = false;
+            if (mixed && decodeBase64(s, d) && bytesAsText(d, text, wide)) {
+                out.push_back({s, text, wide ? "base64 (UTF-16)" : "base64"});
+                continue;
+            }
+        }
+        // Base32: upper-case letters and 2-7, a multiple of eight characters when padded.
+        if (s.size() >= 16 && std::all_of(s.begin(), s.end(), [](char c) { return base32Value(c) >= 0 || c == '='; }) &&
+            (s.find('=') == std::string::npos || s.size() % 8 == 0) && decodeBase32(s, d)) {
+            std::string text;
+            bool wide = false;
+            if (bytesAsText(d, text, wide)) {
+                out.push_back({s, text, "base32"});
+                continue;
+            }
+        }
+        if (decodeEscapes(s, d) && readable(d)) {
+            out.push_back({s, d, "escapes"});
+            continue;
+        }
+        if (decodeEntities(s, d) && readable(d)) {
+            out.push_back({s, d, "html entities"});
+            continue;
+        }
+        if (decodeCharCodes(s, d) && readable(d)) {
+            out.push_back({s, d, "char codes"});
+            continue;
+        }
+        if (decodeBinary(s, d) && readable(d)) {
+            out.push_back({s, d, "binary"});
+            continue;
+        }
+        // Obfuscations that give themselves away by what they turn into: a reversed or rot13 URL.
+        if (s.find("//:ptth") != std::string::npos || s.find("//:sptth") != std::string::npos) {
+            out.push_back({s, std::string(s.rbegin(), s.rend()), "reversed"});
+            continue;
+        }
+        if (s.find("http") == std::string::npos) {
+            const std::string r = rot13(s);
+            if (r.find("http://") != std::string::npos || r.find("https://") != std::string::npos) out.push_back({s, r, "rot13"});
         }
     }
     return out;

@@ -1,5 +1,6 @@
 #pragma once
 #include <deque>
+#include "analysis/Abi.hpp"
 #include <mutex>
 #include <string>
 #include <vector>
@@ -66,6 +67,11 @@ namespace fridaserver {
 
 // A remote path safe to drop into an adb shell command ([A-Za-z0-9._/-]).
 bool validRemotePath(const std::string& p);
+
+// Checks that `localBinary` is an ELF for an ABI the device runs (frida-server must match the device, not the host).
+// Returns the ABI name ("arm64-v8a", ...) in `abiName`; false with a message when the file is not an ELF, is for an
+// architecture Android does not run, or for an ABI missing from `device`.
+bool checkBinary(const std::string& localBinary, const abi::DeviceAbis& device, std::string& abiName, std::string& error);
 
 // `adb root` (best effort), then push `localBinary` to `remotePath` and
 // chmod it 0755. Synchronous; blocking. False (with error) when push or

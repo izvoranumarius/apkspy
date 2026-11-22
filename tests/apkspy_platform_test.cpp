@@ -28,6 +28,8 @@
 #include "analysis/ApkDiff.hpp"
 #include "analysis/Dalvik.hpp"
 #include "analysis/Decompiler.hpp"
+#include "analysis/AnalysisService.hpp"
+#include "analysis/Abi.hpp"
 #include "core/Codec.hpp"
 #include "core/TextDiff.hpp"
 #include "debug/HttpClient.hpp"
@@ -4687,6 +4689,588 @@ static void testStringSwitch() {
     CHECK(!has(g, "hashCode") && !has(g, "equals") && !has(g, "goto"), "direct form: no hash, equals or goto left");
 }
 
+static void testStringEncodings() {
+    std::printf("== string encodings ==\n");
+    // A minimal ELF (no .rodata: the whole file is scanned) with text of every kind appended.
+    std::vector<uint8_t> bytes = buildElf();
+    while (bytes.size() % 8) bytes.push_back(0);
+    const auto narrow = [&](const std::string& t) {
+        const size_t at = bytes.size();
+        for (char c : t) bytes.push_back(static_cast<uint8_t>(c));
+        bytes.push_back(0);
+        while (bytes.size() % 8) bytes.push_back(0);
+        return at;
+    };
+    const auto wide = [&](const std::vector<uint32_t>& cps, size_t unit, bool be) {
+        const size_t at = bytes.size();
+        for (uint32_t c : cps) {
+            for (size_t k = 0; k < unit; ++k) bytes.push_back(static_cast<uint8_t>(be ? c >> (8 * (unit - 1 - k)) : c >> (8 * k)));
+        }
+        for (size_t k = 0; k < unit; ++k) bytes.push_back(0);
+        while (bytes.size() % 8) bytes.push_back(0);
+        return at;
+    };
+    const size_t offAscii = narrow("plain ascii text");
+    const size_t offUtf8 = narrow("caf\xC3\xA9 cr\xC3\xA8me \xE2\x82\xAC");
+    const size_t off16 = wide({'w', 'i', 'd', 'e', ' ', 'o', 'n', 'e'}, 2, false);
+    const size_t off16be = wide({'b', 'i', 'g', ' ', 'e', 'n', 'd', 'i', 'a', 'n'}, 2, true);
+    const size_t off16u = wide({0x043F, 0x0440, 0x0438, 0x0432, 0x0435, 0x0442}, 2, false);  // "привет"
+    const size_t off32 = wide({'w', 'c', 'h', 'a', 'r', '_', 't'}, 4, false);
+    const size_t offCjk = wide({0x4F60, 0x597D, 0x4E16, 0x754C}, 2, false);                    // "你好世界"
+    std::string err;
+    auto elf = ElfFile::parse(std::make_shared<std::vector<uint8_t>>(bytes), "libenc.so", err);
+    CHECK(elf != nullptr, "encoding test ELF parses");
+    if (!elf) return;
+    const auto hits = elf->strings(4, 1000);
+    const auto find = [&](size_t off) -> const ElfFile::StringHit* {
+        for (const auto& h : hits)
+            if (h.offset == off) return &h;
+        return nullptr;
+    };
+    const auto is = [&](size_t off, const char* value, const char* enc) {
+        const auto* h = find(off);
+        return h && h->value == value && std::string(h->encoding) == enc;
+    };
+    CHECK(is(offAscii, "plain ascii text", "ascii"), "ASCII run");
+    CHECK(is(offUtf8, "caf\xC3\xA9 cr\xC3\xA8me \xE2\x82\xAC", "utf-8"), "UTF-8 run with accents and a euro sign");
+    CHECK(is(off16, "wide one", "utf-16le"), "UTF-16LE run");
+    CHECK(is(off16be, "big endian", "utf-16be"), "UTF-16BE run");
+    CHECK(is(off16u, "\xD0\xBF\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82", "utf-16le"), "UTF-16LE Cyrillic");
+    CHECK(is(off32, "wchar_t", "utf-32le"), "UTF-32LE (wchar_t) run");
+    CHECK(is(offCjk, "\xE4\xBD\xA0\xE5\xA5\xBD\xE4\xB8\x96\xE7\x95\x8C", "utf-16le"), "UTF-16LE CJK");
+    // Narrow text is not also reported as CJK-looking UTF-16, and wide text is reported once.
+    size_t inAscii = 0, inWide = 0;
+    for (const auto& h : hits) {
+        if (h.offset >= offAscii && h.offset < offAscii + 16) ++inAscii;
+        if (h.offset >= off16 && h.offset < off16 + 16) ++inWide;
+    }
+    CHECK(inAscii == 1, "ASCII text is reported once, not again as UTF-16");
+    CHECK(inWide == 1, "UTF-16LE text is reported once, not again as UTF-16BE");
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// ABIs: ELF identification, per-architecture disassembly, device ABIs and APK / device compatibility.
+// ---------------------------------------------------------------------------------------------------------------------
+
+struct SynthSym {
+    std::string name;
+    uint64_t addr;
+    uint64_t size;
+    bool func;
+};
+
+// A small shared object for any of the four ABIs: .text at 0x1000, .rodata at 0x2000, an optional .got.plt at 0x3000, a
+// symbol table, one PT_LOAD covering the file (so file offset == address), ELF32 or ELF64 by `is64`.
+static std::vector<uint8_t> buildCodeElf(uint16_t machine, bool is64, const std::vector<uint8_t>& text, const std::vector<uint8_t>& rodata,
+                                         const std::vector<SynthSym>& syms, bool gotPlt) {
+    Buf e;
+    const size_t ehsize = is64 ? 64 : 52, phsize = is64 ? 56 : 32;
+    e.b.resize(0x3000 + (gotPlt ? 16 : 0), 0);
+    std::memcpy(e.b.data() + 0x1000, text.data(), text.size());
+    std::memcpy(e.b.data() + 0x2000, rodata.data(), rodata.size());
+    const auto w = [&](size_t at, uint64_t v, int bytes) {
+        for (int i = 0; i < bytes; ++i) e.b[at + static_cast<size_t>(i)] = static_cast<uint8_t>(v >> (8 * i));
+    };
+    // symbol and string tables
+    std::string strtab(1, '\0');
+    std::vector<uint8_t> symtab(is64 ? 24 : 16, 0);
+    for (const SynthSym& s : syms) {
+        const uint32_t nameOff = static_cast<uint32_t>(strtab.size());
+        strtab += s.name;
+        strtab.push_back('\0');
+        const uint8_t info = s.func ? 0x12 : 0x00;  // GLOBAL FUNC / NOTYPE
+        Buf sym;
+        if (is64) {
+            sym.u32(nameOff), sym.u8(info), sym.u8(0), sym.u16(1), sym.u64(s.addr), sym.u64(s.size);
+        } else {
+            sym.u32(nameOff), sym.u32(static_cast<uint32_t>(s.addr)), sym.u32(static_cast<uint32_t>(s.size)), sym.u8(info), sym.u8(0), sym.u16(1);
+        }
+        symtab.insert(symtab.end(), sym.b.begin(), sym.b.end());
+    }
+    const std::string shstr = std::string("\0.text\0.rodata\0.got.plt\0.symtab\0.strtab\0.shstrtab\0", 52);
+    const size_t symOff = e.b.size();
+    e.b.insert(e.b.end(), symtab.begin(), symtab.end());
+    const size_t strOff = e.b.size();
+    e.b.insert(e.b.end(), strtab.begin(), strtab.end());
+    const size_t shstrOff = e.b.size();
+    e.b.insert(e.b.end(), shstr.begin(), shstr.end());
+    e.align(8);
+    const size_t shOff = e.b.size();
+    const auto section = [&](uint32_t name, uint32_t type, uint64_t flags, uint64_t addr, uint64_t off, uint64_t size, uint32_t link, uint64_t entsize) {
+        if (is64) {
+            e.u32(name), e.u32(type), e.u64(flags), e.u64(addr), e.u64(off), e.u64(size), e.u32(link), e.u32(0), e.u64(4), e.u64(entsize);
+        } else {
+            e.u32(name), e.u32(type), e.u32(static_cast<uint32_t>(flags)), e.u32(static_cast<uint32_t>(addr)), e.u32(static_cast<uint32_t>(off)),
+                e.u32(static_cast<uint32_t>(size)), e.u32(link), e.u32(0), e.u32(4), e.u32(static_cast<uint32_t>(entsize));
+        }
+    };
+    // names: .text 1, .rodata 7, .got.plt 15, .symtab 24, .strtab 32, .shstrtab 40
+    section(0, 0, 0, 0, 0, 0, 0, 0);
+    section(1, 1, 6, 0x1000, 0x1000, 0x1000, 0, 0);       // .text   (ALLOC | EXEC)
+    section(7, 1, 2, 0x2000, 0x2000, 0x1000, 0, 0);       // .rodata
+    int next = 3;
+    if (gotPlt) section(15, 1, 3, 0x3000, 0x3000, 16, 0, 0), ++next;
+    const int symIndex = next;
+    section(24, 2, 0, 0, symOff, symtab.size(), static_cast<uint32_t>(symIndex + 1), is64 ? 24 : 16);
+    section(32, 3, 0, 0, strOff, strtab.size(), 0, 0);
+    section(40, 3, 0, 0, shstrOff, shstr.size(), 0, 0);
+    const int shnum = symIndex + 3;
+    // ELF header + program header
+    e.b[0] = 0x7f, e.b[1] = 'E', e.b[2] = 'L', e.b[3] = 'F';
+    e.b[4] = is64 ? 2 : 1, e.b[5] = 1, e.b[6] = 1;
+    w(16, 3, 2);                      // ET_DYN
+    w(18, machine, 2);
+    w(20, 1, 4);
+    if (is64) {
+        w(32, ehsize, 8);             // e_phoff
+        w(40, shOff, 8);              // e_shoff
+        w(52, ehsize, 2), w(54, phsize, 2), w(56, 1, 2), w(58, 64, 2), w(60, static_cast<uint64_t>(shnum), 2), w(62, static_cast<uint64_t>(shnum - 1), 2);
+        const size_t ph = ehsize;     // PT_LOAD, R+X, the whole file at address 0
+        w(ph, 1, 4), w(ph + 4, 5, 4), w(ph + 8, 0, 8), w(ph + 16, 0, 8), w(ph + 24, 0, 8), w(ph + 32, e.b.size(), 8), w(ph + 40, e.b.size(), 8), w(ph + 48, 0x1000, 8);
+    } else {
+        w(28, ehsize, 4);
+        w(32, shOff, 4);
+        w(40, ehsize, 2), w(42, phsize, 2), w(44, 1, 2), w(46, 40, 2), w(48, static_cast<uint64_t>(shnum), 2), w(50, static_cast<uint64_t>(shnum - 1), 2);
+        const size_t ph = ehsize;
+        w(ph, 1, 4), w(ph + 4, 0, 4), w(ph + 8, 0, 4), w(ph + 12, 0, 4), w(ph + 16, e.b.size(), 4), w(ph + 20, e.b.size(), 4), w(ph + 24, 5, 4), w(ph + 28, 0x1000, 4);
+    }
+    return e.b;
+}
+
+struct AbiFixture {
+    const char* dir;          // lib/<dir>
+    uint16_t machine;
+    bool is64;
+    std::vector<uint8_t> text;
+    bool gotPlt;
+    std::vector<SynthSym> syms;
+    NativeCode::Isa isa;
+    const char* firstMnemonic;  // of f
+};
+
+// f: takes the address of "hello abi" (.rodata, 0x2000), calls g and returns; g returns 0. Real machine code.
+static std::vector<AbiFixture> abiFixtures() {
+    std::vector<AbiFixture> out;
+    {   // x86-64: lea rdi,[rip+0xff9] ; call g ; ret ; g: xor eax,eax ; ret
+        std::vector<uint8_t> t = {0x48, 0x8D, 0x3D, 0xF9, 0x0F, 0x00, 0x00, 0xE8, 0x04, 0x00, 0x00, 0x00, 0xC3, 0xCC, 0xCC, 0xCC, 0x31, 0xC0, 0xC3};
+        out.push_back({"x86_64", 62, true, t, false, {{"f", 0x1000, 13, true}, {"g", 0x1010, 3, true}}, NativeCode::Isa::X86_64, "lea"});
+    }
+    {   // x86 (PIC, ebx = .got.plt = 0x3000): lea eax,[ebx-0x1000] ; call g ; ret ; g: xor eax,eax ; ret
+        std::vector<uint8_t> t = {0x8D, 0x83, 0x00, 0xF0, 0xFF, 0xFF, 0xE8, 0x05, 0x00, 0x00, 0x00, 0xC3, 0xCC, 0xCC, 0xCC, 0xCC, 0x31, 0xC0, 0xC3};
+        out.push_back({"x86", 3, false, t, true, {{"f", 0x1000, 12, true}, {"g", 0x1010, 3, true}}, NativeCode::Isa::X86, "lea"});
+    }
+    {   // armeabi-v7a, Thumb-2: ldr r0,[pc,#8] ; add r0,pc ; bl g ; bx lr ; nop ; .word 0xffa ; g: bx lr
+        std::vector<uint8_t> t = {0x02, 0x48, 0x78, 0x44, 0x00, 0xF0, 0x04, 0xF8, 0x70, 0x47, 0x00, 0xBF, 0xFA, 0x0F, 0x00, 0x00, 0x70, 0x47};
+        out.push_back({"armeabi-v7a", 40, false, t, false,
+                       {{"f", 0x1001, 12, true}, {"g", 0x1011, 2, true}, {"$t", 0x1000, 0, false}, {"$d", 0x100C, 0, false}, {"$t", 0x1010, 0, false}},
+                       NativeCode::Isa::Arm32, "ldr"});
+    }
+    return out;
+}
+
+static std::vector<uint8_t> helloRodata() {
+    const std::string h = "hello abi";
+    return std::vector<uint8_t>(h.begin(), h.end());
+}
+
+static void testAbiIdentification() {
+    std::printf("== abi identification ==\n");
+    // Directory names.
+    CHECK(abi::fromName("arm64-v8a").id == abi::Id::Arm64 && abi::fromName("arm64-v8a").bits == 64 && abi::fromName("arm64-v8a").ndkTarget, "arm64-v8a");
+    CHECK(abi::fromName("armeabi-v7a").id == abi::Id::Arm32 && abi::fromName("armeabi-v7a").bits == 32 && abi::fromName("armeabi-v7a").ndkTarget, "armeabi-v7a");
+    CHECK(abi::fromName("x86_64").id == abi::Id::X86_64 && abi::fromName("x86_64").bits == 64 && abi::fromName("x86_64").ndkTarget, "x86_64");
+    CHECK(abi::fromName("x86").id == abi::Id::X86 && abi::fromName("x86").bits == 32 && abi::fromName("x86").ndkTarget, "x86");
+    for (const char* legacy : {"armeabi", "mips", "mips64"}) {
+        const abi::Info i = abi::fromName(legacy);
+        CHECK(i.id != abi::Id::Unknown && i.legacy && !i.ndkTarget, (std::string(legacy) + " is recognised as legacy, not an NDK target").c_str());
+    }
+    CHECK(!abi::fromName("mips").disassemblable && !abi::fromName("mips64").disassemblable, "MIPS cannot be disassembled");
+    CHECK(abi::fromName("armeabi").disassemblable, "armeabi is 32-bit ARM code");
+    CHECK(abi::fromName("sparc").id == abi::Id::Unknown && abi::fromName("").id == abi::Id::Unknown, "unknown directory names");
+
+    // ELF headers of real (synthetic but well-formed) ELF32 / ELF64 files, not directory names.
+    for (const AbiFixture& f : abiFixtures()) {
+        const auto bytes = buildCodeElf(f.machine, f.is64, f.text, helloRodata(), f.syms, f.gotPlt);
+        const abi::ElfIdent id = abi::peekElf(bytes.data(), bytes.size());
+        const abi::Info info = abi::fromElf(id);
+        CHECK(id.valid && id.is64 == f.is64 && id.machine == f.machine, (std::string(f.dir) + ": ELF header fields").c_str());
+        CHECK(std::string(info.name) == f.dir && info.disassemblable, (std::string(f.dir) + ": ABI from the ELF header").c_str());
+    }
+    {
+        const auto arm64 = buildArm64Elf();
+        const abi::Info info = abi::fromElf(abi::peekElf(arm64.data(), arm64.size()));
+        CHECK(info.id == abi::Id::Arm64 && info.bits == 64, "arm64 library identified from its header");
+    }
+    // Machines that are not Android ABIs, and combinations that cannot exist.
+    auto mips = buildCodeElf(8, false, {0, 0, 0, 0}, helloRodata(), {}, false);
+    CHECK(abi::fromElf(abi::peekElf(mips.data(), mips.size())).id == abi::Id::Mips, "MIPS ELF32 identified");
+    auto mips64 = buildCodeElf(8, true, {0, 0, 0, 0}, helloRodata(), {}, false);
+    CHECK(abi::fromElf(abi::peekElf(mips64.data(), mips64.size())).id == abi::Id::Mips64, "MIPS ELF64 identified");
+    auto weird = buildCodeElf(62, false, {0, 0, 0, 0}, helloRodata(), {}, false);  // x86-64 machine in an ELF32 file
+    CHECK(abi::fromElf(abi::peekElf(weird.data(), weird.size())).id == abi::Id::Unknown, "x86-64 inside ELF32 is not an ABI");
+    CHECK(abi::machineName(40) == "ARM" && abi::machineName(183) == "AArch64" && abi::machineName(62) == "x86-64" && abi::machineName(3) == "x86" &&
+              abi::machineName(8) == "MIPS" && abi::machineName(999).find("999") != std::string::npos, "machine names");
+
+    // Malformed input never crashes and is never identified.
+    CHECK(!abi::peekElf(nullptr, 0).valid && !abi::peekElf(mips.data(), 0).valid && !abi::peekElf(mips.data(), 10).valid, "empty / tiny buffers");
+    auto badMagic = mips;
+    badMagic[1] = 'X';
+    CHECK(!abi::peekElf(badMagic.data(), badMagic.size()).valid, "bad magic");
+    auto badClass = mips;
+    badClass[4] = 7;
+    CHECK(!abi::peekElf(badClass.data(), badClass.size()).valid, "invalid ELF class");
+    CHECK(!abi::peekElf(mips64.data(), 40).valid, "ELF64 header cut short");
+    std::string err;
+    for (size_t cut : {0u, 5u, 20u, 52u, 60u, 200u}) {
+        auto trunc = std::make_shared<std::vector<uint8_t>>(mips64.begin(), mips64.begin() + static_cast<ptrdiff_t>(cut));
+        CHECK(ElfFile::parse(trunc, "t.so", err) == nullptr || true, "truncated ELF does not crash the parser");
+    }
+    // Big-endian ARM: a real ELF header, but no decoder for it.
+    auto be = buildCodeElf(40, false, {0, 0, 0, 0}, helloRodata(), {}, false);
+    be[5] = 2;
+    CHECK(!abi::fromElf(abi::peekElf(be.data(), be.size())).disassemblable, "big-endian ELF is not an ABI ApkSpy can disassemble");
+}
+
+static void testAbiInventory() {
+    std::printf("== apk native inventory ==\n");
+    const auto fix = abiFixtures();
+    const auto elf = [&](size_t i) { return buildCodeElf(fix[i].machine, fix[i].is64, fix[i].text, helloRodata(), fix[i].syms, fix[i].gotPlt); };
+    const auto arm64 = buildArm64Elf();
+    const auto entry = [](const std::string& path, const std::vector<uint8_t>& bytes) {
+        abi::LibEntry e;
+        e.path = path;
+        e.size = bytes.size();
+        e.ident = abi::peekElf(bytes.data(), bytes.size());
+        return e;
+    };
+    // An APK with all four ABIs, plus entries that are not libraries.
+    std::vector<abi::LibEntry> entries = {entry("lib/arm64-v8a/libfoo.so", arm64), entry("lib/armeabi-v7a/libfoo.so", elf(2)), entry("lib/x86_64/libfoo.so", elf(0)),
+                                          entry("lib/x86/libfoo.so", elf(1)), entry("lib/x86/libbar.so", elf(1)), entry("lib/x86/readme.txt", arm64),
+                                          entry("lib/nested/x86/deep.so", arm64), entry("assets/libfoo.so", arm64), entry("lib/liboutside.so", arm64)};
+    const abi::ApkNative all = abi::inventory(entries);
+    CHECK(all.libs.size() == 5, "only lib/<abi>/*.so entries count");
+    CHECK(all.dirs == std::vector<std::string>({"arm64-v8a", "armeabi-v7a", "x86_64", "x86"}), "ABI directories in first-seen order");
+    CHECK(all.has32() && all.has64() && all.countIn("x86") == 2 && all.hasDir("x86_64") && !all.hasDir("mips"), "directory facts");
+    CHECK(abi::widthLabel(all.has32(), all.has64()) == "64-bit and 32-bit", "width label for a mixed APK");
+    bool anyMismatch = false;
+    for (const auto& l : all.libs) anyMismatch = anyMismatch || l.mismatch();
+    CHECK(!anyMismatch, "libraries whose header matches their directory are not mismatches");
+
+    // The directory lies: an x86 library in lib/arm64-v8a. The header wins.
+    const abi::ApkNative lie = abi::inventory({entry("lib/arm64-v8a/libliar.so", elf(1))});
+    CHECK(lie.libs.size() == 1 && lie.libs[0].mismatch() && lie.libs[0].effective().id == abi::Id::X86, "a mislabelled library is detected from its ELF header");
+    CHECK(!lie.has64() && lie.has32(), "bitness follows the header, not the directory");
+    // armeabi holds 32-bit ARM code: not a mismatch.
+    const abi::ApkNative legacy = abi::inventory({entry("lib/armeabi/libold.so", elf(2))});
+    CHECK(legacy.libs.size() == 1 && !legacy.libs[0].mismatch() && legacy.libs[0].dir.legacy, "armeabi with ARM code is a legacy directory, not a mismatch");
+    // Not an ELF file at all.
+    abi::LibEntry junk;
+    junk.path = "lib/arm64-v8a/libjunk.so";
+    junk.size = 10;
+    const abi::ApkNative bad = abi::inventory({junk});
+    CHECK(bad.libs.size() == 1 && !bad.libs[0].validElf && !bad.libs[0].mismatch() && bad.libs[0].effective().id == abi::Id::Arm64, "an unreadable header falls back to the directory");
+    // MIPS: recognised, never reported as supported.
+    const auto mipsElf = buildCodeElf(8, false, {0, 0, 0, 0}, helloRodata(), {}, false);
+    const abi::ApkNative mi = abi::inventory({entry("lib/mips/libm.so", mipsElf)});
+    CHECK(mi.libs.size() == 1 && mi.libs[0].dir.legacy && !mi.libs[0].effective().disassemblable, "legacy MIPS library: recognised, not disassemblable");
+    CHECK(abi::inventory({}).empty() && abi::inventory({}).dirs.empty(), "an APK without native libraries");
+
+    // The same through a real APK file.
+    const fs::path dir = fs::temp_directory_path() / "apkspy_abi_test";
+    fs::create_directories(dir);
+    CHECK(writeApk(dir / "multi.apk", {{"classes.dex", buildDex()}, {"lib/arm64-v8a/liba.so", arm64}, {"lib/x86/liba.so", elf(1)}, {"lib/armeabi-v7a/liba.so", elf(2)}}), "multi-ABI APK written");
+    CHECK(writeApk(dir / "plain.apk", {{"classes.dex", buildDex()}, {"assets/readme.txt", {65, 66}}}), "APK without native code written");
+    AnalysisService service;
+    const auto multi = service.nativeInventory((dir / "multi.apk").string());
+    CHECK(multi && multi->libs.size() == 3 && multi->dirs.size() == 3, "AnalysisService lists the libraries of an APK");
+    bool x86seen = false;
+    for (const auto& l : multi->libs)
+        if (l.dirName == "x86") x86seen = l.validElf && l.elf.id == abi::Id::X86 && l.ident.machine == 3 && !l.ident.is64;
+    CHECK(x86seen, "ELF headers are read from inside the APK");
+    const auto plain = service.nativeInventory((dir / "plain.apk").string());
+    CHECK(plain && plain->empty(), "an APK without lib/ has an empty inventory");
+    const auto missing = service.nativeInventory((dir / "nope.apk").string());
+    CHECK(missing && missing->empty(), "an unreadable APK gives an empty inventory instead of failing");
+    fs::remove_all(dir);
+}
+
+static void testDeviceAbis() {
+    std::printf("== device abis ==\n");
+    // A modern phone: 64-bit primary, 32-bit secondary.
+    const auto phone = abi::deviceAbis("arm64-v8a", "armeabi-v7a", "arm64-v8a,armeabi-v7a,armeabi", "armeabi-v7a,armeabi", "arm64-v8a");
+    CHECK(phone.primary == "arm64-v8a" && phone.secondary == "armeabi-v7a" && phone.list.size() == 3 && phone.known(), "phone properties");
+    CHECK(phone.supports32() && phone.supports64() && phone.supports("armeabi") && !phone.supports("x86"), "a phone runs 32 and 64-bit apps");
+    // A 64-bit only device (no 32-bit lists).
+    const auto only64 = abi::deviceAbis("arm64-v8a", "", "arm64-v8a", "", "arm64-v8a");
+    CHECK(only64.supports64() && !only64.supports32() && only64.secondary.empty(), "a 64-bit only device");
+    // An old 32-bit phone.
+    const auto old32 = abi::deviceAbis("armeabi-v7a", "armeabi", "armeabi-v7a,armeabi", "armeabi-v7a,armeabi", "");
+    CHECK(old32.supports32() && !old32.supports64(), "a 32-bit only device");
+    // x86_64 emulator with ARM translation: it runs more than its primary ABI.
+    const auto emu = abi::deviceAbis("x86_64", "", "x86_64,x86,arm64-v8a,armeabi-v7a,armeabi", "x86,armeabi-v7a,armeabi", "x86_64,arm64-v8a");
+    CHECK(emu.primary == "x86_64" && emu.supports("arm64-v8a") && emu.supports("x86") && emu.list.front() == "x86_64", "an emulator with ARM translation lists every ABI it runs");
+    // Properties missing: fall back to the primary / secondary ABI, derive the bit-width lists.
+    const auto fallback = abi::deviceAbis("armeabi-v7a", "armeabi", "", "", "");
+    CHECK(fallback.list == std::vector<std::string>({"armeabi-v7a", "armeabi"}) && fallback.supports32() && !fallback.supports64(), "no abilist: primary and secondary ABI are used");
+    const auto none = abi::deviceAbis("", "", "", "", "");
+    CHECK(!none.known() && !none.supports32() && !none.supports64(), "nothing known about the device");
+    // Real getprop output.
+    const std::string dump =
+        "[ro.product.cpu.abi]: [arm64-v8a]\r\n[ro.product.cpu.abi2]: []\r\n[ro.product.cpu.abilist]: [arm64-v8a,armeabi-v7a,armeabi]\r\n"
+        "[ro.product.cpu.abilist32]: [armeabi-v7a,armeabi]\r\n[ro.product.cpu.abilist64]: [arm64-v8a]\r\n[ro.product.manufacturer]: [Google]\r\n"
+        "[ro.product.model]: [Pixel 6]\r\n[ro.build.version.release]: [14]\r\n[ro.build.version.sdk]: [34]\r\n";
+    const auto props = adb::Adb::parseProperties(dump);
+    const auto info = DeviceService::infoFromProperties(props);
+    CHECK(info.loaded && !info.failed && info.manufacturer == "Google" && info.model == "Pixel 6" && info.release == "14" && info.sdk == "34", "device identity from getprop");
+    CHECK(info.abis.primary == "arm64-v8a" && info.abis.secondary.empty() && info.abis.list.size() == 3 && info.abis.list32.size() == 2 && info.abis.list64.size() == 1,
+          "device ABIs from getprop");
+    CHECK(DeviceService::infoFromProperties(adb::Adb::parseProperties("")).failed, "an empty getprop dump is a failure, not a device with no ABIs");
+}
+
+static void testAbiCompatibility() {
+    std::printf("== apk / device compatibility ==\n");
+    const auto fix = abiFixtures();
+    const auto elf = [&](size_t i) { return buildCodeElf(fix[i].machine, fix[i].is64, fix[i].text, helloRodata(), fix[i].syms, fix[i].gotPlt); };
+    const auto arm64 = buildArm64Elf();
+    const auto make = [](std::initializer_list<std::pair<const char*, const std::vector<uint8_t>*>> libs) {
+        std::vector<abi::LibEntry> v;
+        for (const auto& l : libs) {
+            abi::LibEntry e;
+            e.path = std::string("lib/") + l.first + "/libx.so";
+            e.size = l.second->size();
+            e.ident = abi::peekElf(l.second->data(), l.second->size());
+            v.push_back(e);
+        }
+        return abi::inventory(v);
+    };
+    const auto x86 = elf(1), v7 = elf(2), x64 = elf(0);
+    const auto phone = abi::deviceAbis("arm64-v8a", "armeabi-v7a", "arm64-v8a,armeabi-v7a,armeabi", "armeabi-v7a,armeabi", "arm64-v8a");
+    const auto only32 = abi::deviceAbis("armeabi-v7a", "armeabi", "armeabi-v7a,armeabi", "armeabi-v7a,armeabi", "");
+    const auto emulator = abi::deviceAbis("x86_64", "", "x86_64,x86", "x86", "x86_64");
+    const auto translated = abi::deviceAbis("x86_64", "", "x86_64,x86,arm64-v8a,armeabi-v7a", "x86,armeabi-v7a", "x86_64,arm64-v8a");
+
+    // No native libraries: compatible with everything and never "incompatible".
+    const abi::ApkNative none = abi::inventory({});
+    for (const abi::DeviceAbis* d : {&phone, &only32, &emulator}) {
+        const auto c = abi::check(none, *d);
+        CHECK(c.kind == abi::Compatibility::Kind::NoNativeCode && c.incompatible.empty() && c.codeWidth == "none" && c.summary.find("ncompatible") == std::string::npos,
+              "an APK without native libraries is not reported as incompatible");
+    }
+    // All four ABIs shipped: a phone loads arm64, a 32-bit phone armeabi-v7a, an emulator x86_64.
+    const auto everything = make({{"arm64-v8a", &arm64}, {"armeabi-v7a", &v7}, {"x86_64", &x64}, {"x86", &x86}});
+    CHECK(abi::check(everything, phone).chosen == "arm64-v8a" && abi::check(everything, phone).kind == abi::Compatibility::Kind::Compatible, "a phone loads arm64-v8a");
+    CHECK(abi::check(everything, only32).chosen == "armeabi-v7a", "a 32-bit phone falls back to armeabi-v7a");
+    CHECK(abi::check(everything, emulator).chosen == "x86_64", "an x86_64 emulator loads x86_64");
+    CHECK(abi::check(everything, phone).incompatible == std::vector<std::string>({"x86_64", "x86"}), "the shipped ABIs the phone cannot run are listed");
+    // Only 32-bit code on a 64-bit device that also runs 32-bit: Android loads the 32-bit libraries.
+    const auto only32apk = make({{"armeabi-v7a", &v7}});
+    CHECK(abi::check(only32apk, phone).kind == abi::Compatibility::Kind::Compatible && abi::check(only32apk, phone).chosen == "armeabi-v7a" &&
+              abi::check(only32apk, phone).codeWidth == "32-bit only", "32-bit native code runs on a phone that supports 32-bit");
+    // 64-bit only code on a 32-bit device.
+    const auto only64apk = make({{"arm64-v8a", &arm64}});
+    const auto c64 = abi::check(only64apk, only32);
+    CHECK(c64.kind == abi::Compatibility::Kind::Incompatible && c64.chosen.empty() && c64.codeWidth == "64-bit only" && c64.summary.find("arm64-v8a") != std::string::npos, "64-bit only native code is incompatible with a 32-bit device");
+    // ARM libraries on an x86 emulator without translation, and with it.
+    const auto armApk = make({{"arm64-v8a", &arm64}, {"armeabi-v7a", &v7}});
+    CHECK(abi::check(armApk, emulator).kind == abi::Compatibility::Kind::Incompatible, "ARM-only libraries do not run on a plain x86 emulator");
+    CHECK(abi::check(armApk, translated).kind == abi::Compatibility::Kind::Compatible && abi::check(armApk, translated).chosen == "arm64-v8a", "ARM libraries run on an emulator that translates ARM");
+    // A device whose ABIs are not known yet.
+    CHECK(abi::check(everything, abi::deviceAbis("", "", "", "", "")).kind == abi::Compatibility::Kind::Unknown, "unknown device ABIs");
+    CHECK(abi::check(everything, abi::deviceAbis("", "", "", "", "")).present.size() == 4, "the APK side is still filled in");
+    // Legacy armeabi: only a device that lists armeabi can use it.
+    const auto armeabiApk = make({{"armeabi", &v7}});
+    const auto modern = abi::deviceAbis("arm64-v8a", "armeabi-v7a", "arm64-v8a,armeabi-v7a", "armeabi-v7a", "arm64-v8a");
+    CHECK(abi::check(armeabiApk, modern).kind == abi::Compatibility::Kind::Incompatible && abi::check(armeabiApk, phone).kind == abi::Compatibility::Kind::Compatible,
+          "armeabi libraries need a device that lists armeabi");
+    CHECK(abi::join({"a", "b", "c"}) == "a, b, c" && abi::join({}).empty() && abi::widthLabel(false, false) == "none" && abi::widthLabel(true, false) == "32-bit",
+          "label helpers");
+}
+
+static void testNativeArchitectures() {
+    std::printf("== native code on every architecture ==\n");
+    for (const AbiFixture& f : abiFixtures()) {
+        const std::string name = f.dir;
+        auto bytes = std::make_shared<std::vector<uint8_t>>(buildCodeElf(f.machine, f.is64, f.text, helloRodata(), f.syms, f.gotPlt));
+        std::string err;
+        auto elf = ElfFile::parse(bytes, "libabi.so", err);
+        CHECK(elf != nullptr && elf->is64() == f.is64 && elf->machine() == f.machine, (name + ": ELF" + (f.is64 ? "64" : "32") + " parses").c_str());
+        if (!elf) continue;
+        CHECK(NativeCode::unsupportedReason(*elf).empty(), (name + ": accepted for disassembly").c_str());
+        auto nc = NativeCode::build(elf, nullptr, err);
+        CHECK(nc != nullptr && nc->isa() == f.isa, (name + ": code analysis built with the right instruction set").c_str());
+        if (!nc) continue;
+        const NativeCode::Function* fn = nc->findFunction("f");
+        const NativeCode::Function* gn = nc->findFunction("g");
+        CHECK(fn && gn && fn->addr == 0x1000 && gn->addr == 0x1010, (name + ": functions found at their addresses").c_str());
+        if (!fn || !gn) continue;
+        CHECK(fn->thumb == (f.isa == NativeCode::Isa::Arm32), (name + ": Thumb flag").c_str());
+        const auto lines = nc->disassembleFunction(*fn, 64);
+        CHECK(!lines.empty() && lines.front().insn.mnemonic == f.firstMnemonic, (name + ": first instruction is " + f.firstMnemonic).c_str());
+        bool callsG = false, sawString = false, allKnown = true;
+        for (const auto& l : lines) {
+            if (l.insn.flow == native::Flow::Call && l.insn.hasTarget && l.insn.target == gn->addr && l.targetName == "g") callsG = true;
+            if (l.comment == "\"hello abi\"") sawString = true;
+            allKnown = allKnown && l.insn.known;
+        }
+        CHECK(callsG, (name + ": the call to g is resolved by name").c_str());
+        CHECK(sawString, (name + ": the string the code takes the address of is shown in the listing").c_str());
+        CHECK(allKnown, (name + ": every instruction decoded").c_str());
+        const auto strs = nc->stringRefs({}, 100);
+        CHECK(strs.size() == 1 && strs[0].text == "hello abi" && strs[0].addr == 0x2000 && strs[0].from >= fn->addr && strs[0].from < fn->addr + fn->size,
+              (name + ": string reference indexed with the address of the referring instruction").c_str());
+        const auto calls = nc->refsTo(gn->addr, 10);
+        CHECK(calls.size() == 1 && calls[0].kind == NativeCode::RefKind::Call && calls[0].from >= fn->addr && calls[0].from < fn->addr + fn->size, (name + ": call reference to g").c_str());
+        const auto cfg = nc->controlFlow(*fn, 64);
+        CHECK(!cfg.blocks.empty() && cfg.blocks.back().exit, (name + ": control-flow graph ends in a return").c_str());
+        const auto decomp = decompiler::decompileNative(*nc, *fn);
+        CHECK(decomp.error.find("AArch64") != std::string::npos, (name + ": the C decompiler says it only does AArch64").c_str());
+    }
+    // AArch64 still works through the same code path.
+    {
+        auto bytes = std::make_shared<std::vector<uint8_t>>(buildArm64Elf());
+        std::string err;
+        auto elf = ElfFile::parse(bytes, "libnat.so", err);
+        auto nc = elf ? NativeCode::build(elf, nullptr, err) : nullptr;
+        CHECK(nc && nc->isa() == NativeCode::Isa::Arm64 && !nc->functions().empty(), "AArch64 library still analysed");
+        if (nc) {
+            const auto* fn = nc->findFunction("f_entry");
+            CHECK(fn && !decompiler::decompileNative(*nc, *fn).lines.empty(), "AArch64 functions still decompile");
+        }
+    }
+    // Architectures without a decoder fail with a useful message, not a crash.
+    {
+        auto mips = std::make_shared<std::vector<uint8_t>>(buildCodeElf(8, false, {0, 0, 0, 0}, helloRodata(), {{"f", 0x1000, 4, true}}, false));
+        std::string err;
+        auto elf = ElfFile::parse(mips, "libmips.so", err);
+        CHECK(elf != nullptr, "MIPS ELF parses (sections and symbols work for any architecture)");
+        if (elf) {
+            const std::string why = NativeCode::unsupportedReason(*elf);
+            CHECK(why.find("MIPS") != std::string::npos && why.find("arm64-v8a") != std::string::npos, "MIPS: the reason names the architecture and what is supported");
+            CHECK(NativeCode::build(elf, nullptr, err) == nullptr && err == why, "MIPS: building the code analysis fails with that reason");
+        }
+        auto be = buildCodeElf(40, false, {0, 0, 0, 0}, helloRodata(), {}, false);
+        be[5] = 2;
+        auto bigEndian = ElfFile::parse(std::make_shared<std::vector<uint8_t>>(be), "libbe.so", err);
+        if (bigEndian) CHECK(NativeCode::build(bigEndian, nullptr, err) == nullptr && !err.empty(), "big-endian ARM is refused");
+    }
+}
+
+// The four libraries the Android SDK's renderscript runtime ships (real NDK output): optional, skipped without the SDK.
+static std::string androidSdkBlas() {
+    std::vector<fs::path> roots;
+    for (const char* var : {"ANDROID_HOME", "ANDROID_SDK_ROOT"})
+        if (const char* v = std::getenv(var)) roots.push_back(v);
+    if (const char* la = std::getenv("LOCALAPPDATA")) roots.push_back(fs::path(la) / "Android" / "Sdk");
+    if (const char* home = std::getenv("HOME")) roots.push_back(fs::path(home) / "Android" / "Sdk");
+    for (const fs::path& r : roots) {
+        std::error_code ec;
+        const fs::path tools = r / "build-tools";
+        if (!fs::is_directory(tools, ec)) continue;
+        for (const auto& v : fs::directory_iterator(tools, ec)) {
+            const fs::path blas = v.path() / "renderscript" / "lib" / "blas";
+            if (fs::exists(blas / "x86" / "libblasV8.so", ec) && fs::exists(blas / "arm64-v8a" / "libblasV8.so", ec)) return blas.string();
+        }
+    }
+    return {};
+}
+
+static void testRealLibraries() {
+    std::printf("== real NDK libraries (all four ABIs) ==\n");
+    const std::string blas = androidSdkBlas();
+    if (blas.empty()) {
+        std::printf("  skipped: no Android SDK renderscript libraries found\n");
+        return;
+    }
+    struct Expect {
+        const char* dir;
+        NativeCode::Isa isa;
+        bool is64;
+    };
+    for (const Expect& x : {Expect{"arm64-v8a", NativeCode::Isa::Arm64, true}, Expect{"armeabi-v7a", NativeCode::Isa::Arm32, false},
+                            Expect{"x86_64", NativeCode::Isa::X86_64, true}, Expect{"x86", NativeCode::Isa::X86, false}}) {
+        const std::string path = blas + "/" + x.dir + "/libblasV8.so";
+        std::ifstream in(fs::path(path), std::ios::binary);
+        auto bytes = std::make_shared<std::vector<uint8_t>>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const std::string name = x.dir;
+        CHECK(!bytes->empty(), (name + ": library read").c_str());
+        const abi::Info info = abi::fromElf(abi::peekElf(bytes->data(), bytes->size()));
+        CHECK(name == info.name, (name + ": ABI identified from the real ELF header, not the directory").c_str());
+        std::string err;
+        auto elf = ElfFile::parse(bytes, "libblasV8.so", err);
+        CHECK(elf && elf->is64() == x.is64, (name + ": real ELF parses").c_str());
+        auto nc = elf ? NativeCode::build(elf, nullptr, err) : nullptr;
+        CHECK(nc && nc->isa() == x.isa && nc->instructionCount() > 100000, (name + ": real library analysed (> 100k instructions)").c_str());
+        if (!nc) continue;
+        size_t plt = 0, sym = 0;
+        bool caxpyPlt = false, unknownOps = false;
+        for (const auto& f : nc->functions()) {
+            plt += f.kind == NativeCode::FunctionKind::Plt;
+            sym += f.kind == NativeCode::FunctionKind::Symbol;
+            caxpyPlt = caxpyPlt || f.name == "caxpy_@plt";
+        }
+        CHECK(plt > 100 && sym > 100, (name + ": PLT stubs and symbols discovered").c_str());
+        CHECK(caxpyPlt, (name + ": PLT stubs are named after the import they jump to").c_str());
+        bool foundString = false;
+        for (const auto& s : nc->stringRefs("Illegal TransA", 10)) foundString = foundString || s.text.find("Illegal TransA setting") != std::string::npos;
+        CHECK(foundString, (name + ": a string literal is found through the architecture's addressing pattern").c_str());
+        const auto* fn = nc->findFunction("cblas_caxpy");
+        if (fn) {
+            size_t bad = 0, total = 0;
+            for (const auto& l : nc->disassembleFunction(*fn, 4000)) {
+                ++total;
+                bad += l.insn.known ? 0 : 1;
+            }
+            unknownOps = total == 0 || bad * (x.isa == NativeCode::Isa::Arm32 ? 3 : 20) > total;  // ARM32: VFP / NEON still print as raw words
+            CHECK(!unknownOps, (name + ": cblas_caxpy decodes (under 5% unknown instructions)").c_str());
+        }
+    }
+}
+
+static void testArmFloatingPointAndFrida() {
+    std::printf("== ARM VFP / NEON and frida-server architecture ==\n");
+    const auto a32 = [](uint32_t w) {
+        const uint8_t b[4] = {static_cast<uint8_t>(w), static_cast<uint8_t>(w >> 8), static_cast<uint8_t>(w >> 16), static_cast<uint8_t>(w >> 24)};
+        return arm32::decode(b, 4, 0x1000, false);
+    };
+    const auto t32 = [](uint16_t h1, uint16_t h2) {
+        const uint8_t b[4] = {static_cast<uint8_t>(h1), static_cast<uint8_t>(h1 >> 8), static_cast<uint8_t>(h2), static_cast<uint8_t>(h2 >> 8)};
+        return arm32::decode(b, 4, 0x1000, true);
+    };
+    const auto text = [](const arm32::Insn& i) { return i.mnemonic + " " + i.operands; };
+    CHECK(text(t32(0xED90, 0x0A00)) == "vldr s0, [r0]", "Thumb vldr");
+    CHECK(text(t32(0xEE30, 0x0A81)) == "vadd.f32 s0, s1, s2", "Thumb vadd.f32");
+    CHECK(text(a32(0xEE300B01)) == "vadd.f64 d0, d0, d1", "A32 vadd.f64");
+    CHECK(text(a32(0xED2D8B02)) == "vpush {d8}", "A32 vpush");
+    CHECK(text(a32(0xF2220844)) == "vadd.i32 q0, q1, q2", "A32 NEON vadd.i32 on q registers");
+    CHECK(text(a32(0xF4200A8F)) == "vld1.32 {d0, d1}, [r0]", "A32 NEON vld1");
+    CHECK(a32(0xEE300B01).known && a32(0xF2220844).known, "VFP / NEON instructions are known");
+
+    // frida-server must match the device, not the host.
+    const fs::path dir = fs::temp_directory_path() / "apkspy_frida_arch";
+    fs::create_directories(dir);
+    const std::vector<uint8_t> rod = {'x', 0};
+    const auto write = [&](const char* name, const std::vector<uint8_t>& bytes) {
+        std::ofstream o(dir / name, std::ios::binary);
+        o.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        return (dir / name).string();
+    };
+    const std::string arm64 = write("arm64", buildArm64Elf());
+    const std::string x86 = write("x86", buildCodeElf(3, false, {0xC3}, rod, {}, false));
+    const std::string junk = write("junk", {1, 2, 3, 4});
+    const std::string mips = write("mips", buildCodeElf(8, false, {0, 0, 0, 0}, rod, {}, false));
+    const auto phone = abi::deviceAbis("arm64-v8a", "armeabi-v7a", "arm64-v8a,armeabi-v7a", "armeabi-v7a", "arm64-v8a");
+    const auto emu = abi::deviceAbis("x86_64", "", "x86_64,x86", "x86", "x86_64");
+    std::string abiName, err;
+    CHECK(fridaserver::checkBinary(arm64, phone, abiName, err) && abiName == "arm64-v8a", "arm64 frida-server on an arm64 phone");
+    CHECK(!fridaserver::checkBinary(arm64, emu, abiName, err) && err.find("x86_64") != std::string::npos, "arm64 frida-server on an x86_64 emulator is refused, naming the device ABIs");
+    CHECK(fridaserver::checkBinary(x86, emu, abiName, err) && abiName == "x86", "x86 frida-server runs on an x86_64 emulator (32-bit ABI supported)");
+    CHECK(!fridaserver::checkBinary(junk, phone, abiName, err) && err.find("not an ELF") != std::string::npos, "a file that is not an ELF binary");
+    CHECK(!fridaserver::checkBinary(mips, phone, abiName, err), "a MIPS binary is not an Android ABI");
+    CHECK(!fridaserver::checkBinary((dir / "missing").string(), phone, abiName, err), "a missing file");
+    CHECK(fridaserver::checkBinary(arm64, abi::DeviceAbis(), abiName, err), "device ABIs not read yet: the binary is not rejected");
+    fs::remove_all(dir);
+}
+
 static void testJniRegistrations() {
     std::printf("== jni registrations ==\n");
     for (bool relr : {false, true}) {
@@ -4895,6 +5479,48 @@ static std::shared_ptr<ApkAnalysis> loadApkForDev(const std::string& path) {
     return ApkAnalysis::build(std::move(dexes), stop);
 }
 
+// Dev mode: --native <library.so> [stats | <function name or 0xaddr> [count]]: builds the code analysis of a standalone
+// library and prints how it went (used to look at real libraries by hand; not part of the test run).
+static int devNative(const std::string& path, const std::string& what, size_t count) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return 1;
+    auto bytes = std::make_shared<std::vector<uint8_t>>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::string err;
+    auto elf = ElfFile::parse(bytes, "lib.so", err);
+    if (!elf) {
+        std::printf("parse failed: %s\n", err.c_str());
+        return 1;
+    }
+    auto nc = NativeCode::build(elf, nullptr, err);
+    if (!nc) {
+        std::printf("not analysed: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("%s: %zu instructions, %zu functions\n", NativeCode::isaName(nc->isa()), nc->instructionCount(), nc->functions().size());
+    if (what == "stats" || what.empty()) {
+        size_t plt = 0, sym = 0, disc = 0;
+        for (const auto& f : nc->functions()) (f.kind == NativeCode::FunctionKind::Plt ? plt : f.kind == NativeCode::FunctionKind::Symbol ? sym : disc)++;
+        const auto strs = nc->stringRefs({}, 1000000);
+        std::printf("symbols %zu, plt %zu, discovered %zu, strings referenced %zu\n", sym, plt, disc, strs.size());
+        size_t shown = 0;
+        for (const auto& f : nc->functions())
+            if (f.kind == NativeCode::FunctionKind::Plt && shown++ < 5) std::printf("  plt %s at 0x%llx\n", f.name.c_str(), static_cast<unsigned long long>(f.addr));
+        shown = 0;
+        for (const auto& s : strs)
+            if (shown++ < 8) std::printf("  string at 0x%llx used at 0x%llx: %s\n", static_cast<unsigned long long>(s.addr), static_cast<unsigned long long>(s.from), s.text.substr(0, 70).c_str());
+        return 0;
+    }
+    const NativeCode::Function* f = nc->findFunction(what);
+    if (!f) {
+        std::printf("no such function\n");
+        return 1;
+    }
+    std::printf("%s at 0x%llx size %llu%s\n", NativeCode::displayName(*f).c_str(), static_cast<unsigned long long>(f->addr), static_cast<unsigned long long>(f->size), f->thumb ? " (thumb)" : "");
+    for (const auto& l : nc->disassembleFunction(*f, count))
+        std::printf("  %llx  %-8s %s%s%s\n", static_cast<unsigned long long>(l.insn.addr), l.insn.mnemonic.c_str(), l.insn.operands.c_str(), l.comment.empty() ? "" : "   ; ", l.comment.c_str());
+    return 0;
+}
+
 static int devDecompile(const std::string& apk, const std::string& what) {
     auto a = loadApkForDev(apk);
     if (!a) return 1;
@@ -4962,6 +5588,7 @@ static int devDecompile(const std::string& apk, const std::string& what) {
 int main(int argc, char** argv) {
     // Unbuffered: when a test crashes, the sections printed so far are not lost with the buffer.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+    if (argc >= 3 && std::string(argv[1]) == "--native") return devNative(argv[2], argc > 3 ? argv[3] : "stats", argc > 4 ? static_cast<size_t>(std::atoi(argv[4])) : 40);
     if (argc == 4 && std::string(argv[1]) == "--decompile") return devDecompile(argv[2], argv[3]);
     if (const char* only = std::getenv("APKSPY_TEST_ONLY"); only && std::string(only) == "websocket") {
         testWebSocketCapture();
@@ -5033,6 +5660,14 @@ int main(int argc, char** argv) {
     testFridaServer();
     testShortcuts();
     testStringSwitch();
+    testStringEncodings();
+    testAbiIdentification();
+    testAbiInventory();
+    testDeviceAbis();
+    testAbiCompatibility();
+    testNativeArchitectures();
+    testRealLibraries();
+    testArmFloatingPointAndFrida();
     testJniRegistrations();
     testBundle();
     testDexContainer();

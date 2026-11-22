@@ -1,4 +1,6 @@
 #include "debug/FridaBridge.hpp"
+#include <fstream>
+#include "core/Paths.hpp"
 #include <cctype>
 #include "core/Process.hpp"
 #include "core/ScriptRunner.hpp"
@@ -140,6 +142,29 @@ bool validRemotePath(const std::string& p) {
     if (p.empty() || p[0] != '/') return false;
     for (char c : p)
         if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == '/' || c == '-')) return false;
+    return true;
+}
+
+bool checkBinary(const std::string& localBinary, const abi::DeviceAbis& device, std::string& abiName, std::string& error) {
+    std::ifstream in(pathutil::fromUtf8(localBinary), std::ios::binary);
+    uint8_t head[64] = {};
+    in.read(reinterpret_cast<char*>(head), sizeof head);
+    const abi::ElfIdent id = abi::peekElf(head, static_cast<size_t>(in.gcount()));
+    if (!id.valid) {
+        error = "not an ELF binary: pick the frida-server-<version>-android-<arch> file for the device";
+        return false;
+    }
+    const abi::Info info = abi::fromElf(id);
+    if (info.id == abi::Id::Unknown) {
+        error = "frida-server is for " + abi::machineName(id.machine) + (id.is64 ? " (64-bit)" : " (32-bit)") + ", which is not an Android ABI";
+        return false;
+    }
+    abiName = info.name;
+    if (device.known() && !device.supports(info.name)) {
+        error = std::string("this frida-server is ") + info.name + " but the device runs " + abi::join(device.list) + ": use the android-" +
+                (device.primary == "arm64-v8a" ? "arm64" : device.primary == "armeabi-v7a" ? "arm" : device.primary) + " build";
+        return false;
+    }
     return true;
 }
 

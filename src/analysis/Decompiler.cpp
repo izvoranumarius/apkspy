@@ -3010,11 +3010,11 @@ private:
         }
         if (l.dataAddr && hasD && !l.dataRead && (m == "add" || m == "adr")) {
             std::string e = l.comment.empty() ? hex(l.dataAddr) : l.comment;
-            const bool wideLit = e.rfind("u\"", 0) == 0;
+            const bool wideLit = e.rfind("u\"", 0) == 0, wide32Lit = e.rfind("U\"", 0) == 0;
             if (!e.empty() && e[0] == '"') e = cQuote(nc_.cStringAt(l.dataAddr));
-            else if (wideLit) e = "u" + cQuote(nc_.stringAt(l.dataAddr));
+            else if (wideLit || wide32Lit) e = std::string(wide32Lit ? "U" : "u") + cQuote(nc_.stringAt(l.dataAddr));
             else if (!e.empty() && e.rfind("0x", 0) != 0) e = "&" + e;
-            define(blk, st, d, e, true, addr, false, false, true, e[0] == '"' ? "char *" : wideLit ? "char16_t *" : "void *");
+            define(blk, st, d, e, true, addr, false, false, true, e[0] == '"' ? "char *" : wideLit ? "char16_t *" : wide32Lit ? "char32_t *" : "void *");
             st.consts[d.id] = st.addrs[d.id] = l.dataAddr;
             return;
         }
@@ -3148,13 +3148,13 @@ private:
                 const auto c = st.addrs.find(src.id);
                 if (c != st.addrs.end()) {
                     const uint64_t v = m == "add" ? c->second + static_cast<uint64_t>(imm) : c->second - static_cast<uint64_t>(imm);
-                    bool wide = false;
-                    const std::string str = nc_.stringAt(v, &wide);
+                    bool wide = false, utf32 = false;
+                    const std::string str = nc_.stringAt(v, &wide, &utf32);
                     std::string e;
-                    if (looksLikeText(str)) e = (wide ? "u" : "") + cQuote(str);
+                    if (looksLikeText(str)) e = (utf32 ? "U" : wide ? "u" : "") + cQuote(str);
                     else if (const std::string sym = nc_.symbolize(v); !sym.empty()) e = "&" + sym;
                     else e = hex(v);
-                    define(blk, st, d, e, true, addr, false, false, true, e[0] == '"' ? "char *" : wide && e[0] == 'u' ? "char16_t *" : "void *");
+                    define(blk, st, d, e, true, addr, false, false, true, e[0] == '"' ? "char *" : wide && e[0] == 'U' ? "char32_t *" : wide && e[0] == 'u' ? "char16_t *" : "void *");
                     st.consts[d.id] = st.addrs[d.id] = v;
                     return;
                 }
@@ -3692,6 +3692,9 @@ Output decompileMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m) {
 }
 
 Output decompileNative(const NativeCode& nc, const NativeCode::Function& f) {
+    if (nc.isa() != NativeCode::Isa::Arm64)
+        return {{}, std::string("the built-in decompiler supports AArch64 (arm64-v8a) libraries; this one is ") + NativeCode::isaName(nc.isa()) +
+                        ". The disassembly and control-flow views work for it."};
     try {
         return NativeDecompiler(nc, f).run();
     } catch (const std::exception& e) {

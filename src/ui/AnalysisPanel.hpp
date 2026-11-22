@@ -182,9 +182,13 @@ private:
     // Native
     struct LibRow {
         std::string path;
-        std::string abi;
+        std::string abi;      // the lib/<abi> directory
         uint64_t size = 0;
+        std::string arch;     // what the ELF header says ("AArch64"), "" when unreadable
+        bool mismatch = false;       // header and directory disagree
+        bool disassemblable = false;
     };
+    std::shared_ptr<const abi::ApkNative> libInventory_;
     std::vector<LibRow> libs_;
     std::string libsGroup_;
     int selectedLib_ = -1;

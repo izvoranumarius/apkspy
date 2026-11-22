@@ -122,6 +122,18 @@ bool ApkArchive::readEntry(const std::string& entryPath, std::vector<uint8_t>& o
     return true;
 }
 
+bool ApkArchive::readHead(const std::string& entryPath, size_t n, std::vector<uint8_t>& out) const {
+    out.clear();
+    if (!opened_ || n == 0) return false;
+    mz_zip_reader_extract_iter_state* state = mz_zip_reader_extract_file_iter_new(&zip_, entryPath.c_str(), 0);
+    if (!state) return false;
+    out.resize(n);
+    const size_t got = mz_zip_reader_extract_iter_read(state, out.data(), n);
+    mz_zip_reader_extract_iter_free(state);
+    out.resize(got);
+    return got > 0;
+}
+
 std::vector<ApkArchive::Entry> ApkArchive::entries() const {
     std::vector<Entry> out;
     if (!opened_) return out;

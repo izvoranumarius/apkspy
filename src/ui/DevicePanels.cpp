@@ -7,6 +7,7 @@
 #include "app/Theme.hpp"
 #include "core/Settings.hpp"
 #include "core/TextUtils.hpp"
+#include "ui/AbiUi.hpp"
 #include "ui/UiUtil.hpp"
 
 namespace {
@@ -121,7 +122,7 @@ void DevicesPanel::drawEmulators() {
         ImGui::SetTooltip("Launch with -http-proxy 127.0.0.1:%d so the whole VM's traffic goes through ApkSpy",
                           settings_.getInt(Settings::kTrafficPort, 8899));
     ImGui::SameLine();
-    if (ImGui::SmallButton("Options##emu")) ImGui::OpenPopup("##emuopts");
+    if (ui::smallButton("Options##emu")) ImGui::OpenPopup("##emuopts");
     if (ImGui::BeginPopup("##emuopts")) {
         ImGui::Checkbox("Writable system (-writable-system)", &launchOpts_.writableSystem);
         ImGui::Checkbox("Cold boot (-no-snapshot-load)", &launchOpts_.coldBoot);
@@ -227,6 +228,7 @@ void DevicesPanel::drawContents() {
         ImGui::EndCombo();
     }
     if (selected.empty()) return;
+    drawDeviceAbis(selected);
 
     // Auto-refresh the process list every few seconds while visible.
     const auto now = std::chrono::steady_clock::now();
@@ -319,6 +321,40 @@ void DevicesPanel::drawContents() {
         ImGui::EndTable();
     }
     if (devices_.monitoring()) drawMonitor();
+}
+
+// What the selected device is and which ABIs it runs, and whether each APK of the project can run on it.
+void DevicesPanel::drawDeviceAbis(const std::string& serial) {
+    const DeviceService::DeviceInfo info = devices_.deviceInfo(serial);
+    if (!info.loaded) {
+        ImGui::TextDisabled("Reading device properties...");
+        return;
+    }
+    if (info.failed) {
+        ImGui::TextDisabled("Could not read the device's ABIs (getprop failed)");
+        return;
+    }
+    std::string what = info.manufacturer.empty() ? info.model : info.manufacturer + " " + info.model;
+    if (!info.release.empty()) what += "  |  Android " + info.release + (info.sdk.empty() ? std::string() : " (API " + info.sdk + ")");
+    ImGui::PushTextWrapPos(0.f);
+    ImGui::TextDisabled("%s", what.c_str());
+    ImGui::TextDisabled("ABIs: %s  |  runs %s apps", abi::join(info.abis.list).c_str(), abi::widthLabel(info.abis.supports32(), info.abis.supports64()).c_str());
+    ImGui::PopTextWrapPos();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("primary %s, secondary %s\n64-bit: %s\n32-bit: %s", info.abis.primary.empty() ? "-" : info.abis.primary.c_str(),
+                          info.abis.secondary.empty() ? "-" : info.abis.secondary.c_str(), abi::join(info.abis.list64).c_str(), abi::join(info.abis.list32).c_str());
+    const auto apks = workspace_.apkRoots();
+    if (apks.empty()) return;
+    if (ImGui::CollapsingHeader("APK compatibility")) {
+        for (const Root* apk : apks) {
+            const auto native = workspace_.analysis().nativeInventory(apk->apkPath);
+            const abi::Compatibility c = abi::check(*native, info.abis);
+            ImGui::PushTextWrapPos(0.f);
+            ImGui::TextUnformatted(apk->title.c_str());
+            ImGui::TextColored(abiui::compatColor(c.kind), "%s", c.summary.c_str());
+            ImGui::PopTextWrapPos();
+        }
+    }
 }
 
 void DevicesPanel::drawMonitor() {

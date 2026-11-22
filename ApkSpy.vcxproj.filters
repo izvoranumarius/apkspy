@@ -911,6 +911,12 @@
     <ClCompile Include="src\mcp\McpTools.cpp">
       <Filter>Source Files\mcp</Filter>
     </ClCompile>
+    <ClCompile Include="src\analysis\Abi.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\X86.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
     <ClCompile Include="src\analysis\Insights.cpp">
       <Filter>Source Files\analysis</Filter>
     </ClCompile>

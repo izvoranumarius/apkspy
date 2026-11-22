@@ -1193,24 +1193,81 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                      return McpToolResult::ok(std::move(out));
                  });
 
+    const auto stringArray = [](const std::vector<std::string>& v) {
+        Json a = Json::array();
+        for (const std::string& x : v) a.push(x);
+        return a;
+    };
+    const auto compatibilityJson = [stringArray](const abi::ApkNative& inv, const abi::DeviceAbis& abis, const std::string& serial) {
+        const abi::Compatibility c = abi::check(inv, abis);
+        const char* kind = c.kind == abi::Compatibility::Kind::NoNativeCode ? "no_native_code"
+                           : c.kind == abi::Compatibility::Kind::Compatible ? "compatible"
+                           : c.kind == abi::Compatibility::Kind::Incompatible ? "incompatible" : "unknown";
+        Json device = Json::obj({{"serial", serial}, {"primary_abi", abis.primary}, {"secondary_abi", abis.secondary},
+                                 {"abis", stringArray(abis.list)}, {"abis_32bit", stringArray(abis.list32)}, {"abis_64bit", stringArray(abis.list64)},
+                                 {"supports_32bit", abis.supports32()}, {"supports_64bit", abis.supports64()}});
+        return Json::obj({{"result", kind}, {"summary", c.summary}, {"loaded_abi", c.chosen}, {"apk_abis", stringArray(c.present)},
+                          {"compatible_abis", stringArray(c.compatible)}, {"incompatible_abis", stringArray(c.incompatible)},
+                          {"native_code", c.codeWidth}, {"device", std::move(device)}});
+    };
+
     // ------------------------------------------------------------------ native
-    server.addTool({"list_native_libs", "Native libraries", "Native libraries (lib/<abi>/*.so) shipped in the APK.",
-                    schema::object({{"apk", apkArg()}}), true, false,
-                    [&ws](const Json& args, McpToolContext&) -> McpToolOutcome {
+    server.addTool({"list_native_libs", "Native libraries",
+                    "Native libraries (lib/<abi>/*.so) shipped in the APK, each with the architecture its ELF header says (elf_abi, "
+                    "bits), whether that matches its directory, and whether ApkSpy can disassemble it; plus the ABI directories "
+                    "present and the width of the native code. With `serial` (or a selected device) it adds whether the device can "
+                    "run them.",
+                    schema::object({{"apk", apkArg()}, {"serial", str("Device serial to check compatibility against (optional)")}}), true, false,
+                    [&ws, devices, compatibilityJson, stringArray](const Json& args, McpToolContext&) -> McpToolOutcome {
                         std::string err;
                         Root* apk = resolveApk(ws, args, err);
                         if (!apk) return McpToolResult::error(err);
+                        const auto inv = ws.analysis().nativeInventory(apk->apkPath);
                         Json list = Json::array();
-                        const TreeNode* lib = apk->tree ? apk->tree->findChild("lib") : nullptr;
-                        if (lib)
-                            for (const auto& abi : lib->children())
-                                for (const auto& so : abi->children()) {
-                                    if (so->isFolder()) continue;
-                                    uint64_t size = 0;
-                                    apk->source->sizeOf(*so, size);
-                                    list.push(Json::obj({{"path", so->path()}, {"abi", abi->name()}, {"size", static_cast<unsigned long long>(size)}}));
-                                }
-                        return McpToolResult::ok(Json::obj({{"libraries", std::move(list)}}));
+                        for (const abi::NativeLib& l : inv->libs) {
+                            Json j = Json::obj({{"path", l.path}, {"abi", l.dirName}, {"size", static_cast<unsigned long long>(l.size)},
+                                                {"valid_elf", l.validElf}, {"mismatch", l.mismatch()}, {"disassemblable", l.effective().disassemblable}});
+                            if (l.validElf) {
+                                j.set("elf_abi", l.elf.id == abi::Id::Unknown ? std::string() : std::string(l.elf.name));
+                                j.set("architecture", l.elf.id == abi::Id::Unknown ? abi::machineName(l.ident.machine) : std::string(l.elf.arch));
+                                j.set("bits", l.ident.is64 ? 64 : 32);
+                            }
+                            list.push(std::move(j));
+                        }
+                        Json dirs = Json::array();
+                        for (const std::string& d : inv->dirs) dirs.push(d);
+                        Json out = Json::obj({{"libraries", std::move(list)}, {"abis", std::move(dirs)},
+                                              {"has_32bit", inv->has32()}, {"has_64bit", inv->has64()},
+                                              {"native_code", inv->empty() ? std::string("none") : abi::widthLabel(inv->has32(), inv->has64())}});
+                        // Optional: compatibility with a device (a connected one; no adb round trip when none is selected).
+                        const std::string serial = argStr(args, "serial").empty() ? (devices ? devices->selected() : std::string()) : argStr(args, "serial");
+                        if (devices && !serial.empty()) {
+                            const DeviceService::DeviceInfo info = devices->deviceInfo(serial);
+                            if (info.loaded && info.abis.known()) out.set("compatibility", compatibilityJson(*inv, info.abis, serial));
+                        }
+                        return McpToolResult::ok(std::move(out));
+                    }});
+
+    server.addTool({"apk_compatibility", "APK / device ABI compatibility",
+                    "Whether an APK's native libraries can run on a connected device: the ABIs the APK ships, the device's primary, "
+                    "secondary and complete ABI lists (32 / 64-bit), the ABI Android would load, and which shipped ABIs are unusable. "
+                    "An APK without native libraries runs on any device.",
+                    schema::object({{"apk", apkArg()}, {"serial", str("Device serial (optional)")}}), true, false,
+                    [&ws, devices, compatibilityJson](const Json& args, McpToolContext&) -> McpToolOutcome {
+                        std::string err;
+                        Root* apk = resolveApk(ws, args, err);
+                        if (!apk) return McpToolResult::error(err);
+                        if (!devices) return McpToolResult::error("device access is not available in this session");
+                        const auto inv = ws.analysis().nativeInventory(apk->apkPath);
+                        const std::string given = argStr(args, "serial");
+                        return McpToolOutcome::later([devices, inv, given, compatibilityJson](McpToolContext&) {
+                            std::string e;
+                            const std::string serial = given.empty() ? devices->selected() : given;
+                            if (serial.empty()) return McpToolResult::error("no device: connect one or pass `serial`");
+                            const abi::DeviceAbis abis = devices->adb().abis(serial, e);
+                            if (!abis.known()) return McpToolResult::error(e.empty() ? "could not read the device's ABIs" : e);
+                            return McpToolResult::ok(compatibilityJson(*inv, abis, serial));
+                        });
                     }});
 
     server.addTool({"inspect_native_lib", "Inspect native library",
@@ -1278,7 +1335,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             if (argBool(args, "include_strings", false)) {
                                 Json strs = Json::array();
                                 for (const auto& s : elf->strings(6, limit))
-                                    strs.push(Json::obj({{"offset", static_cast<unsigned long long>(s.offset)}, {"value", s.value}}));
+                                    strs.push(Json::obj({{"offset", static_cast<unsigned long long>(s.offset)}, {"value", s.value}, {"encoding", s.encoding}}));
                                 j.set("strings", std::move(strs));
                             }
                             return McpToolResult::ok(std::move(j));
@@ -1334,7 +1391,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
     };
 
     nativeTool("native_functions", "Native functions",
-               "Functions of an arm64 native library: symbols, PLT import stubs (name@plt) and unnamed call "
+               "Functions of a native library (arm64-v8a, armeabi-v7a, x86 or x86_64): symbols, PLT import stubs (name@plt) and unnamed call "
                "targets (sub_<addr>), with address, size and whether they are exported / JNI entry points.",
                Json::obj({{"filter", str("Only names containing this text (raw or demangled)")},
                           {"exported_only", boolean("Only exported functions")},
@@ -1368,7 +1425,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                });
 
     nativeTool("disassemble_native", "Disassemble native code",
-               "AArch64 disassembly of a function (by name, demangled name or 0x address) or of an address "
+               "Disassembly (AArch64, ARM / Thumb, x86 or x86-64 by the library) of a function (by name, demangled name or 0x address) or of an address "
                "range. Call targets are named (imports as name@plt) and adrp+add/ldr pairs are resolved to the "
                "string literal, GOT slot or symbol they address.",
                Json::obj({{"function", str("Function name or 0x address inside it")},
@@ -1408,7 +1465,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                });
 
     server.addTool({"decompile_native", "Decompile native code (built-in)",
-                    "C-like pseudo-code of an arm64 function from ApkSpy's built-in decompiler (the Decompiler panel's "
+                    "C-like pseudo-code of an arm64-v8a function (AArch64 only; other ABIs report so) from ApkSpy's built-in decompiler (the Decompiler panel's "
                     "output, with the user's variable names - see rename_variable): calls named, adrp pairs resolved "
                     "to strings / symbols, frame setup hidden, control flow structured into if / while / switch.",
                     schema::object({{"apk", apkArg()},
@@ -1460,7 +1517,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                     }});
 
     nativeTool("native_xrefs", "Native cross-references",
-               "References in an arm64 library: who calls / jumps to / takes the address of a function or "
+               "References in a native library (any supported ABI): who calls / jumps to / takes the address of a function or "
                "address (direction 'to'), or what a function calls and references (direction 'from').",
                Json::obj({{"target", str("Function name or 0x address")},
                           {"direction", strEnum("to (default) or from", {"to", "from"})},
@@ -1484,7 +1541,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                            Json j = Json::obj({{"kind", refKind(r.kind)}, {"at", hexStr(r.from)}, {"target", hexStr(r.target)}});
                            if (std::string s = nc.symbolize(r.target); !s.empty()) j.set("target_name", json::sanitizeUtf8(s));
                            if (r.kind == NativeCode::RefKind::Data)
-                               if (std::string str = nc.cStringAt(r.target); !str.empty()) j.set("string", json::sanitizeUtf8(str));
+                               if (std::string str = nc.stringAt(r.target); !str.empty()) j.set("string", json::sanitizeUtf8(str));
                            list.push(std::move(j));
                        }
                    } else {
@@ -1500,7 +1557,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                });
 
     nativeTool("native_cfg", "Native control-flow graph",
-               "Basic blocks of an arm64 function with their successors (taken / fallthrough), for reasoning about "
+               "Basic blocks of a native function (any supported ABI) with their successors (taken / fallthrough), for reasoning about "
                "its structure. Indirect jumps (branch tables) end a block without successors.",
                Json::obj({{"function", str("Function name or 0x address inside it")},
                           {"max_instructions", integer("Max instructions (default 20000)", 1, 200000)}}),
@@ -1532,7 +1589,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                });
 
     nativeTool("native_strings", "Native string references",
-               "String literals that arm64 code actually references (through adrp + add / ldr), each with the "
+               "String literals that native code actually references (adrp + add on AArch64, literal pools and movw / movt + add pc on ARM, RIP-relative operands on x86-64, [ebx + disp] on x86), each with the "
                "function that uses it - more precise than scanning .rodata.",
                Json::obj({{"filter", str("Only strings containing this text")},
                           {"limit", integer("Max results (default 300)", 1, 20000)}}),
@@ -1540,7 +1597,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                    Json list = Json::array();
                    for (const auto& s : nc.stringRefs(argStr(args, "filter"), static_cast<size_t>(argInt(args, "limit", 300)))) {
                        Json j = Json::obj({{"string", json::sanitizeUtf8(s.text)}, {"address", hexStr(s.addr)},
-                                           {"used_at", hexStr(s.from)}});
+                                           {"used_at", hexStr(s.from)}, {"encoding", s.encoding}});
                        if (std::string fn = nc.symbolize(s.from); !fn.empty()) j.set("function", json::sanitizeUtf8(fn));
                        list.push(std::move(j));
                    }
@@ -2003,7 +2060,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             return McpToolResult::ok(Json::obj({{"shown", method}}));
                         }});
         server.addTool({"show_native", "Show native code in ApkSpy",
-                        "Opens the Analysis panel's native view on a function or address of an arm64 library so "
+                        "Opens the Analysis panel's native view on a function or address of a native library so "
                         "the user sees the disassembly you are discussing.",
                         schema::object({{"apk", apkArg()},
                                         {"path", str("Library entry, e.g. lib/arm64-v8a/libfoo.so")},
@@ -2038,16 +2095,21 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                         });
                     }});
 
-    server.addTool({"device_info", "Device properties", "Model, Android version, ABI and build flags of a device.",
+    server.addTool({"device_info", "Device properties", "Model, Android version, ABIs (primary, secondary, full list, 32 / 64-bit support) and build flags of a device.",
                     schema::object({{"serial", str("Device serial (optional)")}}), true, true,
-                    [&dev](const Json& args, McpToolContext&) -> McpToolOutcome {
-                        return McpToolOutcome::later([&dev, args](McpToolContext&) {
+                    [&dev, stringArray](const Json& args, McpToolContext&) -> McpToolOutcome {
+                        return McpToolOutcome::later([&dev, args, stringArray](McpToolContext&) {
                             std::string err;
                             const std::string serial = resolveSerial(dev, args, err);
                             if (serial.empty()) return McpToolResult::error(err);
                             Json props = Json::object();
-                            for (const auto& kv : dev.adb().properties(serial, err)) props.set(kv.first, kv.second);
-                            return McpToolResult::ok(Json::obj({{"serial", serial}, {"properties", std::move(props)}}));
+                            const auto all = dev.adb().properties(serial, err);
+                            for (const auto& kv : all) props.set(kv.first, kv.second);
+                            const abi::DeviceAbis abis = adb::Adb::abisFromProperties(all);
+                            Json abiJson = Json::obj({{"primary", abis.primary}, {"secondary", abis.secondary}, {"list", stringArray(abis.list)},
+                                                      {"list_32bit", stringArray(abis.list32)}, {"list_64bit", stringArray(abis.list64)},
+                                                      {"supports_32bit", abis.supports32()}, {"supports_64bit", abis.supports64()}});
+                            return McpToolResult::ok(Json::obj({{"serial", serial}, {"properties", std::move(props)}, {"abis", std::move(abiJson)}}));
                         });
                     }});
 

@@ -218,6 +218,31 @@ std::vector<std::string> AnalysisService::groups() const {
     return out;
 }
 
+std::shared_ptr<const abi::ApkNative> AnalysisService::nativeInventory(const std::string& apkPath) {
+    {
+        std::lock_guard<std::mutex> lock(elfMutex_);
+        auto it = inventoryCache_.find(apkPath);
+        if (it != inventoryCache_.end()) return it->second;
+    }
+    ApkArchive archive;
+    abi::ApkNative result;
+    if (archive.open(apkPath)) {
+        std::vector<abi::LibEntry> entries;
+        std::vector<uint8_t> head;
+        for (const ApkArchive::Entry& e : archive.entries()) {
+            if (e.path.rfind("lib/", 0) != 0 || e.path.size() < 8 || e.path.compare(e.path.size() - 3, 3, ".so") != 0) continue;
+            abi::LibEntry le;
+            le.path = e.path;
+            le.size = e.size;
+            if (archive.readHead(e.path, 64, head)) le.ident = abi::peekElf(head.data(), head.size());
+            entries.push_back(std::move(le));
+        }
+        result = abi::inventory(entries);
+    }
+    std::lock_guard<std::mutex> lock(elfMutex_);
+    return inventoryCache_.emplace(apkPath, std::make_shared<const abi::ApkNative>(std::move(result))).first->second;
+}
+
 std::shared_ptr<const ElfFile> AnalysisService::loadElf(const std::string& apkPath, const std::string& entry,
                                                         std::string& error) {
     const std::string key = apkPath + '\n' + entry;

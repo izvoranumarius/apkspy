@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include "app/Theme.hpp"
+#include "ui/AbiUi.hpp"
 
 void OverviewPanel::drawContents() {
     auto apks = workspace_.apkRoots();
@@ -111,6 +112,13 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
             ImGui::PopID();
             if (dangerous && ImGui::IsItemHovered()) ImGui::SetTooltip("Runtime (dangerous) permission");
         }
+    }
+
+    // Native code ----------------------------------------------------------
+    {
+        const auto native = workspace_.analysis().nativeInventory(apk.apkPath);
+        std::snprintf(header, sizeof header, "Native code (%d)", static_cast<int>(native->libs.size()));
+        if (ImGui::CollapsingHeader(header, native->empty() ? 0 : ImGuiTreeNodeFlags_DefaultOpen)) abiui::drawNativeSummary(*native, workspace_.deviceAbis());
     }
 
     // Components -----------------------------------------------------------

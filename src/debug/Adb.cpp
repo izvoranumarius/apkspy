@@ -475,14 +475,19 @@ std::vector<std::pair<std::string, std::string>> Adb::properties(const std::stri
         error = "invalid device serial";
         return out;
     }
-    static const char* kProps[] = {"ro.product.manufacturer", "ro.product.model",   "ro.build.version.release",
-                                   "ro.build.version.sdk",     "ro.product.cpu.abi", "ro.debuggable",
-                                   "ro.build.type",            "ro.secure"};
     // One `getprop` dump ("[key]: [value]" lines) instead of a call per key.
     std::vector<std::string> argv = base(serial);
     argv.push_back("shell");
     argv.push_back("getprop");
-    const std::string dump = run(argv, error, 8000);
+    return parseProperties(run(argv, error, 8000));
+}
+
+std::vector<std::pair<std::string, std::string>> Adb::parseProperties(const std::string& dump) {
+    static const char* kProps[] = {"ro.product.manufacturer", "ro.product.model",       "ro.build.version.release",
+                                   "ro.build.version.sdk",     "ro.product.cpu.abi",     "ro.product.cpu.abi2",
+                                   "ro.product.cpu.abilist",   "ro.product.cpu.abilist32", "ro.product.cpu.abilist64",
+                                   "ro.debuggable",            "ro.build.type",          "ro.secure"};
+    std::vector<std::pair<std::string, std::string>> out;
     for (const char* prop : kProps) {
         const std::string key = std::string("[") + prop + "]: [";
         const size_t at = dump.find(key);
@@ -495,6 +500,20 @@ std::vector<std::pair<std::string, std::string>> Adb::properties(const std::stri
         out.emplace_back(prop, v);
     }
     return out;
+}
+
+abi::DeviceAbis Adb::abisFromProperties(const std::vector<std::pair<std::string, std::string>>& props) {
+    const auto get = [&](const char* key) {
+        for (const auto& kv : props)
+            if (kv.first == key) return kv.second;
+        return std::string();
+    };
+    return abi::deviceAbis(get("ro.product.cpu.abi"), get("ro.product.cpu.abi2"), get("ro.product.cpu.abilist"),
+                           get("ro.product.cpu.abilist32"), get("ro.product.cpu.abilist64"));
+}
+
+abi::DeviceAbis Adb::abis(const std::string& serial, std::string& error) const {
+    return abisFromProperties(properties(serial, error));
 }
 
 }  // namespace adb

@@ -91,12 +91,13 @@ public:
     std::vector<uint8_t> bytesAt(uint64_t offset, size_t len) const;
     const std::vector<uint8_t>& data() const { return *data_; }
 
-    // Printable ASCII runs (>= minLen) inside read-only data sections
-    // (.rodata, .data.rel.ro, ...); falls back to the whole file when the
-    // section table is missing.
+    // Text runs (>= minLen characters) inside read-only data sections (.rodata, .data.rel.ro, ...); falls back
+    // to the whole file when the section table is missing. Finds ASCII, UTF-8, UTF-16 (LE and BE) and
+    // UTF-32 LE (wchar_t); `value` is always UTF-8 and `encoding` names what the bytes were.
     struct StringHit {
         uint64_t offset;
         std::string value;
+        const char* encoding = "ascii";  // "ascii", "utf-8", "utf-16le", "utf-16be", "utf-32le"
     };
     std::vector<StringHit> strings(size_t minLen, size_t limit) const;
 

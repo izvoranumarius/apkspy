@@ -55,6 +55,679 @@ Insn unknown16(Insn in, uint16_t h) {
     return in;
 }
 
+uint32_t armImmediate(uint32_t w);
+
+const char* shiftName(unsigned t) {
+    static const char* n[4] = {"lsl", "lsr", "asr", "ror"};
+    return n[t & 3];
+}
+
+// "rm" or "rm, lsl #n" (the immediate-shift forms; a zero shift amount means 32 for lsr / asr, rrx for ror).
+std::string shiftedReg(unsigned rm, unsigned type, unsigned imm) {
+    if (type == 0 && imm == 0) return reg(rm);
+    if (type == 3 && imm == 0) return reg(rm) + ", rrx";
+    if ((type == 1 || type == 2) && imm == 0) imm = 32;
+    return reg(rm) + ", " + shiftName(type) + " #" + std::to_string(imm);
+}
+
+uint32_t ror32(uint32_t v, unsigned n) { return n ? (v >> n) | (v << (32 - n)) : v; }
+
+// Thumb-2 modified immediate (i:imm3:imm8).
+uint32_t thumbExpandImm(uint32_t imm12) {
+    if ((imm12 >> 10) == 0) {
+        const uint32_t b = imm12 & 0xFF;
+        switch ((imm12 >> 8) & 3) {
+        case 0: return b;
+        case 1: return (b << 16) | b;
+        case 2: return (b << 24) | (b << 8);
+        default: return b * 0x01010101u;
+        }
+    }
+    return ror32(0x80 | (imm12 & 0x7F), (imm12 >> 7) & 31);
+}
+
+std::string itName(unsigned firstcond, unsigned mask) {
+    unsigned low = 0;
+    while (low < 4 && !((mask >> low) & 1)) ++low;
+    std::string s = "it";
+    for (int b = 3; b > static_cast<int>(low); --b) s += (((mask >> b) & 1) == (firstcond & 1)) ? 't' : 'e';
+    return s;
+}
+
+
+// VFP (scalar floating point) in either instruction set: Thumb-2 and A32 share the layout of bits 27..0, so `w` is the
+// A32 word or (h1 << 16) | h2. NEON stays unnamed. Returns false for anything that is not VFP.
+std::string hex8(unsigned v) {
+    char b[8];
+    std::snprintf(b, sizeof b, "%02x", v);
+    return b;
+}
+
+std::string vfpReg(bool dbl, unsigned v, unsigned hi) {
+    return dbl ? "d" + std::to_string((hi << 4) | v) : "s" + std::to_string((v << 1) | hi);
+}
+
+bool vfpDecode(Insn& in, uint32_t w, bool thumb, const std::string& c) {
+    const unsigned coproc = (w >> 8) & 15;
+    if (coproc != 10 && coproc != 11) return false;
+    const bool dbl = coproc == 11;
+    const unsigned dBit = (w >> 22) & 1, vd = (w >> 12) & 15, nBit = (w >> 7) & 1, vn = (w >> 16) & 15, mBit = (w >> 5) & 1, vm = w & 15;
+    const std::string fmt = dbl ? ".f64" : ".f32";
+    const unsigned top = (w >> 24) & 15;
+    if ((w & 0x0F200000) == 0x0D000000) {  // vldr / vstr
+        const bool load = (w >> 20) & 1, up = (w >> 23) & 1;
+        const unsigned rn = (w >> 16) & 15;
+        const uint32_t imm = (w & 0xFF) * 4;
+        in.mnemonic = std::string(load ? "vldr" : "vstr") + c;
+        in.operands = vfpReg(dbl, vd, dBit) + ", [" + reg(rn) + (imm ? std::string(up ? ", #" : ", #-") + std::to_string(imm) : std::string()) + "]";
+        if (rn == 15) {
+            in.hasTarget = true;
+            const uint64_t pc = thumb ? ((in.addr + 4) & ~uint64_t(3)) : in.addr + 8;
+            in.target = (up ? pc + imm : pc - imm) & 0xFFFFFFFFull;
+        }
+        return true;
+    }
+    if ((w & 0x0FBF0E00) == 0x0D2D0A00 || (w & 0x0FBF0E00) == 0x0CBD0A00) {  // vpush / vpop
+        const bool push = (w & 0x0FBF0E00) == 0x0D2D0A00;
+        const unsigned count = dbl ? (w & 0xFF) / 2 : (w & 0xFF);
+        const unsigned first = dbl ? (dBit << 4) | vd : (vd << 1) | dBit;
+        in.mnemonic = std::string(push ? "vpush" : "vpop") + c;
+        const char* r = dbl ? "d" : "s";
+        in.operands = count <= 1 ? std::string("{") + r + std::to_string(first) + "}"
+                                 : std::string("{") + r + std::to_string(first) + "-" + r + std::to_string(first + count - 1) + "}";
+        return true;
+    }
+    if (top == 0xE && !(w & 0x10)) {  // data processing
+        const unsigned opc1 = (w >> 20) & 0xB;
+        const bool op = (w >> 6) & 1;
+        const std::string d = vfpReg(dbl, vd, dBit), n = vfpReg(dbl, vn, nBit), m = vfpReg(dbl, vm, mBit);
+        const char* name = nullptr;
+        switch (opc1) {
+        case 0x0: name = op ? "vmls" : "vmla"; break;
+        case 0x1: name = op ? "vnmla" : "vnmls"; break;
+        case 0x2: name = op ? "vnmul" : "vmul"; break;
+        case 0x3: name = op ? "vsub" : "vadd"; break;
+        case 0x8: name = "vdiv"; break;
+        case 0x9: name = op ? "vfnma" : "vfnms"; break;
+        case 0xA: name = op ? "vfms" : "vfma"; break;
+        default: break;
+        }
+        if (name) {
+            in.mnemonic = std::string(name) + c + fmt;
+            in.operands = d + ", " + n + ", " + m;
+            return true;
+        }
+        if (opc1 == 0xB) {
+            const unsigned opc2 = (w >> 16) & 15;
+            if (((w >> 6) & 3) == 0) {  // vmov #imm8 (the immediate's bits are shown raw)
+                in.mnemonic = "vmov" + c + fmt;
+                in.operands = d + ", #0x" + hex8((vn << 4) | vm);
+                return true;
+            }
+            if (opc2 == 0 && op) {
+                in.mnemonic = std::string((w >> 7) & 1 ? "vabs" : "vmov") + c + fmt;
+                in.operands = d + ", " + m;
+                return true;
+            }
+            if (opc2 == 1) { in.mnemonic = std::string(op ? "vsqrt" : "vneg") + c + fmt; in.operands = d + ", " + m; return true; }
+            if (opc2 == 4 || opc2 == 5) {
+                in.mnemonic = std::string((w >> 7) & 1 ? "vcmpe" : "vcmp") + c + fmt;
+                in.operands = opc2 == 5 ? d + ", #0.0" : d + ", " + m;
+                return true;
+            }
+            if (opc2 == 7 && op) {  // vcvt between f64 and f32
+                in.mnemonic = "vcvt" + c + (dbl ? ".f32.f64" : ".f64.f32");
+                in.operands = (dbl ? vfpReg(false, vd, dBit) + ", " + m : vfpReg(true, vd, dBit) + ", " + vfpReg(false, vm, mBit));
+                return true;
+            }
+            if (opc2 == 8) {  // vcvt int -> float
+                in.mnemonic = "vcvt" + c + fmt + ((w >> 7) & 1 ? ".s32" : ".u32");
+                in.operands = d + ", " + vfpReg(false, vm, mBit);
+                return true;
+            }
+            if (opc2 == 0xC || opc2 == 0xD) {  // vcvt float -> int
+                in.mnemonic = std::string(op ? "vcvt" : "vcvtr") + c + (opc2 == 0xD ? ".s32" : ".u32") + fmt;
+                in.operands = vfpReg(false, vd, dBit) + ", " + m;
+                return true;
+            }
+        }
+        return false;
+    }
+    if ((w & 0x0FE00F7F) == 0x0E000A10) {  // vmov between a core register and a single register
+        const bool toCore = (w >> 20) & 1;
+        const std::string sreg = vfpReg(false, vn, nBit), rt = reg((w >> 12) & 15);
+        in.mnemonic = "vmov" + c;
+        in.operands = toCore ? rt + ", " + sreg : sreg + ", " + rt;
+        return true;
+    }
+    if ((w & 0x0FFF0FFF) == 0x0EF10A10 || (w & 0x0FFF0FFF) == 0x0EE10A10) {  // vmrs / vmsr fpscr
+        const unsigned rt = (w >> 12) & 15;
+        const bool read = (w & 0x0FFF0FFF) == 0x0EF10A10;
+        in.mnemonic = std::string(read ? "vmrs" : "vmsr") + c;
+        in.operands = read ? std::string(rt == 15 ? "APSR_nzcv" : reg(rt).c_str()) + ", fpscr" : "fpscr, " + reg(rt);
+        return true;
+    }
+    if ((w & 0x0FE00ED0) == 0x0C400A10 || (w & 0x0FE00ED0) == 0x0C400B10) {  // vmov two core registers and a d register
+        if (!dbl) return false;
+        const bool toCore = (w >> 20) & 1;
+        const std::string dr = vfpReg(true, vm, mBit), a = reg((w >> 12) & 15), b = reg((w >> 16) & 15);
+        in.mnemonic = "vmov" + c;
+        in.operands = toCore ? a + ", " + b + ", " + dr : dr + ", " + a + ", " + b;
+        return true;
+    }
+    return false;
+}
+
+
+// NEON (Advanced SIMD): the integer / float three-register operations, vld1 / vst1 (and the other structure loads by
+// name), vdup, vmov between core and scalar registers, and immediate moves (the immediate is shown as its raw encoding).
+// `w` is the A32 word (Thumb is converted by the caller). Everything else stays unnamed.
+std::string neonReg(bool q, unsigned v, unsigned hi) { return (q ? "q" : "d") + std::to_string(q ? ((hi << 4) | v) >> 1 : (hi << 4) | v); }
+
+bool neonDecode(Insn& in, uint32_t w) {
+    const bool u = (w >> 24) & 1;
+    const unsigned dBit = (w >> 22) & 1, vd = (w >> 12) & 15, nBit = (w >> 7) & 1, vn = (w >> 16) & 15, mBit = (w >> 5) & 1, vm = w & 15;
+    const bool q = (w >> 6) & 1;
+    // Element loads and stores.
+    if ((w & 0xFF000000) == 0xF4000000) {
+        const bool load = (w >> 21) & 1;
+        const unsigned rn = (w >> 16) & 15, rm = w & 15, type = (w >> 8) & 15, size = (w >> 6) & 3;
+        if ((w & 0x00800000) != 0) return false;  // single-element / all-lanes forms are not named here
+        const char* name = nullptr;
+        unsigned regs = 1;
+        switch (type) {
+        case 7: name = "vld1"; regs = 1; break;
+        case 10: name = "vld1"; regs = 2; break;
+        case 6: name = "vld1"; regs = 3; break;
+        case 2: name = "vld1"; regs = 4; break;
+        case 8: case 9: case 3: name = "vld2"; break;
+        case 4: case 5: name = "vld3"; break;
+        case 0: case 1: name = "vld4"; break;
+        default: return false;
+        }
+        std::string mn = name;
+        if (!load) mn[2] = 's', mn[1] = 'v', mn = "vst" + mn.substr(3);
+        static const char* const sizes[4] = {".8", ".16", ".32", ".64"};
+        in.mnemonic = mn + sizes[size];
+        const unsigned first = (dBit << 4) | vd;
+        std::string list = "{";
+        for (unsigned i = 0; i < regs; ++i) list += (i ? ", d" : "d") + std::to_string((first + i) & 31);
+        list += "}";
+        in.operands = list + ", [" + reg(rn) + "]" + (rm == 13 ? "!" : rm == 15 ? "" : ", " + reg(rm));
+        return true;
+    }
+    if ((w & 0xFE000000) != 0xF2000000) return false;
+    // Three registers of the same length.
+    if ((w & 0x00800000) == 0) {
+        const unsigned size = (w >> 20) & 3, opc = (w >> 8) & 15;
+        const bool op = (w >> 4) & 1;
+        const std::string d = neonReg(q, vd, dBit), n = neonReg(q, vn, nBit), m = neonReg(q, vm, mBit);
+        static const char* const sfx[4] = {".i8", ".i16", ".i32", ".i64"};
+        static const char* const ssfx[4] = {".s8", ".s16", ".s32", ".s64"};
+        static const char* const usfx[4] = {".u8", ".u16", ".u32", ".u64"};
+        const char* sg = u ? usfx[size] : ssfx[size];
+        std::string name, suffix = sfx[size];
+        if (opc == 1 && op) {  // logical operations: the "size" field selects which
+            static const char* const a[4] = {"vand", "vbic", "vorr", "vorn"};
+            static const char* const b[4] = {"veor", "vbsl", "vbit", "vbif"};
+            if (!u && size == 2 && vn == vm && nBit == mBit) {  // vorr d, n, n is vmov d, n
+                in.mnemonic = "vmov";
+                in.operands = d + ", " + n;
+                return true;
+            }
+            in.mnemonic = u ? b[size] : a[size];
+            in.operands = d + ", " + n + ", " + m;
+            return true;
+        }
+        switch (opc) {
+        case 0: name = op ? (u ? "vqadd" : "vqadd") : "vhadd"; suffix = sg; break;
+        case 1: name = "vrhadd"; suffix = sg; break;
+        case 2: name = op ? "vqsub" : "vhsub"; suffix = sg; break;
+        case 3: name = op ? "vcge" : "vcgt"; suffix = sg; break;
+        case 4: name = op ? "vqshl" : "vshl"; suffix = sg; break;
+        case 5: name = op ? "vqrshl" : "vrshl"; suffix = sg; break;
+        case 6: name = op ? "vmin" : "vmax"; suffix = sg; break;
+        case 7: name = op ? "vaba" : "vabd"; suffix = sg; break;
+        case 8: name = op ? (u ? "vceq" : "vtst") : (u ? "vsub" : "vadd"); suffix = op && u ? sfx[size] : sfx[size]; break;
+        case 9: name = op ? "vmul" : ((w >> 24) & 1 ? "vmls" : "vmla"); if (op && u) { name = "vmul"; suffix = ".p8"; } break;
+        case 10: name = op ? "vpmin" : "vpmax"; suffix = sg; break;
+        case 11: name = op ? "vpadd" : "vqdmulh"; break;
+        case 13: {
+            const bool sz = (w >> 20) & 1;
+            suffix = ".f32";
+            if (!u) name = op ? (sz ? "vmls" : "vmla") : (sz ? "vsub" : "vadd");
+            else name = op ? "vmul" : (sz ? "vabd" : "vpadd");
+            break;
+        }
+        case 14: name = !u ? "vceq" : (((w >> 21) & 1) ? "vcgt" : "vcge"); suffix = ".f32"; break;
+        case 15: name = ((w >> 21) & 1) ? "vmin" : "vmax"; suffix = ".f32"; break;
+        default: return false;
+        }
+        if (name.empty()) return false;
+        in.mnemonic = name + suffix;
+        in.operands = d + ", " + n + ", " + m;
+        return true;
+    }
+    // One register and a modified immediate (vmov / vmvn / vorr / vbic #imm): shown with the raw imm8.
+    if ((w & 0x00B80090) == 0x00800010 && ((w >> 19) & 1) == 0 && (w & 0x00380000) == 0) {
+        const unsigned imm8 = (u ? 0x80 : 0) | (((w >> 16) & 7) << 4) | (w & 15);
+        const unsigned cmode = (w >> 8) & 15;
+        const bool op = (w >> 5) & 1;
+        in.mnemonic = op ? ((cmode & 1) && cmode < 12 ? "vbic" : "vmvn") : ((cmode & 1) && cmode < 12 ? "vorr" : "vmov");
+        char b[24];
+        std::snprintf(b, sizeof b, ", #0x%02x", imm8);
+        in.operands = neonReg(q, vd, dBit) + b;
+        return true;
+    }
+    return false;
+}
+
+bool neonDup(Insn& in, uint32_t w, const std::string& c) {
+    if ((w & 0x0F900F5F) == 0x0E800B10) {  // vdup.<size> Qd, Rt
+        const bool q = (w >> 21) & 1;
+        const unsigned b = (w >> 22) & 1, e = (w >> 5) & 1;
+        in.mnemonic = "vdup" + c + (b ? ".8" : e ? ".16" : ".32");
+        in.operands = neonReg(q, (w >> 16) & 15, (w >> 7) & 1) + ", " + reg((w >> 12) & 15);
+        return true;
+    }
+    return false;
+}
+
+// The 16-bit Thumb instructions thumb16() does not name itself. Returns false when `r` is not one of them.
+bool thumb16Extra(Insn& in, uint32_t r, uint64_t addr) {
+    (void)addr;
+    if ((r & 0xFC00) == 0x4000) {  // data processing, low registers
+        static const char* ops[16] = {"ands", "eors", "lsls", "lsrs", "asrs", "adcs", "sbcs", "rors",
+                                      "tst",  "rsbs", "cmp",  "cmn",  "orrs", "muls", "bics", "mvns"};
+        const unsigned op = (r >> 6) & 15, rdn = r & 7, rm = (r >> 3) & 7;
+        in.mnemonic = ops[op];
+        if (op == 9) in.operands = reg(rdn) + ", " + reg(rm) + ", #0";
+        else in.operands = reg(rdn) + ", " + reg(rm);
+        return true;
+    }
+    if ((r & 0xFF00) == 0x4400 || (r & 0xFF00) == 0x4500) {  // add / cmp with high registers
+        const unsigned rd = (r & 7) | ((r >> 4) & 8), rm = (r >> 3) & 15;
+        in.mnemonic = (r & 0x0100) ? "cmp" : "add";
+        in.operands = reg(rd) + ", " + reg(rm);
+        if (!(r & 0x0100) && rd == 15) in.flow = Flow::IndirectJump;
+        return true;
+    }
+    if ((r & 0xF000) == 0x5000) {  // load / store, register offset
+        static const char* ops[8] = {"str", "strh", "strb", "ldrsb", "ldr", "ldrh", "ldrb", "ldrsh"};
+        in.mnemonic = ops[(r >> 9) & 7];
+        in.operands = reg(r & 7) + ", [" + reg((r >> 3) & 7) + ", " + reg((r >> 6) & 7) + "]";
+        return true;
+    }
+    if ((r & 0xF800) == 0xA800) {  // add rd, sp, #imm8 * 4
+        in.mnemonic = "add";
+        in.operands = reg((r >> 8) & 7) + ", sp, #" + std::to_string((r & 0xFF) * 4);
+        return true;
+    }
+    if ((r & 0xFF00) == 0xB200) {
+        static const char* ops[4] = {"sxth", "sxtb", "uxth", "uxtb"};
+        in.mnemonic = ops[(r >> 6) & 3];
+        in.operands = reg(r & 7) + ", " + reg((r >> 3) & 7);
+        return true;
+    }
+    if ((r & 0xFF00) == 0xBA00 && ((r >> 6) & 3) != 2) {
+        static const char* ops[4] = {"rev", "rev16", "", "revsh"};
+        in.mnemonic = ops[(r >> 6) & 3];
+        in.operands = reg(r & 7) + ", " + reg((r >> 3) & 7);
+        return true;
+    }
+    if ((r & 0xFF00) == 0xBF00) {  // hints and IT
+        const unsigned mask = r & 15, cond = (r >> 4) & 15;
+        if (mask) {
+            in.mnemonic = itName(cond, mask);
+            in.operands = conditionName(cond);
+            return true;
+        }
+        static const char* hints[8] = {"nop", "yield", "wfe", "wfi", "sev", "sevl", "", ""};
+        const unsigned h = (r >> 4) & 15;
+        if (h < 6) {
+            in.mnemonic = hints[h];
+            return true;
+        }
+        return false;
+    }
+    if ((r & 0xF000) == 0xC000) {  // stmia / ldmia rn!, {list}
+        in.mnemonic = (r & 0x0800) ? "ldmia" : "stmia";
+        in.operands = reg((r >> 8) & 7) + "!, " + regs(r & 0xFF);
+        return true;
+    }
+    return false;
+}
+
+std::string memImm(unsigned rn, int32_t imm, bool pre, bool wb) {
+    const std::string off = "#" + std::to_string(imm);
+    if (!pre) return "[" + reg(rn) + "], " + off;
+    return "[" + reg(rn) + (imm ? ", " + off : std::string()) + "]" + (wb ? "!" : "");
+}
+
+// Thumb-2 32-bit integer instructions beyond the branches thumb32() handles itself.
+bool thumb32Extra(Insn& in, uint32_t h1, uint32_t h2, uint64_t addr) {
+    if (((h1 & 0xFE00) == 0xEC00 || (h1 & 0xFF00) == 0xEE00) && vfpDecode(in, (h1 << 16) | h2, true, std::string())) return true;
+    if ((h1 & 0xFF00) == 0xEE00 && neonDup(in, (h1 << 16) | h2, std::string())) return true;
+    if ((h1 & 0xEF00) == 0xEF00 && neonDecode(in, 0xF2000000u | (((h1 >> 12) & 1u) << 24) | ((h1 & 0xFFu) << 16) | h2)) return true;
+    if ((h1 & 0xFF10) == 0xF900 && neonDecode(in, 0xF4000000u | ((h1 & 0xFFu) << 16) | h2)) return true;
+    if ((h1 & 0xFF10) == 0xF910 && neonDecode(in, 0xF4000000u | ((h1 & 0xFFu) << 16) | h2)) return true;
+    static const char* dp[16] = {"and", "bic", "orr", "orn", "eor", "", "pkh", "", "add", "", "adc", "sbc", "", "sub", "rsb", ""};
+    // Data processing, immediate.
+    if ((h1 & 0xF800) == 0xF000 && (h2 & 0x8000) == 0) {
+        const unsigned rn = h1 & 15, rd = (h2 >> 8) & 15;
+        const uint32_t i = (h1 >> 10) & 1, imm3 = (h2 >> 12) & 7, imm8 = h2 & 0xFF;
+        if (!(h1 & 0x0200)) {  // modified immediate
+            const unsigned op = (h1 >> 5) & 15;
+            const bool s = (h1 >> 4) & 1;
+            const uint32_t imm = thumbExpandImm((i << 11) | (imm3 << 8) | imm8);
+            const std::string immS = "#" + hex(imm);
+            std::string name;
+            bool compare = false, move = false;
+            if (op == 0 && rd == 15 && s) name = "tst", compare = true;
+            else if (op == 4 && rd == 15 && s) name = "teq", compare = true;
+            else if (op == 8 && rd == 15 && s) name = "cmn", compare = true;
+            else if (op == 13 && rd == 15 && s) name = "cmp", compare = true;
+            else if (op == 2 && rn == 15) name = "mov", move = true;
+            else if (op == 3 && rn == 15) name = "mvn", move = true;
+            else if (dp[op][0] && op != 6) name = dp[op];
+            else return false;
+            in.mnemonic = name + ((s && !compare) ? "s" : "") + ".w";
+            if (compare) in.operands = reg(rn) + ", " + immS;
+            else if (move) in.operands = reg(rd) + ", " + immS;
+            else in.operands = reg(rd) + ", " + reg(rn) + ", " + immS;
+            return true;
+        }
+        const unsigned op = (h1 >> 4) & 0x1F;  // plain binary immediate
+        const uint32_t imm12 = (i << 11) | (imm3 << 8) | imm8;
+        if (op == 0 || op == 10) {  // addw / subw, adr when the base is pc
+            if (rn == 15) {
+                const uint64_t base = (addr + 4) & ~uint64_t(3);
+                in.mnemonic = "adr.w";
+                in.hasTarget = true;
+                in.target = (op == 0 ? base + imm12 : base - imm12) & 0xFFFFFFFFull;
+                in.operands = reg(rd) + ", " + hex(static_cast<uint32_t>(in.target));
+                return true;
+            }
+            in.mnemonic = op == 0 ? "addw" : "subw";
+            in.operands = reg(rd) + ", " + reg(rn) + ", #" + std::to_string(imm12);
+            return true;
+        }
+        if (op == 4 || op == 12) {  // movw / movt
+            const uint32_t imm16 = ((h1 & 15) << 12) | (i << 11) | (imm3 << 8) | imm8;
+            in.mnemonic = op == 4 ? "movw" : "movt";
+            in.operands = reg(rd) + ", #" + hex(imm16);
+            return true;
+        }
+        if (op == 20 || op == 28) {  // sbfx / ubfx
+            const unsigned lsb = (imm3 << 2) | ((h2 >> 6) & 3), width = (h2 & 31) + 1;
+            in.mnemonic = op == 20 ? "sbfx" : "ubfx";
+            in.operands = reg(rd) + ", " + reg(rn) + ", #" + std::to_string(lsb) + ", #" + std::to_string(width);
+            return true;
+        }
+        if (op == 22) {  // bfi / bfc
+            const unsigned lsb = (imm3 << 2) | ((h2 >> 6) & 3), msb = h2 & 31;
+            if (msb < lsb) return false;
+            if (rn == 15) {
+                in.mnemonic = "bfc";
+                in.operands = reg(rd) + ", #" + std::to_string(lsb) + ", #" + std::to_string(msb - lsb + 1);
+            } else {
+                in.mnemonic = "bfi";
+                in.operands = reg(rd) + ", " + reg(rn) + ", #" + std::to_string(lsb) + ", #" + std::to_string(msb - lsb + 1);
+            }
+            return true;
+        }
+        return false;
+    }
+    // Data processing, shifted register.
+    if ((h1 & 0xFE00) == 0xEA00) {
+        const unsigned op = (h1 >> 5) & 15, rn = h1 & 15, rd = (h2 >> 8) & 15, rm = h2 & 15;
+        const bool s = (h1 >> 4) & 1;
+        const unsigned type = (h2 >> 4) & 3, imm5 = ((h2 >> 12) & 7) << 2 | ((h2 >> 6) & 3);
+        std::string name;
+        bool compare = false, move = false;
+        if (op == 0 && rd == 15 && s) name = "tst", compare = true;
+        else if (op == 4 && rd == 15 && s) name = "teq", compare = true;
+        else if (op == 8 && rd == 15 && s) name = "cmn", compare = true;
+        else if (op == 13 && rd == 15 && s) name = "cmp", compare = true;
+        else if (op == 2 && rn == 15) name = "mov", move = true;
+        else if (op == 3 && rn == 15) name = "mvn", move = true;
+        else if (dp[op][0] && op != 6) name = dp[op];
+        else return false;
+        if (move && name == "mov" && !(type == 0 && imm5 == 0)) {  // a shift written as mov
+            if (type == 3 && imm5 == 0) {
+                in.mnemonic = std::string("rrx") + (s ? "s" : "") + ".w";
+                in.operands = reg(rd) + ", " + reg(rm);
+            } else {
+                in.mnemonic = std::string(shiftName(type)) + (s ? "s" : "") + ".w";
+                in.operands = reg(rd) + ", " + reg(rm) + ", #" + std::to_string((type == 1 || type == 2) && imm5 == 0 ? 32u : imm5);
+            }
+            return true;
+        }
+        in.mnemonic = name + ((s && !compare) ? "s" : "") + ".w";
+        const std::string op2 = shiftedReg(rm, type, imm5);
+        if (compare) in.operands = reg(rn) + ", " + op2;
+        else if (move) in.operands = reg(rd) + ", " + op2;
+        else in.operands = reg(rd) + ", " + reg(rn) + ", " + op2;
+        return true;
+    }
+    // Register-controlled shifts, extensions, clz / rev.
+    if ((h1 & 0xFF00) == 0xFA00) {
+        const unsigned rn = h1 & 15, rd = (h2 >> 8) & 15, rm = h2 & 15;
+        if ((h1 & 0x0080) == 0 && (h2 & 0xF0F0) == 0xF000) {
+            in.mnemonic = std::string(shiftName((h1 >> 5) & 3)) + (((h1 >> 4) & 1) ? "s" : "") + ".w";
+            in.operands = reg(rd) + ", " + reg(rn) + ", " + reg(rm);
+            return true;
+        }
+        if ((h1 & 0xFF8F) == 0xFA0F && (h2 & 0xF0C0) == 0xF080) {
+            static const char* ops[8] = {"sxth", "uxth", "sxtb16", "uxtb16", "sxtb", "uxtb", "", ""};
+            const unsigned op = (h1 >> 4) & 7;
+            if (!ops[op][0]) return false;
+            const unsigned rot = ((h2 >> 4) & 3) * 8;
+            in.mnemonic = std::string(ops[op]) + ".w";
+            in.operands = reg(rd) + ", " + reg(rm) + (rot ? ", ror #" + std::to_string(rot) : std::string());
+            return true;
+        }
+        if ((h1 & 0xFFF0) == 0xFAB0 && (h2 & 0xF0F0) == 0xF080) {
+            in.mnemonic = "clz";
+            in.operands = reg(rd) + ", " + reg(rm);
+            return true;
+        }
+        if ((h1 & 0xFFF0) == 0xFA90 && (h2 & 0xF0F0) == 0xF080) {
+            static const char* ops[4] = {"rev.w", "rev16.w", "rbit", "revsh.w"};
+            in.mnemonic = ops[(h2 >> 4) & 3];
+            in.operands = reg(rd) + ", " + reg(rm);
+            return true;
+        }
+        return false;
+    }
+    // Multiply, divide.
+    if ((h1 & 0xFF80) == 0xFB00) {
+        const unsigned op1 = (h1 >> 4) & 7, op2 = (h2 >> 4) & 3, rn = h1 & 15, ra = (h2 >> 12) & 15, rd = (h2 >> 8) & 15, rm = h2 & 15;
+        if (op1 == 0 && op2 == 0) {
+            in.mnemonic = ra == 15 ? "mul" : "mla";
+            in.operands = reg(rd) + ", " + reg(rn) + ", " + reg(rm) + (ra == 15 ? std::string() : ", " + reg(ra));
+            return true;
+        }
+        if (op1 == 0 && op2 == 1) {
+            in.mnemonic = "mls";
+            in.operands = reg(rd) + ", " + reg(rn) + ", " + reg(rm) + ", " + reg(ra);
+            return true;
+        }
+        return false;
+    }
+    if ((h1 & 0xFF80) == 0xFB80) {
+        const unsigned op1 = (h1 >> 4) & 7, rn = h1 & 15, rdlo = (h2 >> 12) & 15, rdhi = (h2 >> 8) & 15, rm = h2 & 15;
+        if ((op1 == 1 || op1 == 3) && (h2 & 0xF0) == 0xF0) {
+            in.mnemonic = op1 == 1 ? "sdiv" : "udiv";
+            in.operands = reg(rdhi) + ", " + reg(rn) + ", " + reg(rm);
+            return true;
+        }
+        static const char* ops[8] = {"smull", "", "umull", "", "smlal", "", "umlal", ""};
+        if (ops[op1][0] && (h2 & 0xF0) == 0) {
+            in.mnemonic = ops[op1];
+            in.operands = reg(rdlo) + ", " + reg(rdhi) + ", " + reg(rn) + ", " + reg(rm);
+            return true;
+        }
+        return false;
+    }
+    // Load / store single item.
+    if ((h1 & 0xFE00) == 0xF800) {
+        const unsigned rn = h1 & 15, rt = (h2 >> 12) & 15;
+        const unsigned size = (h1 >> 5) & 3;
+        const bool load = (h1 >> 4) & 1, sign = (h1 >> 8) & 1;
+        if (size == 3 || (sign && !load) || (sign && size == 2)) return false;
+        const char* name = size == 0 ? (sign ? "ldrsb" : load ? "ldrb" : "strb") : size == 1 ? (sign ? "ldrsh" : load ? "ldrh" : "strh") : load ? "ldr" : "str";
+        in.mnemonic = std::string(name) + ".w";
+        if (load && rn == 15) {  // literal
+            const uint32_t imm = h2 & 0xFFF;
+            const bool add = (h1 >> 7) & 1;
+            in.hasTarget = true;
+            in.target = ((addr + 4) & ~uint64_t(3)) + (add ? imm : -static_cast<int64_t>(imm));
+            in.target &= 0xFFFFFFFFull;
+            in.operands = reg(rt) + ", [pc, #" + (add ? "" : "-") + std::to_string(imm) + "]";
+            if (rt == 15) in.flow = Flow::IndirectJump;
+            return true;
+        }
+        if (rn == 15) return false;
+        if (h1 & 0x0080) {
+            in.operands = reg(rt) + ", " + memImm(rn, static_cast<int32_t>(h2 & 0xFFF), true, false);
+        } else if (h2 & 0x0800) {
+            const bool pre = (h2 >> 10) & 1, up = (h2 >> 9) & 1, wb = (h2 >> 8) & 1;
+            const int32_t imm = up ? static_cast<int32_t>(h2 & 0xFF) : -static_cast<int32_t>(h2 & 0xFF);
+            in.operands = reg(rt) + ", " + memImm(rn, imm, pre, wb);
+        } else if ((h2 & 0x0FC0) == 0) {
+            const unsigned sh = (h2 >> 4) & 3;
+            in.operands = reg(rt) + ", [" + reg(rn) + ", " + reg(h2 & 15) + (sh ? ", lsl #" + std::to_string(sh) : std::string()) + "]";
+        } else {
+            return false;
+        }
+        if (load && rt == 15 && size == 2) in.flow = Flow::IndirectJump;
+        return true;
+    }
+    // Load / store multiple, dual, exclusive, table branch.
+    if ((h1 & 0xFE00) == 0xE800) {
+        const unsigned rn = h1 & 15;
+        const bool load = (h1 >> 4) & 1, wb = (h1 >> 5) & 1;
+        if (!(h1 & 0x0040)) {
+            const unsigned op = (h1 >> 7) & 3;
+            if (op != 1 && op != 2) return false;
+            in.mnemonic = std::string(load ? "ldm" : "stm") + (op == 2 ? "db" : "") + ".w";
+            in.operands = reg(rn) + (wb ? "!" : "") + ", " + regs(h2);
+            if (load && (h2 & 0x8000)) in.flow = Flow::Return;
+            return true;
+        }
+        if ((h1 & 0xFFF0) == 0xE8D0 && (h2 & 0xFFE0) == 0xF000) {
+            const bool half = (h2 >> 4) & 1;
+            in.mnemonic = half ? "tbh" : "tbb";
+            in.operands = "[" + reg(rn) + ", " + reg(h2 & 15) + (half ? ", lsl #1" : "") + "]";
+            in.flow = Flow::IndirectJump;
+            return true;
+        }
+        if ((h1 & 0xFFF0) == 0xE850 || (h1 & 0xFFF0) == 0xE840) {  // ldrex / strex
+            const unsigned rt = (h2 >> 12) & 15;
+            const int32_t imm = static_cast<int32_t>((h2 & 0xFF) * 4);
+            if (h1 & 0x10) {
+                in.mnemonic = "ldrex";
+                in.operands = reg(rt) + ", " + memImm(rn, imm, true, false);
+            } else {
+                in.mnemonic = "strex";
+                in.operands = reg((h2 >> 8) & 15) + ", " + reg(rt) + ", " + memImm(rn, imm, true, false);
+            }
+            return true;
+        }
+        if (h1 & 0x0200) {  // ldrd / strd (P bit set in the E9 half; E8 with W for post-index)
+            const bool pre = (h1 >> 8) & 1, up = (h1 >> 7) & 1;
+            const int32_t imm = static_cast<int32_t>((h2 & 0xFF) * 4) * (up ? 1 : -1);
+            in.mnemonic = load ? "ldrd" : "strd";
+            in.operands = reg((h2 >> 12) & 15) + ", " + reg((h2 >> 8) & 15) + ", " + memImm(rn, imm, pre, wb);
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+// A32 instructions beyond the ones arm32() names itself: data processing with register operands, the halfword and
+// multiply families, extensions, clz, svc.
+bool a32Extra(Insn& in, uint32_t w, const std::string& c) {
+    if ((w & 0x0F000000) == 0x0F000000) {
+        in.mnemonic = "svc" + c;
+        in.operands = "#" + hex(w & 0xFFFFFF);
+        return true;
+    }
+    if ((w & 0x0FFF0FF0) == 0x016F0F10) {
+        in.mnemonic = "clz" + c;
+        in.operands = reg((w >> 12) & 15) + ", " + reg(w & 15);
+        return true;
+    }
+    if ((w & 0x0F8F03F0) == 0x068F0070 && (w & 0x00700000) != 0 && (w & 0x00700000) <= 0x00700000) {  // sxt / uxt
+        static const char* ops[8] = {"", "sxtb16", "", "sxtb", "", "uxtb16", "", "uxtb"};
+        const unsigned op = (w >> 20) & 7;
+        if (op == 3 || op == 7 || op == 1 || op == 5) {
+            in.mnemonic = std::string(ops[op]) + c;
+            in.operands = reg((w >> 12) & 15) + ", " + reg(w & 15);
+            return true;
+        }
+    }
+    if ((w & 0x0FEF03F0) == 0x06AF0070 || (w & 0x0FEF03F0) == 0x06BF0070) {  // sxtb / sxth / uxtb / uxth
+        const bool half = (w & 0x00100000) != 0, uns = (w & 0x00400000) != 0;
+        in.mnemonic = std::string(uns ? "uxt" : "sxt") + (half ? "h" : "b") + c;
+        in.operands = reg((w >> 12) & 15) + ", " + reg(w & 15);
+        return true;
+    }
+    if ((w & 0x0FC000F0) == 0x00000090) {  // mul / mla
+        const bool acc = (w >> 21) & 1;
+        in.mnemonic = std::string(acc ? "mla" : "mul") + ((w >> 20) & 1 ? "s" : "") + c;
+        in.operands = reg((w >> 16) & 15) + ", " + reg(w & 15) + ", " + reg((w >> 8) & 15) + (acc ? ", " + reg((w >> 12) & 15) : std::string());
+        return true;
+    }
+    if ((w & 0x0F8000F0) == 0x00800090) {  // umull / umlal / smull / smlal
+        static const char* ops[4] = {"umull", "umlal", "smull", "smlal"};
+        in.mnemonic = std::string(ops[(w >> 21) & 3]) + ((w >> 20) & 1 ? "s" : "") + c;
+        in.operands = reg((w >> 12) & 15) + ", " + reg((w >> 16) & 15) + ", " + reg(w & 15) + ", " + reg((w >> 8) & 15);
+        return true;
+    }
+    if ((w & 0x0E000090) == 0x00000090 && (w & 0x60) != 0) {  // ldrh / strh / ldrsb / ldrsh / ldrd / strd
+        const bool load = (w >> 20) & 1, pre = (w >> 24) & 1, up = (w >> 23) & 1, imm = (w >> 22) & 1, wb = (w >> 21) & 1;
+        const unsigned sh = (w >> 5) & 3, rn = (w >> 16) & 15, rt = (w >> 12) & 15;
+        const char* name = nullptr;
+        if (load) name = sh == 1 ? "ldrh" : sh == 2 ? "ldrsb" : "ldrsh";
+        else name = sh == 1 ? "strh" : sh == 2 ? "ldrd" : "strd";
+        in.mnemonic = std::string(name) + c;
+        const std::string off = imm ? "#" + std::string(up ? "" : "-") + std::to_string(((w >> 4) & 0xF0) | (w & 0xF))
+                                    : std::string(up ? "" : "-") + reg(w & 15);
+        in.operands = reg(rt) + ", [" + reg(rn) + (pre ? ", " + off + "]" + (wb ? "!" : "") : "], " + off);
+        if (imm && rn == 15 && pre) {
+            in.hasTarget = true;
+            const int32_t o = static_cast<int32_t>(((w >> 4) & 0xF0) | (w & 0xF));
+            in.target = relative(in.addr + 8, up ? o : -o);
+        }
+        return true;
+    }
+    if ((w & 0x0C000000) == 0 && (w & 0x01900000) != 0x01000000) {  // data processing
+        static const char* ops[16] = {"and", "eor", "sub", "rsb", "add", "adc", "sbc", "rsc", "tst", "teq", "cmp", "cmn", "orr", "mov", "bic", "mvn"};
+        const unsigned op = (w >> 21) & 15, rn = (w >> 16) & 15, rd = (w >> 12) & 15;
+        const bool s = (w >> 20) & 1, imm = (w >> 25) & 1;
+        if ((w & 0x00000090) == 0x00000090 && !imm) return false;
+        std::string op2;
+        if (imm) {
+            op2 = "#" + hex(armImmediate(w));
+        } else {
+            const unsigned rm = w & 15, type = (w >> 5) & 3;
+            if (w & 0x10) op2 = reg(rm) + ", " + shiftName(type) + " " + reg((w >> 8) & 15);
+            else op2 = shiftedReg(rm, type, (w >> 7) & 31);
+        }
+        const bool compare = op >= 8 && op <= 11, move = op == 13 || op == 15;
+        in.mnemonic = std::string(ops[op]) + (s && !compare ? "s" : "") + c;
+        if (compare) in.operands = reg(rn) + ", " + op2;
+        else if (move) in.operands = reg(rd) + ", " + op2;
+        else in.operands = reg(rd) + ", " + reg(rn) + ", " + op2;
+        if (!compare && rd == 15) in.flow = (op == 13 && !imm && (w & 15) == 14 && !(w & 0xFF0)) ? Flow::Return : Flow::IndirectJump;
+        return true;
+    }
+    return false;
+}
+
 Insn thumb16(uint16_t h, uint64_t addr) {
     Insn in;
     in.addr = addr;
@@ -189,6 +862,7 @@ Insn thumb16(uint16_t h, uint64_t addr) {
         setBranch(in, relative(pcValue(addr, true), signExtend(r & 0x7FF, 11) * 2), Flow::Jump);
         return in;
     }
+    if (thumb16Extra(in, r, addr)) return in;
     return unknown16(in, h);
 }
 
@@ -242,6 +916,7 @@ Insn thumb32(uint16_t h1, uint16_t h2, uint64_t addr) {
         if (rt == 15) in.flow = Flow::Return;
         return in;
     }
+    if (thumb32Extra(in, h1, h2, addr)) return in;
     in.known = false;
     char buf[32];
     std::snprintf(buf, sizeof buf, ".hword 0x%04x, 0x%04x", h1, h2);
@@ -346,6 +1021,8 @@ Insn arm32(uint32_t w, uint64_t addr) {
             return in;
         }
     }
+    if (cond != 0xF && (a32Extra(in, w, c) || vfpDecode(in, w, false, c) || neonDup(in, w, c))) return in;
+    if (cond == 0xF && neonDecode(in, w)) return in;
     in.known = false;
     char buf[16];
     std::snprintf(buf, sizeof buf, ".word 0x%08x", w);

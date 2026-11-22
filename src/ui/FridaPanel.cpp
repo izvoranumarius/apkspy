@@ -34,6 +34,14 @@ void FridaPanel::deployServer(const std::string& binary) {
         return;
     }
     std::string err;
+    {
+        const DeviceService::DeviceInfo info = devices_.deviceInfo(serial);
+        std::string abiName;
+        if (!fridaserver::checkBinary(binary, info.loaded ? info.abis : abi::DeviceAbis(), abiName, err)) {
+            serverStatus_ = "not deployed: " + err;
+            return;
+        }
+    }
     const std::string remote = "/data/local/tmp/frida-server";
     if (!fridaserver::deploy(devices_.adbPath(), serial, binary, remote, err)) {
         serverStatus_ = "deploy failed: " + err;
@@ -123,7 +131,7 @@ void FridaPanel::drawContents() {
         ImGui::TextColored(theme::vec(Col::Success), "session running");
     }
     ImGui::SameLine();
-    if (ui::smallButton("Clear log")) {
+    if (ImGui::Button("Clear log")) {
         events_.clear();
         shown_ = frida_.head();
     }

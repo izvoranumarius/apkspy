@@ -28,6 +28,8 @@ public:
     bool readEntry(const std::string& entryPath, std::vector<uint8_t>& out,
                    uint64_t maxSize = kDefaultMaxEntry) const;
     static constexpr uint64_t kDefaultMaxEntry = 1024ull * 1024 * 1024;  // 1 GiB
+    // The first `n` bytes of an entry without decompressing the rest (an ELF header of a library of any size).
+    bool readHead(const std::string& entryPath, size_t n, std::vector<uint8_t>& out) const;
 
     // Central-directory listing (no decompression): used by analysis and the
     // APK comparison.

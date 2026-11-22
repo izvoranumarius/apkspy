@@ -199,6 +199,11 @@
     <ClInclude Include="src\ui\SettingsDialog.hpp" />
     <ClInclude Include="src\ui\TitleBar.hpp" />
     <ClCompile Include="src\analysis\Arm32.cpp" />
+    <ClCompile Include="src\analysis\Abi.cpp" />
+    <ClCompile Include="src\analysis\X86.cpp" />
+    <ClInclude Include="src\analysis\Abi.hpp" />
+    <ClInclude Include="src\analysis\X86.hpp" />
+    <ClInclude Include="src\analysis\NativeInsn.hpp" />
     <ClInclude Include="src\analysis\Arm32.hpp" />
     <ClCompile Include="src\analysis\KotlinMetadata.cpp" />
     <ClInclude Include="src\analysis\KotlinMetadata.hpp" />
