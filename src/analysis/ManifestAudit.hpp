@@ -28,6 +28,14 @@ struct Component {
     std::vector<std::string> intentActions;
 };
 
+// A browsable deep link (an exported activity's VIEW + BROWSABLE intent
+// filter with a URI scheme) - an external entry point into the app.
+struct DeepLink {
+    std::string component;  // activity name
+    std::string uri;        // "scheme://host/path" (host/path may be empty)
+    bool autoVerify = false;  // android:autoVerify on the filter (App Links)
+};
+
 struct Finding {
     Severity severity = Severity::Info;
     std::string masvsId;  // "MASVS-PLATFORM-1", "MASVS-NETWORK-1", ...
@@ -46,6 +54,7 @@ struct Audit {
     std::vector<std::string> permissions;           // requested
     std::vector<std::string> dangerousPermissions; // requested and dangerous
     std::vector<Component> components;
+    std::vector<DeepLink> deepLinks;
     bool usesCleartext = false;
     bool allowBackup = false;
     bool debuggable = false;

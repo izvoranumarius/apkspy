@@ -315,6 +315,32 @@ void InsightsPanel::drawManifest() {
                               c.permission.empty() ? "" : "  permission: ", c.permission.c_str());
         }
     }
+    if (!a.deepLinks.empty()) {
+        char dl[48];
+        std::snprintf(dl, sizeof dl, "Deep links (%zu)###deeplinks", a.deepLinks.size());
+        if (ImGui::CollapsingHeader(dl)) {
+            ImGui::TextDisabled("Browsable VIEW entry points. Double-click a row to copy an adb am start command.");
+            const auto qualify = [&](const std::string& comp) {
+                if (comp.empty()) return comp;
+                if (comp[0] == '.') return a.package + comp;
+                if (comp.find('.') == std::string::npos) return a.package + "." + comp;
+                return comp;
+            };
+            for (size_t i = 0; i < a.deepLinks.size(); ++i) {
+                const auto& d = a.deepLinks[i];
+                ImGui::PushID(static_cast<int>(i));
+                const std::string cmd = "adb shell am start -a android.intent.action.VIEW -d \"" + d.uri + "\" " + a.package + "/" +
+                                        qualify(d.component);
+                ImGui::PushFont(Theme::monoFont());
+                if (ImGui::Selectable(d.uri.c_str())) ImGui::SetClipboardText(cmd.c_str());
+                ImGui::PopFont();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s%s\n\nClick to copy:\n%s", d.component.c_str(),
+                                                              d.autoVerify ? "  (autoVerify / App Link)" : "", cmd.c_str());
+                ImGui::PopID();
+            }
+        }
+    }
+
     char perms[64];
     std::snprintf(perms, sizeof perms, "Dangerous permissions (%zu)###perm", a.dangerousPermissions.size());
     if (ImGui::CollapsingHeader(perms))

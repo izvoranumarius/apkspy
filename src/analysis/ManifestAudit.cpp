@@ -90,13 +90,43 @@ public:
         } else if (name == "intent-filter" && openComponent_ >= 0) {
             inIntentFilter_ = true;
             hasFilter_ = true;
+            filterView_ = filterBrowsable_ = false;
+            filterAutoVerify_ = toBool(get("android:autoVerify"));
+            filterData_.clear();
         } else if (name == "action" && inIntentFilter_ && openComponent_ >= 0) {
-            audit_.components[static_cast<size_t>(openComponent_)].intentActions.push_back(get("android:name"));
+            const std::string a = get("android:name");
+            audit_.components[static_cast<size_t>(openComponent_)].intentActions.push_back(a);
+            if (a == "android.intent.action.VIEW") filterView_ = true;
+        } else if (name == "category" && inIntentFilter_) {
+            if (get("android:name") == "android.intent.category.BROWSABLE") filterBrowsable_ = true;
+        } else if (name == "data" && inIntentFilter_) {
+            filterData_.push_back({get("android:scheme"), get("android:host"), get("android:port"),
+                                   [&] {
+                                       const std::string p = get("android:path");
+                                       if (!p.empty()) return p;
+                                       const std::string pp = get("android:pathPrefix");
+                                       if (!pp.empty()) return pp;
+                                       return get("android:pathPattern");
+                                   }()});
         }
     }
 
     void endElement(const std::string& name) override {
-        if (name == "intent-filter") inIntentFilter_ = false;
+        if (name == "intent-filter") {
+            inIntentFilter_ = false;
+            // A browsable VIEW filter with a URI scheme is a deep link.
+            if (filterView_ && filterBrowsable_ && openComponent_ >= 0) {
+                const std::string comp = audit_.components[static_cast<size_t>(openComponent_)].name;
+                for (const Data& d : filterData_) {
+                    if (d.scheme.empty()) continue;
+                    std::string uri = d.scheme + "://";
+                    uri += d.host.empty() ? "" : d.host;
+                    if (!d.port.empty()) uri += ":" + d.port;
+                    uri += d.path;
+                    audit_.deepLinks.push_back({comp, uri, filterAutoVerify_});
+                }
+            }
+        }
         if (!(name == "activity" || name == "activity-alias" || name == "service" ||
               name == "receiver" || name == "provider"))
             return;
@@ -116,6 +146,14 @@ private:
     bool inIntentFilter_ = false;
     bool hasFilter_ = false;
     bool declaredExported_ = false;
+    // Deep-link detection, reset per intent-filter.
+    bool filterView_ = false;
+    bool filterBrowsable_ = false;
+    bool filterAutoVerify_ = false;
+    struct Data {
+        std::string scheme, host, port, path;
+    };
+    std::vector<Data> filterData_;
 };
 
 void addFinding(Audit& a, Severity sev, std::string masvs, std::string title, std::string detail,
