@@ -16,6 +16,10 @@
 // immutable: every query is const and safe from any thread. The DEX bytes
 // are shared, not copied; the cross-reference table is one flat sorted
 // vector (16 bytes per reference) so even large apps stay compact.
+namespace dalvik {
+struct ListingOptions;
+}  // namespace dalvik
+
 class ApkAnalysis {
 public:
     enum class XrefKind : uint8_t { Call, FieldRead, FieldWrite, String, Type };
@@ -150,6 +154,7 @@ public:
     // Smali-like listing of a method / class.
     std::string disassemble(const MethodDef& m) const;
     std::string disassembleClass(const ClassEntry& c) const;
+    std::string disassembleClass(const ClassEntry& c, const dalvik::ListingOptions& opt) const;
 
 private:
     struct Xref {

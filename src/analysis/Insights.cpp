@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <map>
 #include <set>
 
 namespace insights {
@@ -502,6 +503,101 @@ std::vector<PermissionUse> permissionUsage(const std::vector<std::string>& perms
 
 std::vector<PermissionUse> missingPermissions(const std::vector<std::string>& perms, const std::vector<std::string>& methodRefs) {
     return permissionCross(perms, methodRefs, false);
+}
+
+namespace {
+
+struct CloudKind {
+    const char* suffix;
+    const char* kind;
+};
+
+const CloudKind kCloud[] = {
+    {".firebaseio.com", "Firebase Realtime Database"},
+    {"firebasestorage.googleapis.com", "Firebase Storage"},
+    {".firebaseapp.com", "Firebase Hosting"},
+    {".web.app", "Firebase Hosting"},
+    {".cloudfunctions.net", "Cloud Functions"},
+    {".appspot.com", "Google App Engine"},
+    {".run.app", "Google Cloud Run"},
+    {"firestore.googleapis.com", "Cloud Firestore"},
+    {".amazonaws.com", "AWS"},
+    {".execute-api.", "AWS API Gateway"},
+    {".azurewebsites.net", "Azure App Service"},
+    {".blob.core.windows.net", "Azure Blob Storage"},
+    {".supabase.co", "Supabase"},
+    {".herokuapp.com", "Heroku"},
+    {".workers.dev", "Cloudflare Workers"},
+    {".vercel.app", "Vercel"},
+    {".netlify.app", "Netlify"},
+    {".ngrok.io", "ngrok tunnel"},
+    {".ngrok-free.app", "ngrok tunnel"},
+};
+
+// Schema / namespace URLs that are not endpoints.
+bool noiseHost(std::string_view h) {
+    static const char* const kNoise[] = {"schemas.android.com", "www.w3.org", "xmlpull.org", "ns.adobe.com", "apache.org",
+                                         "www.apache.org", "xml.org", "java.sun.com", "schemas.microsoft.com", "localhost",
+                                         "127.0.0.1", "0.0.0.0", "www.opengis.net", "purl.org"};
+    for (const char* n : kNoise)
+        if (h == n) return true;
+    return false;
+}
+
+}  // namespace
+
+std::vector<EndpointHost> endpoints(const std::vector<std::string>& strings) {
+    std::map<std::string, EndpointHost> byHost;
+    for (const std::string& s : strings) {
+        for (size_t pos = s.find("://"); pos != std::string::npos; pos = s.find("://", pos + 3)) {
+            // Scheme: letters right before "://".
+            size_t b = pos;
+            while (b > 0 && std::isalpha(static_cast<unsigned char>(s[b - 1]))) --b;
+            const std::string scheme = s.substr(b, pos - b);
+            if (scheme != "http" && scheme != "https" && scheme != "ws" && scheme != "wss" && scheme != "ftp") continue;
+            size_t e = pos + 3;
+            while (e < s.size() && !std::isspace(static_cast<unsigned char>(s[e])) && s[e] != '"' && s[e] != '\'' && s[e] != '<' &&
+                   s[e] != '>' && s[e] != ')' && s[e] != '\\')
+                ++e;
+            std::string url = s.substr(b, e - b);
+            std::string rest = url.substr(scheme.size() + 3);
+            const size_t slash = rest.find_first_of("/?#");
+            std::string authority = slash == std::string::npos ? rest : rest.substr(0, slash);
+            const size_t at = authority.rfind('@');
+            if (at != std::string::npos) authority = authority.substr(at + 1);
+            std::string host = authority.substr(0, authority.find(':'));
+            for (char& c : host) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            while (!host.empty() && host.back() == '.') host.pop_back();
+            if (host.size() < 3 || host.find('.') == std::string::npos || noiseHost(host)) continue;
+            // Placeholders from string formatting ("%s.example.com", "{host}") are not hosts.
+            if (host.find('%') != std::string::npos || host.find('{') != std::string::npos || host.find('$') != std::string::npos) continue;
+            while (!url.empty() && (url.back() == '.' || url.back() == ',' || url.back() == ';')) url.pop_back();
+            EndpointHost& h = byHost[host];
+            if (h.host.empty()) {
+                h.host = host;
+                for (const CloudKind& k : kCloud)
+                    if (endsWith(host, k.suffix) || contains(host, k.suffix)) {
+                        h.kind = k.kind;
+                        break;
+                    }
+            }
+            if (std::find(h.urls.begin(), h.urls.end(), url) == h.urls.end() && h.urls.size() < 50) h.urls.push_back(url);
+        }
+    }
+    std::vector<EndpointHost> out;
+    for (auto& [host, h] : byHost) {
+        std::sort(h.urls.begin(), h.urls.end());
+        // https stays true only if some https URL was seen for it.
+        bool anyHttps = false;
+        for (const auto& u : h.urls) anyHttps |= startsWith(u, "https://") || startsWith(u, "wss://");
+        h.https = anyHttps;
+        out.push_back(std::move(h));
+    }
+    std::stable_sort(out.begin(), out.end(), [](const EndpointHost& a, const EndpointHost& b) {
+        if (a.kind.empty() != b.kind.empty()) return !a.kind.empty();  // cloud backends first
+        return a.host < b.host;
+    });
+    return out;
 }
 
 std::string mask(std::string_view secret) {

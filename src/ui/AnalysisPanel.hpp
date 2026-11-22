@@ -131,6 +131,7 @@ private:
     char excludeBuf_[2048] = {};  // editable list, one prefix per line
     std::vector<std::string> excluded_;
     bool excludesLoaded_ = false;
+    uint64_t mappingSeen_ = 0;  // Workspace::mappingVersion() the rows were built for
     std::string appliedFilter_ = "\x01";
     bool scrollToSelection_ = false;
 

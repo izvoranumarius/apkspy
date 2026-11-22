@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 #include "analysis/DexFile.hpp"
@@ -77,6 +78,9 @@ struct ListingOptions {
     bool showLines = true;      // .line directives from debug info
     bool showBytes = false;     // raw code units
     size_t maxInstructions = 200000;
+    // Optional: names an app resource id (0x7fxxxxxx), "@string/app_name", or "" when unknown.
+    // Instructions loading such a constant get a trailing "# @string/app_name" comment.
+    std::function<std::string(uint32_t)> resourceName;
 };
 
 // Smali-like listing of one method (header + body). `out` is appended to.

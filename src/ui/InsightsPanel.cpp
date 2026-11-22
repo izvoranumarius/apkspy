@@ -54,6 +54,7 @@ void InsightsPanel::runScan() {
     if (apk && apk->tree) collectFiles(*apk->tree, in.files);
     result_ = insights::scan(in);
     strings_ = std::move(in.strings);
+    endpoints_ = insights::endpoints(strings_);
     callers_.clear();
     constArgs_.clear();
 
@@ -259,6 +260,49 @@ void InsightsPanel::drawSdks() {
     }
 }
 
+void InsightsPanel::drawEndpoints() {
+    if (endpoints_.empty()) {
+        ImGui::TextDisabled("No URLs in the string constants.");
+        return;
+    }
+    ImGui::TextDisabled("Hosts found in string constants. Cloud backends first; click a URL for the code that uses it.");
+    for (size_t i = 0; i < endpoints_.size(); ++i) {
+        const auto& h = endpoints_[i];
+        ImGui::PushID(static_cast<int>(i));
+        const bool cloud = !h.kind.empty();
+        ImGui::PushStyleColor(ImGuiCol_Text, cloud ? theme::vec(Col::Info) : (h.https ? theme::vec(Col::Text) : theme::vec(Col::Warning)));
+        const bool open = ImGui::TreeNodeEx("##h", ImGuiTreeNodeFlags_SpanAvailWidth, "%s  (%zu)", h.host.c_str(), h.urls.size());
+        ImGui::PopStyleColor();
+        if (cloud) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", h.kind.c_str());
+        }
+        if (!h.https) {
+            ImGui::SameLine();
+            ImGui::TextColored(theme::vec(Col::Warning), "cleartext only");
+        }
+        if (ImGui::BeginPopupContextItem("##hctx")) {
+            if (ImGui::MenuItem("Copy host")) ImGui::SetClipboardText(h.host.c_str());
+            ImGui::EndPopup();
+        }
+        if (open) {
+            for (size_t k = 0; k < h.urls.size(); ++k) {
+                ImGui::PushID(static_cast<int>(k));
+                if (ImGui::TreeNodeEx("##u", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", h.urls[k].c_str())) {
+                    const std::string key = "u:" + h.urls[k];
+                    auto it = callers_.find(key);
+                    if (it == callers_.end()) it = callers_.emplace(key, analysis_->stringUses(h.urls[k], true, 50)).first;
+                    drawXrefs(it->second);
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+}
+
 void InsightsPanel::drawRules() {
     if (result_.rules.empty()) {
         ImGui::TextDisabled("No rule matched.");
@@ -443,8 +487,16 @@ void InsightsPanel::drawRetrace() {
     if (ui::smallButton("Load mapping.txt...")) mappingBrowser_.open(FileBrowser::Mode::OpenFile);
     ImGui::SameLine();
     if (mappingFile_.empty()) ImGui::TextDisabled("no mapping loaded");
-    else ImGui::TextDisabled("%s: %zu classes%s", mappingFile_.c_str(), mapping_.byObfuscated.size(),
-                             mapping_.errors ? " (some lines skipped)" : "");
+    else {
+        ImGui::TextDisabled("%s: %zu classes%s - applied to the Analysis class tree", mappingFile_.c_str(), mapping_.byObfuscated.size(),
+                            mapping_.errors ? " (some lines skipped)" : "");
+        ImGui::SameLine();
+        if (ui::smallButton("Clear")) {
+            mappingFile_.clear();
+            mapping_ = mapping::Mapping{};
+            workspace_.setMapping(nullptr);
+        }
+    }
     std::string picked;
     if (mappingBrowser_.render(), mappingBrowser_.takeAccepted(picked)) {
         std::ifstream in(pathutil::fromUtf8(picked), std::ios::binary);
@@ -452,6 +504,7 @@ void InsightsPanel::drawRetrace() {
         s << in.rdbuf();
         mappingText_ = s.str();
         mapping_ = mapping::parse(mappingText_);
+        workspace_.setMapping(std::make_shared<const mapping::Mapping>(mapping_));
         mappingFile_ = picked.substr(picked.find_last_of("/\\") + 1);
         retraced_ = mapping::retrace(mapping_, traceBuf_.data());
     }
@@ -547,6 +600,13 @@ void InsightsPanel::drawContents() {
         if (ImGui::BeginTabItem(label)) {
             ImGui::BeginChild("##sdk");
             drawSdks();
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        std::snprintf(label, sizeof label, "Endpoints (%zu)###endpoints", endpoints_.size());
+        if (ImGui::BeginTabItem(label)) {
+            ImGui::BeginChild("##endpoints");
+            drawEndpoints();
             ImGui::EndChild();
             ImGui::EndTabItem();
         }

@@ -390,16 +390,29 @@ void AnalysisPanel::flattenTree(const ApkAnalysis& a) {
     };
     const auto addClass = [&](uint32_t cls, uint8_t depth, bool fullName) {
         const std::string_view desc = a.classDescriptor(classes[cls]);
-        rows_.push_back({TreeRow::Class, depth, cls, 0, fullName ? DexFile::descriptorToJava(desc) : shortName(desc)});
+        std::string label = fullName ? DexFile::descriptorToJava(desc) : shortName(desc);
+        if (const mapping::Mapping* map = workspace_.mapping()) {
+            // An applied mapping.txt: show the original name next to the obfuscated one.
+            const std::string java = DexFile::descriptorToJava(desc);
+            const std::string original = map->originalClass(java);
+            if (original != java) label += "  \xE2\x86\x92 " + (fullName ? original : original.substr(original.rfind('.') + 1));
+        }
+        rows_.push_back({TreeRow::Class, depth, cls, 0, std::move(label)});
         if (classOpen_.count(cls)) addMethods(cls, static_cast<uint8_t>(depth + 1));
     };
     std::string needle = classFilter_;
     if (!needle.empty()) {  // filtered: a flat list of matching classes
         std::replace(needle.begin(), needle.end(), '.', '/');
-        for (uint32_t i = 0; i < static_cast<uint32_t>(classes.size()) && rows_.size() < 20000; ++i)
-            if (tex::ciFind(a.classDescriptor(classes[i]), needle) != std::string_view::npos &&
-                !(hideLibs_ && isExcluded(DexFile::descriptorToJava(a.classDescriptor(classes[i])))))
-                addClass(i, 0, true);
+        {
+            const mapping::Mapping* map = workspace_.mapping();
+            const std::string raw = classFilter_;
+            for (uint32_t i = 0; i < static_cast<uint32_t>(classes.size()) && rows_.size() < 20000; ++i) {
+                const std::string java = DexFile::descriptorToJava(a.classDescriptor(classes[i]));
+                bool match = tex::ciFind(a.classDescriptor(classes[i]), needle) != std::string_view::npos;
+                if (!match && map) match = tex::ciFind(map->originalClass(java), raw) != std::string_view::npos;
+                if (match && !(hideLibs_ && isExcluded(java))) addClass(i, 0, true);
+            }
+        }
         return;
     }
     // Packages with a single sub-package and no classes collapse into one row.
@@ -430,6 +443,10 @@ void AnalysisPanel::flattenTree(const ApkAnalysis& a) {
 
 void AnalysisPanel::drawClassTree(const ApkAnalysis& a, Root& apk) {
     if (!excludesLoaded_) loadExcludes();
+    if (mappingSeen_ != workspace_.mappingVersion()) {
+        mappingSeen_ = workspace_.mappingVersion();
+        rowsDirty_ = true;
+    }
     if (packages_.empty()) buildPackageTree(a);
     if (ImGui::Checkbox("Hide libs", &hideLibs_)) {
         saveExcludes();
@@ -663,7 +680,7 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
 void AnalysisPanel::openClass(const ApkAnalysis& a, const ApkAnalysis::ClassEntry& c, const std::string& group) {
     const std::string desc(a.classDescriptor(c));
     workspace_.openGenerated(group, "smali/" + sanitizeForPath(desc) + ".smali", shortName(desc) + ".smali",
-                             a.disassembleClass(c), 0);
+                             a.disassembleClass(c, workspace_.listingOptions(group)), 0);
 }
 
 void AnalysisPanel::openMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m, const std::string& group,

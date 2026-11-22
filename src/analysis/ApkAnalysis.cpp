@@ -732,8 +732,12 @@ std::string ApkAnalysis::disassemble(const MethodDef& m) const {
 }
 
 std::string ApkAnalysis::disassembleClass(const ClassEntry& c) const {
+    return disassembleClass(c, dalvik::ListingOptions{});
+}
+
+std::string ApkAnalysis::disassembleClass(const ClassEntry& c, const dalvik::ListingOptions& opt) const {
     std::string out;
     out += "# " + dexes_[c.dex]->name() + "\n";
-    dalvik::disassembleClass(*dexes_[c.dex], classDef(c), dalvik::ListingOptions{}, out);
+    dalvik::disassembleClass(*dexes_[c.dex], classDef(c), opt, out);
     return out;
 }

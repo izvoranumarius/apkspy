@@ -5,6 +5,8 @@
 #include <unordered_set>
 #include <vector>
 #include "analysis/AnalysisService.hpp"
+#include "analysis/Dalvik.hpp"
+#include "analysis/Mapping.hpp"
 #include "core/Annotations.hpp"
 #include "core/ApkArchive.hpp"
 #include "core/ResourceTable.hpp"
@@ -190,6 +192,17 @@ public:
     // (0-based) through the navigation history. Closing the tab frees it.
     void openGenerated(const std::string& group, const std::string& path, const std::string& title,
                        std::string text, int line = 0);
+    // ProGuard / R8 mapping.txt applied to class names (class tree, search). Shared by all APKs;
+    // an empty pointer clears it.
+    void setMapping(std::shared_ptr<const mapping::Mapping> m) {
+        mapping_ = std::move(m);
+        ++mappingVersion_;
+    }
+    const mapping::Mapping* mapping() const { return mapping_.get(); }
+    uint64_t mappingVersion() const { return mappingVersion_; }
+
+    // Listing options for `group`: app resource ids are named from its resources.arsc.
+    dalvik::ListingOptions listingOptions(const std::string& group);
     // Smali listing of a method, on the instruction at `pc` when given.
     void openMethodListing(const std::string& group, const ApkAnalysis& a, const ApkAnalysis::MethodDef& m,
                            uint32_t pc = UINT32_MAX);
@@ -364,6 +377,8 @@ private:
     ExportJob export_;            // running folder export (M5)
     std::vector<EditRecord> edits_;  // edit tracking, see EditRecord
     uint64_t editsVersion_ = 0;
+    std::shared_ptr<const mapping::Mapping> mapping_;
+    uint64_t mappingVersion_ = 0;
     EditRecord* findEdit(const std::string& group, RootKind kind, const std::string& nodePath);
     Document* documentFor(const EditRecord& r);
     std::unordered_map<std::string, uint64_t> treeEpochs_;  // per-group tree change counter

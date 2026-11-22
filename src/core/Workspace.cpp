@@ -722,12 +722,19 @@ std::shared_ptr<const ResourceTable> Workspace::resources(const std::string& gro
     return apk->resources;
 }
 
+dalvik::ListingOptions Workspace::listingOptions(const std::string& group) {
+    dalvik::ListingOptions opt;
+    if (auto res = resources(group))
+        opt.resourceName = [res](uint32_t id) { return res->reference(id); };
+    return opt;
+}
+
 void Workspace::openMethodListing(const std::string& group, const ApkAnalysis& a, const ApkAnalysis::MethodDef& m, uint32_t pc) {
     const DexFile& dex = *a.dexes()[m.dex];
     const std::string sig = a.methodSignature(m);
     std::string text = "# " + sig + "  (" + dex.name() + ")\n";
     std::vector<int32_t> linePcs{-1};
-    dalvik::disassembleMethod(dex, m.method, dalvik::ListingOptions{}, text, &linePcs);
+    dalvik::disassembleMethod(dex, m.method, listingOptions(group), text, &linePcs);
     int line = 0;
     if (pc != UINT32_MAX)
         for (size_t i = 0; i < linePcs.size(); ++i)

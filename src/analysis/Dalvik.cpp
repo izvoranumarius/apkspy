@@ -455,6 +455,11 @@ void disassembleMethod(const DexFile& dex, const DexFile::EncodedMethod& m, cons
             appendf(out, "%s (%u units)", kind, in.size);
         } else {
             appendInsn(dex, in, out);
+            // App resource ids (0x7fTTEEEE) loaded as constants: say what they are.
+            if (opt.resourceName && in.hasLiteral && in.literal >= 0x7f000000 && in.literal <= 0x7fffffff) {
+                const std::string name = opt.resourceName(static_cast<uint32_t>(in.literal));
+                if (!name.empty()) out += "  # " + name;
+            }
         }
         out += '\n';
         mark(static_cast<int32_t>(in.pc));

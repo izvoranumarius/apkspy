@@ -209,6 +209,34 @@ void testPermissions() {
     CHECK(!find(missing, "android.permission.ACCESS_FINE_LOCATION"), "requested permission not in missing view");
 }
 
+void testEndpoints() {
+    const std::vector<std::string> strings = {
+        "https://my-app-default-rtdb.firebaseio.com/users.json",
+        "see https://api.example.com/v1/login?x=1 and \"http://cdn.example.com/a.png\"",
+        "https://us-central1-proj.cloudfunctions.net/hello",
+        "http://schemas.android.com/apk/res/android",   // noise
+        "https://%s.example.org/path",                  // format placeholder
+        "http://localhost:8080/x",                      // noise
+        "https://api.example.com/v1/users",
+        "wss://realtime.example.com/socket",
+        "not a url at all",
+    };
+    const auto e = insights::endpoints(strings);
+    const auto find = [&](const char* host) -> const insights::EndpointHost* {
+        for (const auto& h : e)
+            if (h.host == host) return &h;
+        return nullptr;
+    };
+    CHECK(find("api.example.com") && find("api.example.com")->urls.size() == 2 && find("api.example.com")->https, "urls grouped by host");
+    CHECK(find("cdn.example.com") && !find("cdn.example.com")->https, "http-only host flagged");
+    CHECK(find("my-app-default-rtdb.firebaseio.com") && find("my-app-default-rtdb.firebaseio.com")->kind == "Firebase Realtime Database",
+          "Firebase RTDB classified");
+    CHECK(find("us-central1-proj.cloudfunctions.net") && find("us-central1-proj.cloudfunctions.net")->kind == "Cloud Functions", "Cloud Functions classified");
+    CHECK(!find("schemas.android.com") && !find("localhost") && !find("%s.example.org"), "schemas, localhost and placeholders skipped");
+    CHECK(find("realtime.example.com") && find("realtime.example.com")->https, "wss counts as secure");
+    CHECK(!e.empty() && !e[0].kind.empty() && !e[1].kind.empty() && e[2].kind.empty(), "cloud backends sort first");
+}
+
 void testNetSec() {
     using A = std::vector<AxmlDecoder::Attr>;
     netsec::Collector c;
@@ -271,6 +299,7 @@ int main() {
     testMapping();
     testPermissions();
     testNetSec();
+    testEndpoints();
     std::printf("%d passed, %d failed\n", passes, failures);
     return failures == 0 ? 0 : 1;
 }

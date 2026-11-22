@@ -76,6 +76,17 @@ struct Obfuscation {
 };
 Obfuscation estimateObfuscation(const std::vector<std::string>& classes);
 
+// --- Endpoints --------------------------------------------------------------
+// URLs found in string constants, grouped by host. Cloud backends (Firebase,
+// App Engine, AWS, Supabase, ...) are classified so they sort first.
+struct EndpointHost {
+    std::string host;
+    std::string kind;  // "Firebase Realtime Database", "AWS", ... or empty for a plain host
+    bool https = true;  // false when only http:// was seen
+    std::vector<std::string> urls;  // unique, sorted
+};
+std::vector<EndpointHost> endpoints(const std::vector<std::string>& strings);
+
 // --- Permission -> API usage ------------------------------------------------
 // Which guarded APIs an app actually calls for each dangerous permission it
 // requests - the gap between what it asks for and what it uses.
