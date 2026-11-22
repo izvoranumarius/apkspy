@@ -136,6 +136,7 @@
     <ClInclude Include="src\edit\Edits.hpp" />
     <ClInclude Include="src\analysis\Insights.hpp" />
     <ClInclude Include="src\analysis\Mapping.hpp" />
+    <ClInclude Include="src\analysis\NetSecConfig.hpp" />
     <ClInclude Include="src\ui\InsightsPanel.hpp" />
     <ClInclude Include="src\ui\FridaPanel.hpp" />
     <ClInclude Include="src\ui\RepackPanel.hpp" />
@@ -156,6 +157,7 @@
     <ClInclude Include="src\analysis\ApkAnalysis.hpp" />
     <ClInclude Include="src\analysis\AnalysisService.hpp" />
     <ClInclude Include="src\app\Theme.hpp" />
+    <ClInclude Include="src\app\SystemTheme.hpp" />
     <ClInclude Include="src\app\WindowFrame.hpp" />
     <ClInclude Include="src\core\ApkArchive.hpp" />
     <ClInclude Include="src\core\TextSearch.hpp" />
@@ -351,6 +353,7 @@
     <ClCompile Include="src\edit\Edits.cpp" />
     <ClCompile Include="src\analysis\Insights.cpp" />
     <ClCompile Include="src\analysis\Mapping.cpp" />
+    <ClCompile Include="src\analysis\NetSecConfig.cpp" />
     <ClCompile Include="src\ui\InsightsPanel.cpp" />
     <ClCompile Include="src\ui\FridaPanel.cpp" />
     <ClCompile Include="src\ui\RepackPanel.cpp" />
@@ -371,6 +374,7 @@
     <ClCompile Include="src\analysis\ApkAnalysis.cpp" />
     <ClCompile Include="src\analysis\AnalysisService.cpp" />
     <ClCompile Include="src\app\Theme.cpp" />
+    <ClCompile Include="src\app\SystemTheme.cpp" />
     <ClCompile Include="src\app\ThemePresets.cpp" />
     <ClCompile Include="src\app\WindowFrame.cpp" />
     <ClCompile Include="src\app\main.cpp" />

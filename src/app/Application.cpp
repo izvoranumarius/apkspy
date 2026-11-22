@@ -17,6 +17,7 @@
 #include "ui/EditorPanel.hpp"
 #include "ui/ExplorerPanel.hpp"
 #include "ui/McpSettings.hpp"
+#include "app/SystemTheme.hpp"
 #include "ui/BookmarksPanel.hpp"
 #include "ui/EditsPanel.hpp"
 #include "ui/InsightsPanel.hpp"
@@ -97,6 +98,7 @@ Application::Application()
     const auto show = [this](const std::string& title) { showPanel(title); };
     auto analysis = std::make_unique<AnalysisPanel>(workspace_, show);
     analysisPanel_ = analysis.get();
+    analysis->setSettings(&settings_);
     panels_.push_back(std::move(analysis));
     panels_.push_back(std::make_unique<FunctionPanel>(workspace_, *analysisPanel_));
     panels_.push_back(std::make_unique<ReferencesPanel>(workspace_, *analysisPanel_));
@@ -435,6 +437,15 @@ void Application::setZoom(float zoom) {
 void Application::frame() {
     if (inFrame_) return;
     inFrame_ = true;
+
+    // Follow the system light / dark setting (polled twice a second: the registry read is cheap).
+    if (glfwGetTime() - lastSystemThemeCheck_ > 0.5) {
+        lastSystemThemeCheck_ = glfwGetTime();
+        if (settings_.getBool(Settings::kFollowSystemTheme, false) && !settingsDialog_.isOpen()) {
+            const char* want = systemtheme::presetFor(systemtheme::prefersDark());
+            if (*want && Theme::currentId() != want) Theme::setPreset(want);
+        }
+    }
 
     // DPI or zoom change: rebuild the font atlas and rescale the style
     // before anything renders with them (the atlas is locked mid-frame).

@@ -138,11 +138,11 @@ $(EDITS_TEST): tests/edits_test.cpp src/edit/Edits.cpp src/smali/Validate.cpp sr
 	$(CXX) -std=c++23 -O1 -g -Wall -Wextra -Wno-unused-parameter -Isrc \
 	    tests/edits_test.cpp src/edit/Edits.cpp src/smali/Validate.cpp src/analysis/DexFile.cpp -o $@
 
-$(INSIGHTS_TEST): tests/insights_test.cpp src/analysis/Insights.cpp src/analysis/Mapping.cpp \
+$(INSIGHTS_TEST): tests/insights_test.cpp src/analysis/Insights.cpp src/analysis/Mapping.cpp src/analysis/NetSecConfig.cpp \
                   src/analysis/Insights.hpp src/analysis/Mapping.hpp
 	@mkdir -p $(@D)
 	$(CXX) -std=c++23 -O1 -g -Wall -Wextra -Wno-unused-parameter -Isrc \
-	    tests/insights_test.cpp src/analysis/Insights.cpp src/analysis/Mapping.cpp -o $@
+	    tests/insights_test.cpp src/analysis/Insights.cpp src/analysis/Mapping.cpp src/analysis/NetSecConfig.cpp -o $@
 
 run: $(TARGET)
 	./$(TARGET)

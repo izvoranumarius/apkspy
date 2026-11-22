@@ -161,4 +161,5 @@ private:
     uint64_t dirtyCheckEpoch_ = 0;
     uint64_t savedAnnotations_ = 1;  // Annotations::version() of the saved state
     bool dirtyCheckResult_ = false;
+    double lastSystemThemeCheck_ = 0.0;
 };

@@ -570,6 +570,9 @@
     <ClInclude Include="src\analysis\Insights.hpp">
       <Filter>Header Files\analysis</Filter>
     </ClInclude>
+    <ClInclude Include="src\analysis\NetSecConfig.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
     <ClInclude Include="src\analysis\Mapping.hpp">
       <Filter>Header Files\analysis</Filter>
     </ClInclude>
@@ -629,6 +632,9 @@
     </ClInclude>
     <ClInclude Include="src\analysis\AnalysisService.hpp">
       <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\app\SystemTheme.hpp">
+      <Filter>Header Files\app</Filter>
     </ClInclude>
     <ClInclude Include="src\app\Theme.hpp">
       <Filter>Header Files\app</Filter>
@@ -899,6 +905,9 @@
     <ClCompile Include="src\analysis\Insights.cpp">
       <Filter>Source Files\analysis</Filter>
     </ClCompile>
+    <ClCompile Include="src\analysis\NetSecConfig.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
     <ClCompile Include="src\analysis\Mapping.cpp">
       <Filter>Source Files\analysis</Filter>
     </ClCompile>
@@ -958,6 +967,9 @@
     </ClCompile>
     <ClCompile Include="src\analysis\AnalysisService.cpp">
       <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\app\SystemTheme.cpp">
+      <Filter>Source Files\app</Filter>
     </ClCompile>
     <ClCompile Include="src\app\Theme.cpp">
       <Filter>Source Files\app</Filter>

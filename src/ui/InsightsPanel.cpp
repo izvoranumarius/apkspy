@@ -66,6 +66,34 @@ void InsightsPanel::runScan() {
             const auto res = workspace_.resources(group_);
             haveAudit_ = manifestaudit::audit(*archive, res.get(), audit_, auditError_);
         }
+    netsec_ = netsec::Config{};
+    netsecFile_.clear();
+    if (haveAudit_ && apk)
+        if (const auto* archive = dynamic_cast<const ApkArchive*>(apk->source.get())) {
+            std::string ref = audit_.networkSecurityConfig;  // "@xml/name" once resources resolve it
+            const size_t slash = ref.find_last_of("/");
+            std::string base = slash == std::string::npos ? ref : ref.substr(slash + 1);
+            if (base.size() > 4 && base.compare(base.size() - 4, 4, ".xml") == 0) base.resize(base.size() - 4);
+            std::string entry;
+            if (!base.empty() && base[0] != '0') {
+                for (const auto& e : archive->entries())
+                    if (e.path == "res/xml/" + base + ".xml") entry = e.path;
+                if (entry.empty())
+                    for (const auto& e : archive->entries())  // obfuscated resource paths keep the name rarely; try any xml with that name
+                        if (e.path.size() > base.size() + 5 && e.path.rfind("res/", 0) == 0 &&
+                            e.path.compare(e.path.size() - base.size() - 4, base.size() + 4, base + ".xml") == 0)
+                            entry = e.path;
+            }
+            std::vector<uint8_t> bytes;
+            if (!entry.empty() && archive->readEntry(entry, bytes) && AxmlDecoder::looksLikeAxml(bytes)) {
+                netsec::Collector col;
+                std::string err;
+                if (AxmlDecoder::decodeEvents(bytes, col, err, nullptr)) {
+                    netsec_ = col.result;
+                    netsecFile_ = entry;
+                }
+            }
+        }
     if (haveAudit_) {
         permUse_ = insights::permissionUsage(audit_.permissions, in.methodRefs);
         permMissing_ = insights::missingPermissions(audit_.permissions, in.methodRefs);
@@ -313,6 +341,26 @@ void InsightsPanel::drawManifest() {
             if (!c.exported) continue;
             ImGui::BulletText("%s %s%s%s", manifestaudit::Component::kindName(c.kind), c.name.c_str(),
                               c.permission.empty() ? "" : "  permission: ", c.permission.c_str());
+        }
+    }
+    {
+        // Network security config: trust anchors, cleartext, pins.
+        const auto lines = netsec::notes(netsec_, a.targetSdk);
+        if (ImGui::CollapsingHeader("Network security config###netsec")) {
+            if (!netsecFile_.empty()) ImGui::TextDisabled("%s", netsecFile_.c_str());
+            else if (!a.networkSecurityConfig.empty())
+                ImGui::TextDisabled("referenced as %s (file not found in the APK)", a.networkSecurityConfig.c_str());
+            for (const auto& l : lines) ImGui::BulletText("%s", l.c_str());
+            for (const auto& sc : netsec_.domainConfigs) {
+                for (const auto& d : sc.domains) {
+                    ImGui::TextDisabled("%s%s", d.name.c_str(), d.includeSubdomains ? " (+subdomains)" : "");
+                    for (const auto& p : sc.pins) {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("  %s:%s", p.digest.c_str(), p.value.c_str());
+                        break;
+                    }
+                }
+            }
         }
     }
     if (!a.deepLinks.empty()) {

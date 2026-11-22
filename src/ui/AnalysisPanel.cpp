@@ -281,12 +281,67 @@ void AnalysisPanel::drawHeader(Root& apk, const AnalysisService::Status& st) {
 // Classes / methods
 // ---------------------------------------------------------------------------
 
+static const char* const kDefaultHideLibs =
+    "android.\nandroidx.\nkotlin.\nkotlinx.\ncom.google.\ncom.android.\njava.\njavax.\nokhttp3.\nokio.\nretrofit2.\n"
+    "io.reactivex.\ndagger.\ncom.squareup.\ncom.facebook.\ncom.bumptech.\n";
+
+void AnalysisPanel::setSettings(Settings* settings) {
+    settings_ = settings;
+    excludesLoaded_ = false;
+}
+
+void AnalysisPanel::loadExcludes() {
+    excludesLoaded_ = true;
+    std::string list = kDefaultHideLibs;
+    if (settings_) {
+        hideLibs_ = settings_->getBool(Settings::kHideLibs, false);
+        const std::string saved = settings_->getString(Settings::kHideLibsList, "");
+        if (!saved.empty()) {
+            list.clear();
+            for (char ch : saved) list += ch == '|' ? '\n' : ch;  // stored on one line
+        }
+    }
+    std::snprintf(excludeBuf_, sizeof excludeBuf_, "%s", list.c_str());
+    saveExcludes();
+}
+
+void AnalysisPanel::saveExcludes() {
+    excluded_.clear();
+    std::string line, joined;
+    const std::string buf = excludeBuf_;
+    for (size_t i = 0; i <= buf.size(); ++i) {
+        if (i == buf.size() || buf[i] == '\n' || buf[i] == '\r') {
+            size_t a = line.find_first_not_of(" \t"), b = line.find_last_not_of(" \t");
+            if (a != std::string::npos) {
+                const std::string p = line.substr(a, b - a + 1);
+                excluded_.push_back(p);
+                joined += (joined.empty() ? "" : "|") + p;
+            }
+            line.clear();
+        } else {
+            line += buf[i];
+        }
+    }
+    if (settings_) {
+        settings_->set(Settings::kHideLibs, hideLibs_);
+        settings_->set(Settings::kHideLibsList, joined);
+    }
+}
+
+bool AnalysisPanel::isExcluded(std::string_view javaName) const {
+    if (!hideLibs_) return false;
+    for (const std::string& p : excluded_)
+        if (javaName.substr(0, p.size()) == p) return true;
+    return false;
+}
+
 void AnalysisPanel::buildPackageTree(const ApkAnalysis& a) {
     packages_.assign(1, PackageNode{});
     std::unordered_map<std::string, uint32_t> byPath;
     const auto& classes = a.classes();
     for (uint32_t i = 0; i < static_cast<uint32_t>(classes.size()); ++i) {
         const std::string name = DexFile::descriptorToJava(a.classDescriptor(classes[i]));
+        if (isExcluded(name)) continue;
         uint32_t node = 0;
         size_t start = 0;
         for (size_t dot = name.find('.'); dot != std::string::npos; dot = name.find('.', start)) {
@@ -341,7 +396,9 @@ void AnalysisPanel::flattenTree(const ApkAnalysis& a) {
     if (!needle.empty()) {  // filtered: a flat list of matching classes
         std::replace(needle.begin(), needle.end(), '.', '/');
         for (uint32_t i = 0; i < static_cast<uint32_t>(classes.size()) && rows_.size() < 20000; ++i)
-            if (tex::ciFind(a.classDescriptor(classes[i]), needle) != std::string_view::npos) addClass(i, 0, true);
+            if (tex::ciFind(a.classDescriptor(classes[i]), needle) != std::string_view::npos &&
+                !(hideLibs_ && isExcluded(DexFile::descriptorToJava(a.classDescriptor(classes[i])))))
+                addClass(i, 0, true);
         return;
     }
     // Packages with a single sub-package and no classes collapse into one row.
@@ -371,7 +428,26 @@ void AnalysisPanel::flattenTree(const ApkAnalysis& a) {
 }
 
 void AnalysisPanel::drawClassTree(const ApkAnalysis& a, Root& apk) {
+    if (!excludesLoaded_) loadExcludes();
     if (packages_.empty()) buildPackageTree(a);
+    if (ImGui::Checkbox("Hide libs", &hideLibs_)) {
+        saveExcludes();
+        buildPackageTree(a);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hide library packages from the class tree (edit the list with the ... button)");
+    ImGui::SameLine();
+    if (ui::smallButton("...##hidelibs")) ImGui::OpenPopup("##hidelibspopup");
+    if (ImGui::BeginPopup("##hidelibspopup")) {
+        ImGui::TextDisabled("Package prefixes to hide, one per line (e.g. androidx. or com.google.)");
+        ImGui::InputTextMultiline("##hidelist", excludeBuf_, sizeof excludeBuf_, ImVec2(ui::em(24.f), ui::em(10.f)));
+        if (ImGui::Button("Apply")) {
+            saveExcludes();
+            buildPackageTree(a);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::SameLine();
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##classFilter", "Find class (name or package)...", classFilter_, sizeof classFilter_);
     if (appliedFilter_ != classFilter_) {

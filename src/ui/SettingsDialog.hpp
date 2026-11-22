@@ -68,6 +68,7 @@ private:
     bool restoreSession_ = true;
     bool lineNumbers_ = true;
     bool fullCjk_ = false;
+    bool followSystemTheme_ = false;
 
     // Live-previewed appearance, restored on Cancel.
     Theme::State themeAtOpen_;

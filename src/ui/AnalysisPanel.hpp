@@ -16,6 +16,7 @@
 #include "ui/AnnotationUi.hpp"
 #include "ui/GraphView.hpp"
 #include "ui/Panel.hpp"
+#include "core/Settings.hpp"
 #include "ui/StringHints.hpp"
 #include "ui/TextSelect.hpp"
 
@@ -37,6 +38,8 @@ public:
     AnalysisPanel(Workspace& workspace, std::function<void(const std::string&)> showPanel)
         : Panel(workspace, "Analysis"), showPanel_(std::move(showPanel)) {}
     ~AnalysisPanel() override;
+    // Persists the library-hiding list (optional; without it the defaults apply for the session).
+    void setSettings(Settings* settings);
 
     // Contents of the Function, References and Decompiler panels (state lives here).
     void drawFunctionView();
@@ -90,6 +93,9 @@ private:
     void showGraph(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m);
     void showCallGraph(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m);
     void resetCaches(bool keepNative = false);
+    bool isExcluded(std::string_view javaName) const;
+    void loadExcludes();
+    void saveExcludes();
 
     std::function<void(const std::string&)> showPanel_;
     int apkIdx_ = 0;
@@ -118,6 +124,12 @@ private:
     std::vector<TreeRow> rows_;
     bool rowsDirty_ = true;
     char classFilter_[256] = {};
+    // Library hiding: classes whose Java name starts with one of `excluded_` are left out of the tree.
+    Settings* settings_ = nullptr;
+    bool hideLibs_ = false;
+    char excludeBuf_[2048] = {};  // editable list, one prefix per line
+    std::vector<std::string> excluded_;
+    bool excludesLoaded_ = false;
     std::string appliedFilter_ = "\x01";
     bool scrollToSelection_ = false;
 

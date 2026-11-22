@@ -8,6 +8,7 @@
 #include "analysis/Insights.hpp"
 #include "analysis/ManifestAudit.hpp"
 #include "analysis/Mapping.hpp"
+#include "analysis/NetSecConfig.hpp"
 #include "ui/FileBrowser.hpp"
 #include "ui/Panel.hpp"
 
@@ -47,6 +48,8 @@ private:
     bool haveAudit_ = false;
     manifestaudit::Audit audit_;
     std::string auditError_;
+    netsec::Config netsec_;
+    std::string netsecFile_;  // the entry the config was read from
     std::vector<insights::PermissionUse> permUse_;      // requested permissions -> APIs used
     std::vector<insights::PermissionUse> permMissing_;  // guarded APIs used without the permission
     bool showValues_ = false;

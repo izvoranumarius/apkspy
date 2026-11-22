@@ -7,6 +7,7 @@
 #include <vector>
 #include "analysis/Insights.hpp"
 #include "analysis/Mapping.hpp"
+#include "analysis/NetSecConfig.hpp"
 
 static int failures = 0;
 static int passes = 0;
@@ -208,6 +209,56 @@ void testPermissions() {
     CHECK(!find(missing, "android.permission.ACCESS_FINE_LOCATION"), "requested permission not in missing view");
 }
 
+void testNetSec() {
+    using A = std::vector<AxmlDecoder::Attr>;
+    netsec::Collector c;
+    c.startElement("network-security-config", {});
+    c.startElement("base-config", A{{"cleartextTrafficPermitted", "true"}});
+    c.startElement("trust-anchors", {});
+    c.startElement("certificates", A{{"src", "system"}});
+    c.endElement("certificates");
+    c.startElement("certificates", A{{"src", "user"}});
+    c.endElement("certificates");
+    c.endElement("trust-anchors");
+    c.endElement("base-config");
+    c.startElement("domain-config", A{{"cleartextTrafficPermitted", "false"}});
+    c.startElement("domain", A{{"includeSubdomains", "true"}});
+    c.text("api.example.com");
+    c.endElement("domain");
+    c.startElement("pin-set", A{{"expiration", "2030-01-01"}});
+    c.startElement("pin", A{{"digest", "SHA-256"}});
+    c.text("AAAA=");
+    c.endElement("pin");
+    c.endElement("pin-set");
+    c.endElement("domain-config");
+    c.startElement("debug-overrides", {});
+    c.startElement("certificates", A{{"src", "user"}});
+    c.endElement("certificates");
+    c.endElement("debug-overrides");
+    c.endElement("network-security-config");
+
+    const auto& r = c.result;
+    CHECK(r.present && r.hasBase && r.base.cleartext == 1 && r.base.anchors.size() == 2, "base-config parsed");
+    CHECK(r.domainConfigs.size() == 1 && r.domainConfigs[0].domains.size() == 1 &&
+              r.domainConfigs[0].domains[0].name == "api.example.com" && r.domainConfigs[0].domains[0].includeSubdomains,
+          "domain-config domain");
+    CHECK(r.domainConfigs[0].pins.size() == 1 && r.domainConfigs[0].pins[0].value == "AAAA=" &&
+              r.domainConfigs[0].pinExpiration == "2030-01-01",
+          "pin and expiration");
+    CHECK(r.hasDebugOverrides && r.debugAnchors.size() == 1 && r.debugAnchors[0].src == "user", "debug-overrides anchors");
+    const auto n = netsec::notes(r, 33);
+    const auto has = [&](const char* needle) {
+        for (const auto& l : n)
+            if (l.find(needle) != std::string::npos) return true;
+        return false;
+    };
+    CHECK(has("allows cleartext HTTP for every domain") && has("trusts user-installed CAs"), "base-config risks noted");
+    CHECK(has("Certificate pinning for api.example.com (+subdomains): 1 pin(s), expires 2030-01-01"), "pinning noted");
+    CHECK(has("debug-overrides present: user CAs are trusted in debuggable builds"), "debug overrides noted");
+    CHECK(!has("No certificate pins"), "no 'no pins' note when pins exist");
+    CHECK(netsec::notes(netsec::Config{}, 33)[0].find("No network security config") != std::string::npos, "absent config note");
+}
+
 }  // namespace
 
 int main() {
@@ -219,6 +270,7 @@ int main() {
     testExport();
     testMapping();
     testPermissions();
+    testNetSec();
     std::printf("%d passed, %d failed\n", passes, failures);
     return failures == 0 ? 0 : 1;
 }

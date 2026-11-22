@@ -55,6 +55,9 @@ public:
     static constexpr const char* kTrafficProtoDir = "traffic.protoDir";  // .proto files for the protobuf views
     static constexpr const char* kTrafficMaxBodyKb = "traffic.maxBodyKb";
     static constexpr const char* kFullCjkFonts = "ui.fullCjkFonts";
+    static constexpr const char* kFollowSystemTheme = "ui.followSystemTheme";
+    static constexpr const char* kHideLibs = "analysis.hideLibs";
+    static constexpr const char* kHideLibsList = "analysis.hideLibsList";  // one package prefix per line, \n-joined
     static constexpr const char* kUiZoomPercent = "ui.zoomPercent";  // text / UI zoom, 100 = default
     static constexpr const char* kMcpPort = "mcp.port";
     static constexpr const char* kMcpToken = "mcp.token";

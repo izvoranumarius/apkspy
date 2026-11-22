@@ -79,6 +79,7 @@ void SettingsDialog::open() {
     restoreSession_ = settings_.getBool(Settings::kRestoreSession, true);
     lineNumbers_ = settings_.getBool(Settings::kLineNumbers, true);
     fullCjk_ = settings_.getBool(Settings::kFullCjkFonts, false);
+    followSystemTheme_ = settings_.getBool(Settings::kFollowSystemTheme, false);
     std::snprintf(adbPath_, sizeof adbPath_, "%s", devices_.adbPath().c_str());
     std::snprintf(pythonPath_, sizeof pythonPath_, "%s", settings_.getString(Settings::kPythonPath, "python").c_str());
     std::snprintf(terminalShell_, sizeof terminalShell_, "%s", settings_.getString(Settings::kTerminalShell, "").c_str());
@@ -112,6 +113,7 @@ void SettingsDialog::commit() {
     settings_.set(Settings::kRestoreSession, restoreSession_);
     settings_.set(Settings::kLineNumbers, lineNumbers_);
     settings_.set(Settings::kFullCjkFonts, fullCjk_);
+    settings_.set(Settings::kFollowSystemTheme, followSystemTheme_);
     devices_.setAdbPath(adbPath_);
     settings_.set(Settings::kAdbPath, adbPath_);
     settings_.set(Settings::kPythonPath, std::string(pythonPath_));
@@ -246,6 +248,8 @@ void SettingsDialog::drawGeneralPage() {
 
 void SettingsDialog::drawAppearancePage() {
     section("Theme");
+    ImGui::Checkbox("Follow the system light / dark setting", &followSystemTheme_);
+    hint("Switches between Dark Modern and Light when the operating system does (Windows). Picking a theme below turns this off.");
     drawThemeCards();
 
     section("Zoom");
@@ -278,7 +282,10 @@ void SettingsDialog::drawThemeCards() {
         ImGui::PushID(p.id.c_str());
         const ImVec2 pos = ImGui::GetCursorScreenPos();
         const bool selected = Theme::currentId() == p.id;
-        if (ImGui::InvisibleButton("##card", ImVec2(cardW, cardH))) Theme::setPreset(p.id);
+        if (ImGui::InvisibleButton("##card", ImVec2(cardW, cardH))) {
+            Theme::setPreset(p.id);
+            followSystemTheme_ = false;  // an explicit choice wins
+        }
         const bool hovered = ImGui::IsItemHovered();
         // The card previews the theme with its own colours, whatever is active.
         const auto pc = [&](Col c) { return ImGui::ColorConvertFloat4ToU32(p.colors[static_cast<size_t>(c)]); };
