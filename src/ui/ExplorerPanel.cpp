@@ -6,6 +6,7 @@
 #include "ui/ShellIcons.hpp"
 #include <cstdio>
 #include "imgui_internal.h"
+#include "ui/UiUtil.hpp"
 
 namespace {
 ImVec4 colorFor(NodeKind kind) {
@@ -353,7 +354,7 @@ void ExplorerPanel::drawRemoveConfirm() {
     ImGui::TextDisabled("Its decompiled results and related tabs will be closed.");
     ImGui::TextDisabled("The APK file itself is not deleted from disk.");
     ImGui::Spacing();
-    if (ImGui::Button("Remove", ImVec2(120, 0))) {
+    if (ui::dialogButton("Remove")) {
         Root* root = removeRequest_;
         removeRequest_ = nullptr;
         pressNode_ = nullptr;
@@ -367,7 +368,7 @@ void ExplorerPanel::drawRemoveConfirm() {
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+    if (ui::dialogButton("Cancel")) {
         removeRequest_ = nullptr;
         ImGui::CloseCurrentPopup();
     }

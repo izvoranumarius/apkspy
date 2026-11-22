@@ -124,7 +124,7 @@ void TrafficPanel::drawIntercept() {
                                                                     : "The request never reaches the server");
         if (!sel->response && !sel->websocket) {
             ImGui::SameLine();
-            if (ui::smallButton("Send to Repeater")) {
+            if (ImGui::Button("Send to Repeater")) {
                 httpclient::Target t;
                 httpclient::targetFromRequest(text, t);
                 newRepeaterTab(t, text);

@@ -51,6 +51,10 @@ inline bool smallButton(const char* label) {
     return clicked;
 }
 
+// Action buttons of a dialog (Save / Cancel / OK ...): one width for all of them, scaled with the UI.
+inline float dialogButtonWidth() { return em(7.f); }
+inline bool dialogButton(const char* label) { return ImGui::Button(label, ImVec2(dialogButtonWidth(), 0.f)); }
+
 // Flow-layout variants of common widgets.
 inline bool flowButton(const char* label) {
     sameLineIfFits(buttonWidth(label));

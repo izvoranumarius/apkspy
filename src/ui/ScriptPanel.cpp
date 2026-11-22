@@ -130,7 +130,7 @@ void ScriptPanel::drawNewFilePopup() {
     const bool enter = ImGui::InputText("##name", newName_, sizeof newName_, ImGuiInputTextFlags_EnterReturnsTrue);
     const std::string name = cleanName(newName_);
     ImGui::BeginDisabled(name.empty());
-    if (ImGui::Button("Create") || (enter && !name.empty())) {
+    if (ui::dialogButton("Create") || (enter && !name.empty())) {
         std::error_code ec;
         if (!fs::exists(scriptsDir() / pathutil::fromUtf8(name), ec)) {
             current_ = name;
@@ -143,7 +143,7 @@ void ScriptPanel::drawNewFilePopup() {
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
+    if (ui::dialogButton("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
 }
 

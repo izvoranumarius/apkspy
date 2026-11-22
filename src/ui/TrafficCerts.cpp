@@ -61,7 +61,7 @@ void TrafficPanel::drawCertDialog() {
         ImGui::TextWrapped("HTTPS interception is off (no CA loaded). Enable it in File > Settings > Network, "
                            "then come back to install the certificate on a device.");
         ImGui::PopTextWrapPos();
-        if (ui::smallButton("Close")) ImGui::CloseCurrentPopup();
+        if (ui::dialogButton("Close")) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
         return;
     }
@@ -94,7 +94,7 @@ void TrafficPanel::drawCertDialog() {
     if (ImGui::BeginPopup("##regen")) {
         ImGui::TextWrapped("Generate a new CA? Every device that has the current certificate installed must get "
                            "the new one (and re-trust it) before HTTPS can be captured again.");
-        if (ui::smallButton("Regenerate")) {
+        if (ui::dialogButton("Regenerate")) {
             std::string error;
             if (devices_.regenerateCa(error)) {
                 refreshCertInfo();
@@ -104,7 +104,7 @@ void TrafficPanel::drawCertDialog() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ui::smallButton("Cancel")) ImGui::CloseCurrentPopup();
+        if (ui::dialogButton("Cancel")) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
     // The exports go through the file browser (the key is never exported).
@@ -219,7 +219,7 @@ void TrafficPanel::drawCertDialog() {
                                certInfo_.sdk >= 34 ? "tmpfs overlay over the certificate directory, propagated to "
                                                     "running processes"
                                                    : "/system/etc/security/cacerts");
-            if (ui::smallButton("Install")) {
+            if (ui::dialogButton("Install")) {
                 certinstall::Installer installer(devices_.adb());
                 std::string error;
                 certStatus_ = installer.installSystemCert(serial, *ca, error) ? "Installed into the system store."
@@ -228,13 +228,13 @@ void TrafficPanel::drawCertDialog() {
                 certInfo_.ran = false;
             }
             ImGui::SameLine();
-            if (ui::smallButton("Cancel")) ImGui::CloseCurrentPopup();
+            if (ui::dialogButton("Cancel")) ImGui::CloseCurrentPopup();
             ImGui::EndPopup();
         }
         if (ImGui::BeginPopup("##sysrm")) {
             ImGui::TextWrapped("Remove ApkSpy's CA from the system store? Apps that trust only the system store "
                                "stop trusting the proxy afterwards.");
-            if (ui::smallButton("Remove")) {
+            if (ui::dialogButton("Remove")) {
                 certinstall::Installer installer(devices_.adb());
                 std::string error;
                 certStatus_ = installer.removeSystemCert(serial, *ca, error)
@@ -244,7 +244,7 @@ void TrafficPanel::drawCertDialog() {
                 certInfo_.ran = false;
             }
             ImGui::SameLine();
-            if (ui::smallButton("Cancel")) ImGui::CloseCurrentPopup();
+            if (ui::dialogButton("Cancel")) ImGui::CloseCurrentPopup();
             ImGui::EndPopup();
         }
     }
@@ -296,7 +296,7 @@ void TrafficPanel::drawCertDialog() {
         ui::wrappedColored(kDim, certStatus_);
     }
     ImGui::Separator();
-    if (ui::smallButton("Close")) {
+    if (ui::dialogButton("Close")) {
         ImGui::CloseCurrentPopup();
         certStatus_.clear();
     }

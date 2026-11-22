@@ -56,7 +56,7 @@ public:
         }
         ImGui::InputTextMultiline("##text", buf_.data(), buf_.size(), ImVec2(ui::em(26.f), ui::em(7.f)));
         const ImGuiIO& io = ImGui::GetIO();
-        const bool save = ImGui::Button("Save") || (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter, false));
+        const bool save = ui::dialogButton("Save") || (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter, false));
         ImGui::SameLine();
         if (save) {
             const std::string text = buf_.data();
@@ -69,12 +69,12 @@ public:
             }
             ImGui::CloseCurrentPopup();
         }
-        if (exists_ && ImGui::Button("Delete")) {
+        if (exists_ && ui::dialogButton("Delete")) {
             if (const Annotation* a = notes.at(location_.kind, location_)) notes.remove(a->id);
             ImGui::CloseCurrentPopup();
         }
         if (exists_) ImGui::SameLine();
-        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
+        if (ui::dialogButton("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();
         ImGui::SameLine();
         ImGui::TextDisabled("Ctrl+Enter saves");
         ImGui::EndPopup();

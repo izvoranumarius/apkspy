@@ -188,7 +188,7 @@ void TrafficPanel::drawToolbar() {
         ImGui::EndDisabled();
     }
     ui::sameLineIfFits(ui::buttonWidth("HTTPS & certificates"));
-    if (ui::smallButton("HTTPS & certificates")) {
+    if (ImGui::Button("HTTPS & certificates")) {
         refreshCertInfo();
         ImGui::OpenPopup("HTTPS & certificates");
     }

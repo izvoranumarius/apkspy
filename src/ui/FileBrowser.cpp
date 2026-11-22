@@ -4,6 +4,7 @@
 #include <filesystem>
 #include "core/Paths.hpp"
 #include "core/TextUtils.hpp"
+#include "ui/UiUtil.hpp"
 
 namespace fs = std::filesystem;
 
@@ -133,13 +134,13 @@ void FileBrowser::render() {
         ImGui::OpenPopup(popupTitle);
         openRequest_ = false;
     }
-    ImGui::SetNextWindowSize(ImVec2(720, 460), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(ui::em(47.f), ui::em(30.f)), ImGuiCond_Appearing);
     if (!ImGui::BeginPopupModal(popupTitle, &open_, ImGuiWindowFlags_NoSavedSettings)) return;
     const bool multi = mode_ == Mode::OpenApkMulti;
 
     // Path row ------------------------------------------------------------
-    float buttonW = 90.f;
-    ImGui::SetNextItemWidth(-buttonW - 140.f);
+    const float buttonW = ui::dialogButtonWidth();
+    ImGui::SetNextItemWidth(-(ui::buttonWidth("Up") + ui::buttonWidth("Refresh") + ImGui::GetStyle().ItemSpacing.x * 2.f));
     if (ImGui::InputText("##path", pathBuffer_, sizeof pathBuffer_, ImGuiInputTextFlags_EnterReturnsTrue)) {
         std::error_code ec;
         fs::path p = pathutil::fromUtf8(pathBuffer_).lexically_normal();
@@ -149,7 +150,7 @@ void FileBrowser::render() {
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Up", ImVec2(60, 0))) {
+    if (ImGui::Button("Up")) {
         fs::path parent = pathutil::fromUtf8(currentDir_).parent_path();
         if (!parent.empty()) goTo(pathutil::toUtf8(parent));
         else {
@@ -159,7 +160,7 @@ void FileBrowser::render() {
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Refresh", ImVec2(70, 0))) refresh();
+    if (ImGui::Button("Refresh")) refresh();
 
     // Quick places ---------------------------------------------------------
     if (ImGui::Button("Home")) goTo(homeDir());
@@ -229,7 +230,7 @@ void FileBrowser::render() {
     if (multi) {
         ImGui::TextDisabled("%d file(s) selected", static_cast<int>(selectedNames_.size()));
     } else {
-        ImGui::SetNextItemWidth(-buttonW * 2 - 12.f);
+        ImGui::SetNextItemWidth(-(buttonW * 2 + ImGui::GetStyle().ItemSpacing.x * 2.f));
         ImGui::InputText("##name", nameBuffer_, sizeof nameBuffer_);
     }
     ImGui::SameLine();
@@ -237,9 +238,9 @@ void FileBrowser::render() {
                               : mode_ == Mode::OpenProject || mode_ == Mode::OpenFile ? "Open"
                               : mode_ == Mode::SelectFolder ? "Select Folder"
                                                             : "Save";
-    if (ImGui::Button(acceptLabel, ImVec2(buttonW, 0))) pendingAccept = true;
+    if (ui::dialogButton(acceptLabel)) pendingAccept = true;
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(buttonW, 0))) {
+    if (ui::dialogButton("Cancel")) {
         open_ = false;
         ImGui::CloseCurrentPopup();
     }

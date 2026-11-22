@@ -201,13 +201,13 @@ void EditorPanel::drawConfirmModal() {
     if (closingDoc_ == nullptr && batchClose_.empty()) return;
     if (!ImGui::IsPopupOpen("Close with unsaved changes?")) ImGui::OpenPopup("Close with unsaved changes?");
 
-    ImGui::SetNextWindowSize(ImVec2(460, 0), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(ui::em(30.f), 0), ImGuiCond_Appearing);
     if (!ImGui::BeginPopupModal("Close with unsaved changes?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
 
     if (closingDoc_) {
         ImGui::Text("\"%s\" has unsaved changes.", closingDoc_->title().c_str());
         ImGui::Spacing();
-        if (ImGui::Button("Save", ImVec2(120, 0))) {
+        if (ui::dialogButton("Save")) {
             if (closingDoc_->save()) {
                 closeNow_.push_back(closingDoc_);
                 closingDoc_ = nullptr;
@@ -217,7 +217,7 @@ void EditorPanel::drawConfirmModal() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Don't Save", ImVec2(120, 0))) {
+        if (ui::dialogButton("Don't Save")) {
             closingDoc_->cancelEdit();
             closeNow_.push_back(closingDoc_);
             closingDoc_ = nullptr;
@@ -228,7 +228,7 @@ void EditorPanel::drawConfirmModal() {
         for (Document* d : batchClose_) dirty += d->isDirty() ? 1 : 0;
         ImGui::Text("%d tab(s) with unsaved changes are about to close.", dirty);
         ImGui::Spacing();
-        if (ImGui::Button("Save All", ImVec2(120, 0))) {
+        if (ui::dialogButton("Save All")) {
             for (Document* d : batchClose_)
                 if (d->isDirty() && !d->save()) workspace_.log("Could not save " + d->title());
             closeNow_.insert(closeNow_.end(), batchClose_.begin(), batchClose_.end());
@@ -236,7 +236,7 @@ void EditorPanel::drawConfirmModal() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Don't Save", ImVec2(120, 0))) {
+        if (ui::dialogButton("Don't Save")) {
             for (Document* d : batchClose_) d->cancelEdit();
             closeNow_.insert(closeNow_.end(), batchClose_.begin(), batchClose_.end());
             batchClose_.clear();
@@ -244,7 +244,7 @@ void EditorPanel::drawConfirmModal() {
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+    if (ui::dialogButton("Cancel")) {
         closingDoc_ = nullptr;
         batchClose_.clear();
         ImGui::CloseCurrentPopup();
@@ -873,7 +873,7 @@ void EditorPanel::drawGoToModal() {
         ImGui::SetKeyboardFocusHere();
         gotoFocus_ = false;
     }
-    ImGui::SetNextItemWidth(140.f);
+    ImGui::SetNextItemWidth(ui::em(9.f));
     const bool submit = ImGui::InputInt("##gotoline", &gotoValue_, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue);
     // Out-of-range input is clamped to [1, N] instead of being rejected.
     if (submit) {

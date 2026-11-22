@@ -208,10 +208,10 @@ bool SettingsDialog::render() {
 
     // Buttons --------------------------------------------------------------------
     ImGui::Separator();
-    const float buttonW = ui::em(5.5f);
+    const float buttonW = ui::dialogButtonWidth();
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
     ImGui::SetCursorPosX(ImGui::GetWindowWidth() - buttonW * 3.f - spacing * 2.f - ImGui::GetStyle().WindowPadding.x);
-    if (ImGui::Button("OK", ImVec2(buttonW, 0))) {
+    if (ui::dialogButton("OK")) {
         commit();
         committed = true;
         open_ = false;
@@ -220,12 +220,12 @@ bool SettingsDialog::render() {
     // Escape cancels, unless it is closing a colour picker or leaving a text field.
     const bool escape = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive() &&
                         !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) && ImGui::IsKeyPressed(ImGuiKey_Escape, false);
-    if (ImGui::Button("Cancel", ImVec2(buttonW, 0)) || escape) {
+    if (ui::dialogButton("Cancel") || escape) {
         revertPreview();
         open_ = false;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Apply", ImVec2(buttonW, 0))) {
+    if (ui::dialogButton("Apply")) {
         commit();
         committed = true;
     }
@@ -639,7 +639,7 @@ void SettingsDialog::drawKeyboardPage() {
             }
             ImGui::TableNextColumn();
             ImGui::BeginDisabled(!shortcuts_->isCustom(a.id));
-            if (ui::smallButton("Reset")) shortcuts_->reset(a.id);
+            if (ImGui::Button("Reset")) shortcuts_->reset(a.id);
             ImGui::EndDisabled();
             ImGui::PopID();
         }
