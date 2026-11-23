@@ -79,7 +79,7 @@ inline void finish(Context& c, uint8_t out[32]) {
     const uint64_t bits = c.bits;  // message length before padding
     // Padding: 0x80, then zeros so that (bufLen + k) % 64 == 56, then the
     // 64-bit big-endian bit count. k is at least 1 and at most 64.
-    size_t k = c.bufLen <= 55 ? 55 - c.bufLen + 1 : 119 - c.bufLen + 1;
+    size_t const k = c.bufLen <= 55 ? 55 - c.bufLen + 1 : 119 - c.bufLen + 1;
     uint8_t pad[72];
     pad[0] = 0x80;
     for (size_t i = 1; i < k; ++i) pad[i] = 0;

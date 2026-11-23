@@ -33,7 +33,7 @@ void TitleBar::addMenu(std::string label, std::function<void()> contents) {
 }
 
 void TitleBar::drawIcon(ImDrawList* dl, const Rect& area) const {
-    ImVec2 c = center(area);
+    ImVec2 const c = center(area);
     if (icon_ != 0 && iconWidth_ > 0.f && iconHeight_ > 0.f) {
         // Fit the favicon into the same 16x16 box the placeholder uses.
         const float side = std::max(iconWidth_, iconHeight_);
@@ -46,7 +46,7 @@ void TitleBar::drawIcon(ImDrawList* dl, const Rect& area) const {
     }
     const float r = 8.f * scale_;
     dl->AddRectFilled(ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), kAccent(), 3.f * scale_);
-    ImVec2 ts = ImGui::CalcTextSize("A");
+    ImVec2 const ts = ImGui::CalcTextSize("A");
     dl->AddText(ImVec2(std::floor(c.x - ts.x * 0.5f), std::floor(c.y - ts.y * 0.5f)), theme::u32(Col::TextOnAccent), "A");
 }
 
@@ -55,7 +55,7 @@ void TitleBar::drawCaptionBackground(ImDrawList* dl, const Rect& area, ImU32 col
 }
 
 void TitleBar::drawGlyph(ImDrawList* dl, const Rect& area, Glyph glyph, ImU32 color) const {
-    ImVec2 c = center(area);
+    ImVec2 const c = center(area);
     const float k = scale_;
     const float t = std::max(1.f, std::round(scale_));  // line thickness
     switch (glyph) {
@@ -80,7 +80,7 @@ void TitleBar::drawGlyph(ImDrawList* dl, const Rect& area, Glyph glyph, ImU32 co
 }
 
 void TitleBar::render() {
-    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGuiViewport const* vp = ImGui::GetMainViewport();
     const ImVec2 origin = vp->Pos;
     const float width = vp->Size.x;
     // The bar grows with the font (UI zoom / monitor DPI) so menu labels and
@@ -123,7 +123,7 @@ void TitleBar::render() {
     for (size_t i = 0; i < menus_.size(); ++i) {
         const Menu& menu = menus_[i];
         const float w = ImGui::CalcTextSize(menu.label.c_str()).x + menuPad * 2.f;
-        Rect r{x, top, x + w, bottom};
+        Rect const r{x, top, x + w, bottom};
         menuRects.push_back(r);
         layout.clientRects.push_back(r);
         x += w;
@@ -139,7 +139,7 @@ void TitleBar::render() {
         }
         if (openMenu_ == static_cast<int>(i)) drawCaptionBackground(dl, r, kMenuOpen());
         else if (hovered) drawCaptionBackground(dl, r, kHover());
-        ImVec2 textSize = ImGui::CalcTextSize(menu.label.c_str());
+        ImVec2 const textSize = ImGui::CalcTextSize(menu.label.c_str());
         dl->AddText(ImVec2(std::floor(r.left + menuPad), std::floor(top + (height_ - textSize.y) * 0.5f)), kGlyph(),
                     menu.label.c_str());
     }
@@ -147,9 +147,9 @@ void TitleBar::render() {
 
     const bool overMax = frame_.maximizeHovered();
     const bool maximized = frame_.maximized();
-    Rect closeRect{origin.x + width - buttonW, top, origin.x + width, bottom};
-    Rect maxRect{closeRect.left - buttonW, top, closeRect.left, bottom};
-    Rect minRect{maxRect.left - buttonW, top, maxRect.left, bottom};
+    Rect const closeRect{origin.x + width - buttonW, top, origin.x + width, bottom};
+    Rect const maxRect{closeRect.left - buttonW, top, closeRect.left, bottom};
+    Rect const minRect{maxRect.left - buttonW, top, maxRect.left, bottom};
     layout.maximizeButton = maxRect;
     layout.clientRects.push_back(minRect);
     layout.clientRects.push_back(closeRect);
@@ -163,8 +163,8 @@ void TitleBar::render() {
     dl->PopClipRect();
 
     ImGui::SetCursorScreenPos(ImVec2(minRect.left, minRect.top));
-    bool minClicked = ImGui::InvisibleButton("##minimize", ImVec2(buttonW, height_));
-    bool minHover = !overMax && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+    bool const minClicked = ImGui::InvisibleButton("##minimize", ImVec2(buttonW, height_));
+    bool const minHover = !overMax && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
     if (ImGui::IsItemActive()) drawCaptionBackground(dl, minRect, kPressed());
     else if (minHover) drawCaptionBackground(dl, minRect, kHover());
     drawGlyph(dl, minRect, Glyph::Minimize, kGlyph());
@@ -174,8 +174,8 @@ void TitleBar::render() {
     drawGlyph(dl, maxRect, maximized ? Glyph::Restore : Glyph::Maximize, kGlyph());
 
     ImGui::SetCursorScreenPos(ImVec2(closeRect.left, closeRect.top));
-    bool closeClicked = ImGui::InvisibleButton("##close", ImVec2(buttonW, height_));
-    bool closeHover = !overMax && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+    bool const closeClicked = ImGui::InvisibleButton("##close", ImVec2(buttonW, height_));
+    bool const closeHover = !overMax && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
     if (ImGui::IsItemActive()) drawCaptionBackground(dl, closeRect, kClosePressed());
     else if (closeHover) drawCaptionBackground(dl, closeRect, kCloseHover());
     drawGlyph(dl, closeRect, Glyph::Close, closeHover || ImGui::IsItemActive() ? IM_COL32(255, 255, 255, 255) : kGlyph());

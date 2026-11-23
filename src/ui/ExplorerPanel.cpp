@@ -196,8 +196,8 @@ void ExplorerPanel::drawContents() {
     // "active" variable) fights the user's click, because the flag queues the
     // selection again before the clicked tab's content ever ran - snapping the
     // bar straight back to the old tab.
-    ImGuiTabItemFlags filesFlags = selectTab_ == 0 ? ImGuiTabItemFlags_SetSelected : 0;
-    ImGuiTabItemFlags decFlags = selectTab_ == 1 ? ImGuiTabItemFlags_SetSelected : 0;
+    ImGuiTabItemFlags const filesFlags = selectTab_ == 0 ? ImGuiTabItemFlags_SetSelected : 0;
+    ImGuiTabItemFlags const decFlags = selectTab_ == 1 ? ImGuiTabItemFlags_SetSelected : 0;
     selectTab_ = -1;
 
     // Drag-selection state: opening a file is deferred to mouse release so a
@@ -218,7 +218,7 @@ void ExplorerPanel::drawContents() {
         }
         if (ImGui::BeginTabItem("Decompiled", nullptr, decFlags)) {
             auto decompiled = workspace_.decompiledRoots();
-            bool running = workspace_.jadx().state() == JadxRunner::State::Running;
+            bool const running = workspace_.jadx().state() == JadxRunner::State::Running;
             if (decompiled.empty()) {
                 if (running) {
                     drawJadxProgress();
@@ -272,7 +272,7 @@ void ExplorerPanel::walk(Root& root, const TreeNode& node, int depth, bool isRoo
     if (selection_.count(&node)) drawnSelection_.insert(&node);
     if (!node.isFolder()) return;
     bool open = isRoot;
-    if (ImGuiStorage* storage = ImGui::GetStateStorage())
+    if (ImGuiStorage const* storage = ImGui::GetStateStorage())
         open = storage->GetInt(static_cast<int>(ImGui::GetID(&node)), isRoot ? 1 : 0) != 0;
     if (!open) return;
     for (const auto& c : node.children()) walk(root, *c, depth + 1, false);
@@ -430,7 +430,7 @@ void ExplorerPanel::drawRow(Root& root, const TreeNode& node, int depth, bool is
     const bool archiveRoot = isRoot && root.kind == Root::Kind::Apk;
     if (!node.isFolder() && !archiveRoot && drawFileTypeIcon(dl, mn, mx, node)) {
         // Drawn type icon (distinct per file type, scales with the zoom).
-    } else if (ImTextureID tex = ShellIcons::instance().iconFor(node, archiveRoot)) {
+    } else if (ImTextureID const tex = ShellIcons::instance().iconFor(node, archiveRoot)) {
         // Real Windows default icon (cached per extension, extracted once).
         dl->AddImage(tex, mn, mx);
     } else if (node.isFolder()) {
@@ -448,9 +448,6 @@ void ExplorerPanel::drawRow(Root& root, const TreeNode& node, int depth, bool is
         const float visibleEnd = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
         if (textEnd > visibleEnd) ImGui::SetTooltip("%s", node.name().c_str());
     }
-    const bool inSelection = selection_.count(&node) > 0;
-
-    (void)inSelection;
     const ImGuiIO& io = ImGui::GetIO();
     // Click-and-drag selects the contiguous rows between the press and the
     // row under the mouse (dragging back shrinks the range again).

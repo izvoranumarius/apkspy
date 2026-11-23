@@ -42,7 +42,7 @@ bool McpSettings::start() {
 }
 
 void McpSettings::draw() {
-    McpHttpServer& http = host_.http();
+    McpHttpServer const& http = host_.http();
     const bool running = http.running();
     if (running) {
         if (ImGui::Button("Stop")) {

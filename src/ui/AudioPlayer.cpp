@@ -44,14 +44,14 @@ struct AudioPlayer::Impl {
         }
         ma_uint64 read = 0;
         {
-            std::lock_guard<std::mutex> lock(self->mutex);
+            std::lock_guard<std::mutex> const lock(self->mutex);
             ma_decoder_read_pcm_frames(&self->decoder, dst, frames, &read);
         }
         self->cursor.fetch_add(read);
         if (read < frames) {
             std::fill(dst + read * static_cast<size_t>(self->channels), dst + samples, 0.f);
             if (self->playing.exchange(false)) sPlaying.fetch_sub(1);  // end of file: back to the start
-            std::lock_guard<std::mutex> lock(self->mutex);
+            std::lock_guard<std::mutex> const lock(self->mutex);
             ma_decoder_seek_to_pcm_frame(&self->decoder, 0);
             self->cursor.store(0);
         }
@@ -59,7 +59,7 @@ struct AudioPlayer::Impl {
 
     // A second decoder reads the whole file once for the waveform.
     void computePeaks() {
-        ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 1, 0);
+        ma_decoder_config const cfg = ma_decoder_config_init(ma_format_f32, 1, 0);
         ma_decoder dec;
         if (ma_decoder_init_memory(data.data(), data.size(), &cfg, &dec) != MA_SUCCESS) return;
         std::vector<float> raw;  // peak per 256 frames
@@ -80,7 +80,7 @@ struct AudioPlayer::Impl {
             float& b = out[i * buckets / raw.size()];
             b = std::max(b, raw[i]);
         }
-        std::lock_guard<std::mutex> lock(peaksMutex);
+        std::lock_guard<std::mutex> const lock(peaksMutex);
         peaks = std::move(out);
     }
 };
@@ -98,7 +98,7 @@ AudioPlayer::~AudioPlayer() {
 bool AudioPlayer::open(const std::vector<uint8_t>& bytes, std::string& error) {
     Impl& d = *impl_;
     d.data = bytes;  // the player can outlive the document's buffer
-    ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
+    ma_decoder_config const cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
     if (ma_decoder_init_memory(d.data.data(), d.data.size(), &cfg, &d.decoder) != MA_SUCCESS) {
         error = "This audio format cannot be decoded (supported: WAV, MP3, FLAC, Ogg Vorbis)";
         return false;
@@ -139,7 +139,7 @@ void AudioPlayer::seek(double seconds) {
     if (!impl_->decoderOk || impl_->sampleRate <= 0) return;
     uint64_t frame = static_cast<uint64_t>(std::max(0.0, seconds * impl_->sampleRate));
     if (impl_->totalFrames) frame = std::min(frame, impl_->totalFrames);
-    std::lock_guard<std::mutex> lock(impl_->mutex);
+    std::lock_guard<std::mutex> const lock(impl_->mutex);
     if (ma_decoder_seek_to_pcm_frame(&impl_->decoder, frame) == MA_SUCCESS) impl_->cursor.store(frame);
 }
 
@@ -160,6 +160,6 @@ int AudioPlayer::sampleRate() const { return impl_->sampleRate; }
 const std::string& AudioPlayer::deviceError() const { return impl_->deviceError; }
 
 std::vector<float> AudioPlayer::peaks() const {
-    std::lock_guard<std::mutex> lock(impl_->peaksMutex);
+    std::lock_guard<std::mutex> const lock(impl_->peaksMutex);
     return impl_->peaks;
 }

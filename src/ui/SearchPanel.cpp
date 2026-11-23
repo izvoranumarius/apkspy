@@ -8,14 +8,14 @@
 
 void SearchPanel::drawContents() {
     auto roots = workspace_.decompiledRoots();
-    bool running = workspace_.jadx().state() == JadxRunner::State::Running;
+    bool const running = workspace_.jadx().state() == JadxRunner::State::Running;
     if (roots.empty()) {
         ImGui::TextWrapped("%s", running ? "Decompilation is starting - search will cover the results once it finishes"
                                          : "Search becomes available once an APK has been decompiled");
         return;
     }
     if (rootIdx_ >= static_cast<int>(roots.size())) rootIdx_ = 0;
-    Root* root = roots[static_cast<size_t>(rootIdx_)];
+    Root const* root = roots[static_cast<size_t>(rootIdx_)];
 
     // The tree of a root that is currently being decompiled is mutated on
     // the UI thread while results stream in; searching it concurrently is a
@@ -46,7 +46,7 @@ void SearchPanel::drawContents() {
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("APK to search");
     }
-    const char* modes[] = {"Full text", "Filenames", "Classes", "Methods", "Fields"};
+    const char* const modes[] = {"Full text", "Filenames", "Classes", "Methods", "Fields"};
     ImGui::SetNextItemWidth(-(button + ImGui::GetStyle().ItemSpacing.x));
     ImGui::Combo("##mode", &mode_, modes, 5);
     ImGui::SameLine();
@@ -121,7 +121,7 @@ void SearchPanel::drawContents() {
                 ImGui::TextDisabled("%s", line);
                 ImGui::SameLine(0.f, 0.f);
                 // Leading indentation of the code says nothing here.
-                size_t start = h.text.find_first_not_of(" \t");
+                size_t const start = h.text.find_first_not_of(" \t");
                 ImGui::PushFont(Theme::monoFont());
                 ImGui::TextUnformatted(start == std::string::npos ? "" : h.text.c_str() + start);
                 ImGui::PopFont();
@@ -131,8 +131,8 @@ void SearchPanel::drawContents() {
                     // Back/Forward history (the current position is the
                     // origin, so Alt+Left returns to it).
                     NavLocation origin;
-                    NavLocation* originPtr = nullptr;
-                    if (Document* active = workspace_.activeDocument()) {
+                    NavLocation const* originPtr = nullptr;
+                    if (Document const* active = workspace_.activeDocument()) {
                         origin = workspace_.locationOf(*active);
                         originPtr = &origin;
                     }

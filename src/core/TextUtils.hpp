@@ -43,7 +43,7 @@ inline size_t ciFind(std::string_view haystack, std::string_view needle) {
 // Shared identifier-character definition: letters, digits, '_' and '$'
 // (jadx emits '$' for nested classes, so it is part of identifiers here).
 inline bool isIdentChar(char c) {
-    unsigned char u = static_cast<unsigned char>(c);
+    unsigned char const u = static_cast<unsigned char>(c);
     return std::isalnum(u) || c == '_' || c == '$';
 }
 
@@ -52,12 +52,12 @@ inline bool isIdentChar(char c) {
 inline bool ciContainsWord(std::string_view haystack, std::string_view needle) {
     size_t pos = 0;
     while (pos < haystack.size()) {
-        size_t rel = ciFind(haystack.substr(pos), needle);
+        size_t const rel = ciFind(haystack.substr(pos), needle);
         if (rel == std::string_view::npos) return false;
-        size_t at = pos + rel;
-        bool leftOk = at == 0 || !isIdentChar(haystack[at - 1]);
-        size_t end = at + needle.size();
-        bool rightOk = end >= haystack.size() || !isIdentChar(haystack[end]);
+        size_t const at = pos + rel;
+        bool const leftOk = at == 0 || !isIdentChar(haystack[at - 1]);
+        size_t const end = at + needle.size();
+        bool const rightOk = end >= haystack.size() || !isIdentChar(haystack[end]);
         if (leftOk && rightOk) return true;
         pos = at + needle.size();
     }

@@ -34,5 +34,5 @@ private:
     std::string pending_;
     std::thread reader_;
     std::atomic<bool> running_{false};
-    std::atomic<int> exitCode_{0};
+    mutable std::atomic<int> exitCode_{0};  // cached by running() const
 };

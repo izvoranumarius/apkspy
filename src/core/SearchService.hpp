@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <concepts>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -25,7 +26,7 @@ public:
     // Starts a search over one decompiled tree. 'group' is the owning APK's
     // group name; it is remembered so hits can always be opened with their
     // own root, even after the panel switched to another APK.
-    void start(const TreeNode* root, const ContentSource* source, std::string query, Mode mode,
+    void start(const TreeNode* root, const ContentSource* source, const std::string& query, Mode mode,
                std::string group);
     void stop();
     bool running() const { return running_.load(); }
@@ -41,14 +42,14 @@ public:
     // safe). `query` must already be lowered ASCII (as start() does).
     static bool lineMatches(Mode mode, std::string_view line, std::string_view query);
 
-    template <typename F>
+    template <std::invocable<const std::vector<SearchHit>&> F>
     void withHits(F&& fn) const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         fn(hits_);
     }
 
 private:
-    void run(const TreeNode* root, const ContentSource* source, std::string query);
+    void run(const TreeNode* root, const ContentSource* source, const std::string& query);
     void scan(const TreeNode& node, const ContentSource& source, const std::string& query);
     void scanFileNames(const TreeNode& node, const std::string& query);
     bool addHit(const TreeNode& node, int line, const char* begin, const char* end);

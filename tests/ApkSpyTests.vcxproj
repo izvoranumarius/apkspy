@@ -200,6 +200,12 @@
     <ClCompile Include="..\src\smali\Validate.cpp" />
     <ClCompile Include="..\src\analysis\ManifestAudit.cpp" />
     <ClCompile Include="..\src\analysis\Report.cpp" />
+    <ClCompile Include="..\src\analysis\Dependencies.cpp" />
+    <ClCompile Include="..\src\analysis\VulnDb.cpp" />
+    <ClCompile Include="..\src\analysis\SecurityScanner.cpp" />
+    <ClCompile Include="..\src\analysis\SourceMap.cpp" />
+    <ClCompile Include="..\src\analysis\BehaviorGraph.cpp" />
+    <ClCompile Include="..\src\analysis\LibraryCatalog.cpp" />
     <ClCompile Include="..\src\analysis\Dalvik.cpp" />
     <ClCompile Include="..\src\analysis\DexFile.cpp" />
     <ClCompile Include="..\src\analysis\ElfFile.cpp" />

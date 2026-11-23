@@ -79,7 +79,7 @@ private:
         while (p_ < t_.size() && (t_[p_] == ' ' || t_[p_] == '\t' || t_[p_] == '\n' || t_[p_] == '\r')) ++p_;
     }
     bool lit(const char* word) {
-        size_t n = std::char_traits<char>::length(word);
+        size_t const n = std::char_traits<char>::length(word);
         if (t_.compare(p_, n, word) != 0) return fail("invalid literal");
         p_ += n;
         return true;

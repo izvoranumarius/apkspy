@@ -8,10 +8,10 @@
 #include <unordered_set>
 #include <vector>
 #include "analysis/ApkAnalysis.hpp"
-#include "analysis/ApkDiff.hpp"
 #include "analysis/Decompiler.hpp"
 #include "analysis/ElfFile.hpp"
 #include "analysis/NativeCode.hpp"
+#include "analysis/SourceMap.hpp"
 #include "core/ResourceTable.hpp"
 #include "ui/AnnotationUi.hpp"
 #include "ui/GraphView.hpp"
@@ -60,7 +60,7 @@ private:
     const std::vector<ApkAnalysis::MethodDef>& methodsOfClass(const ApkAnalysis& a, uint32_t cls);
     void selectClass(const ApkAnalysis& a, uint32_t cls, const std::string& group, bool keep);
     void selectMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m, const std::string& group, bool openSource,
-                      bool keep = false);
+                      bool keep = false, bool focusFunction = true);
     void drawMethodView(const ApkAnalysis& a, Root& apk);
     void drawMethodListing(const ApkAnalysis& a, Root& apk);
     void drawQueryResults(const ApkAnalysis& a, Root& apk);
@@ -270,13 +270,21 @@ private:
     std::string resKey_;
     const ResourceTable* resOwner_ = nullptr;
 
-    // Compare
-    int compareWith_ = -1;
-    std::future<ApkDiff> diffJob_;
-    bool diffValid_ = false;
-    ApkDiff diff_;
-    std::string diffTitle_;
-    std::vector<std::string> permAdded_, permRemoved_;
+    // Java <-> smali synchronisation (analysis/SourceMap): a click on a line of
+    // jadx's Java selects its method and highlights its instructions; a click on
+    // an instruction moves the highlight in the open Java file.
+    void syncFromEditor(const ApkAnalysis& a);
+    void syncToJava(const ApkAnalysis& a, uint32_t pc);
+    const sourcemap::JavaFile* javaFile(const Document& doc);
+    Document* openJavaFor(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m) const;  // already open, or nullptr
+    bool syncJava_ = true;
+    uint64_t cursorSerial_ = 0;
+    std::vector<uint32_t> syncPcs_;  // instructions of the clicked Java line
+    bool syncExact_ = false;         // from debug line numbers
+    const Document* javaDoc_ = nullptr;
+    uint32_t javaRevision_ = 0;
+    size_t javaLines_ = 0;
+    std::unique_ptr<sourcemap::JavaFile> javaFile_;
 };
 
 // The selected method or native function: listing, control-flow graph, call graph.

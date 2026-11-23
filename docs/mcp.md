@@ -32,19 +32,27 @@ ApkSpy --mcp --apk app.apk [--apk other.apk] [--analyze] [--no-decompile] [--no-
 All tools have JSON-schema validated input and structured output:
 `list_apks`, `apk_info` (package, versions, SDKs, flags, permissions,
 components, signatures), `get_manifest`, `list_files`, `read_file`,
-`hexdump`, `search_code`, `decompile_class`, `run_analysis` (long-running,
+`hexdump`, `search_code`, `decompile_class`, `map_java_smali` (a Java line's
+method and instructions, or an instruction's Java line), `run_analysis` (long-running,
 progress + cancellation), `dex_info`, `list_classes`, `get_class`,
 `get_method` (smali, callees, constant arguments), `decompile_method`
 (built-in Java-like decompiler), `xrefs`, `call_graph`,
 `control_flow_graph` (JSON or DOT), `class_hierarchy`, `search_strings`,
-`find_endpoints`, `list_resources`, `resolve_resource`, `list_native_libs`,
+`find_endpoints`, `behavior_graph` (what each component reaches: permissions,
+endpoints, storage, native code, with call paths), `security_scan` (findings
+with severity, confidence, evidence, location, CWE and MASVS),
+`dependencies` (bundled libraries with versions, licenses and known
+vulnerabilities), `list_resources`,
+`resolve_resource`, `list_native_libs`,
 `inspect_native_lib`, `native_functions`, `disassemble_native`,
 `decompile_native` (built-in C-like decompiler; both list the variables
 with their types), `rename_variable` (IDA-style variable names and types,
 shared with the Decompiler panel; listed by `list_annotations` with kind
 `rename` / `type`),
-`native_xrefs`, `native_strings`, `compare_apks`, the GUI-only
-`open_in_editor`, `show_native` and `show_panel`, the device tools
+`native_xrefs`, `native_strings`, `compare_apks` (manifest, components,
+classes with obfuscator renames, what changed in each method, resources,
+native exports, library versions, endpoints), the GUI-only
+`open_in_editor`, `show_native`, `show_diff` and `show_panel`, the device tools
 `device_list`, `device_info`, `device_processes`, `logcat_read`,
 `process_stats`, `process_threads`, `process_backtrace`, `debugger_state`,
 `debugger_attach`, `debugger_control`, `debugger_select`,

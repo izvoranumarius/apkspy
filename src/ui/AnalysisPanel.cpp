@@ -33,7 +33,7 @@ std::string hexAddr(uint64_t v) {
 }
 
 std::string shortName(std::string_view descriptor) {
-    std::string j = DexFile::descriptorToJava(descriptor);
+    std::string const j = DexFile::descriptorToJava(descriptor);
     const size_t dot = j.rfind('.');
     return dot == std::string::npos ? j : j.substr(dot + 1);
 }
@@ -202,7 +202,7 @@ void AnalysisPanel::drawContents() {
     const AnalysisService::Status st = workspace_.analysis().status(apk.title);
     drawHeader(apk, st);
 
-    std::shared_ptr<const ApkAnalysis> analysis = workspace_.analysis().get(apk.title);
+    std::shared_ptr<const ApkAnalysis> const analysis = workspace_.analysis().get(apk.title);
     if (analysis.get() != cacheOwner_) {
         cacheOwner_ = analysis.get();
         // The bytecode analysis finished or was replaced: a native function on screen does not depend on it.
@@ -210,13 +210,25 @@ void AnalysisPanel::drawContents() {
     }
     current_ = analysis;
     currentGroup_ = apk.title;
-    if (methodRequested && analysis) {
+    if (analysis) syncFromEditor(*analysis);
+    if (methodRequested && analysis && methodReq.view == "class") {
+        // A class (descriptor or Java name): its source in the Editor.
+        const ApkAnalysis::ClassEntry* entry = analysis->findClass(methodReq.method);
+        uint32_t index = UINT32_MAX;
+        if (entry)
+            for (uint32_t i = 0; i < static_cast<uint32_t>(analysis->classes().size()); ++i)
+                if (analysis->classes()[i].dex == entry->dex && analysis->classes()[i].def == entry->def) index = i;
+        if (index == UINT32_MAX) workspace_.log("No bytecode in this APK for " + methodReq.method, "analysis");
+        else selectClass(*analysis, index, apk.title, false);
+    } else if (methodRequested && analysis) {
         std::string cls, name, proto;
         std::vector<ApkAnalysis::MethodDef> defs;
         if (ApkAnalysis::splitMethodRef(methodReq.method, cls, name, proto)) defs = analysis->findMethodDefs(cls, name, proto);
         if (defs.empty()) workspace_.log("No bytecode in this APK for " + methodReq.method, "analysis");
         else if (methodReq.view == "graph") showGraph(*analysis, defs.front());
         else if (methodReq.view == "calls") showCallGraph(*analysis, defs.front());
+        // "source": open the code (Java, or the smali listing) without bringing the Function panel forward.
+        else if (methodReq.view == "source") selectMethod(*analysis, defs.front(), apk.title, true, false, false);
         else selectMethod(*analysis, defs.front(), apk.title, false), showFunction(0);
     }
 
@@ -619,13 +631,14 @@ void AnalysisPanel::selectClass(const ApkAnalysis& a, uint32_t cls, const std::s
 // A method: the Function and References panels follow it; the Java opens at
 // the method when jadx output exists.
 void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m, const std::string& group,
-                                 bool openSource, bool keep) {
+                                 bool openSource, bool keep, bool focusFunction) {
     const DexFile& dex = *a.dexes()[m.dex];
     const uint32_t idx = m.method.methodIdx;
     const std::string cls(dex.typeDescriptor(dex.methodClass(idx)));
     sel_ = Selection::Method;
     selMethod_ = m;
     selClass_ = UINT32_MAX;
+    syncPcs_.clear();
     if (const auto* entry = a.findClass(DexFile::descriptorToJava(cls))) {
         for (uint32_t i = 0; i < static_cast<uint32_t>(a.classes().size()); ++i)
             if (a.classes()[i].dex == entry->dex && a.classes()[i].def == entry->def) {
@@ -643,7 +656,7 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
     listingSel_.reset();
     std::string listing;
     std::vector<int32_t> pcs;
-    dalvik::ListingOptions opt;
+    dalvik::ListingOptions const opt;
     dalvik::disassembleMethod(dex, m.method, opt, listing, &pcs);
     size_t start = 0, li = 0;
     for (size_t i = 0; i <= listing.size(); ++i)
@@ -658,24 +671,100 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
     const std::string javaClass = DexFile::descriptorToJava(cls);
     const auto mode = keep ? Workspace::OpenMode::Permanent : Workspace::OpenMode::Preview;
     if (Document* doc = workspace_.openClassSource(group, javaClass, mode)) {
-        // Jump to the declaration: the first line naming the method with a parameter list.
+        // Jump to the declaration: the parsed method with the same parameter types
+        // (overloads included); failing that, the first line naming it with a parameter list.
+        const int decl = javaFile(*doc)->findMethod(javaClass, dex.methodName(idx),
+                                                    sourcemap::paramSimpleTypes(dex.protoDescriptor(dex.methodProto(idx))));
         std::string name(dex.methodName(idx));
         if (name == "<init>" || name == "<clinit>") name = shortName(cls);
         const auto& lines = doc->lines();
-        for (size_t i = 0; i < lines.size(); ++i) {
+        if (decl >= 0) doc->goTo(decl);
+        for (size_t i = 0; decl < 0 && i < lines.size(); ++i) {
             const std::string_view l = lines[i];
             const size_t at = l.find(name + "(");
-            if (at == std::string_view::npos || l.find(';') < at || l.find("=") < at) continue;
+            if (at == std::string_view::npos || l.find(';') < at || l.find('=') < at) continue;
             if (at > 0 && (std::isalnum(static_cast<unsigned char>(l[at - 1])) || l[at - 1] == '_' || l[at - 1] == '.')) continue;
             doc->goTo(static_cast<int>(i));
             break;
         }
         // The listing stays in front: the Decompiler panel shows the method next to it,
         // jadx's Java waits in the Editor tab.
-        if (showPanel_) showPanel_("Function");
-    } else {
+        if (focusFunction && showPanel_) showPanel_("Function");
+        else if (!focusFunction && showPanel_) showPanel_("Editor");
+    } else if (focusFunction) {
         showFunction(0);  // no Java: the smali listing is the code
+    } else {
+        openMethod(a, m, group);  // the smali listing in the Editor
+        if (showPanel_) showPanel_("Editor");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Java <-> smali synchronisation
+// ---------------------------------------------------------------------------
+
+const sourcemap::JavaFile* AnalysisPanel::javaFile(const Document& doc) {
+    if (!javaFile_ || javaDoc_ != &doc || javaRevision_ != doc.textRevision() || javaLines_ != doc.lineCount()) {
+        std::vector<std::string_view> lines;
+        lines.reserve(doc.lineCount());
+        for (size_t i = 0; i < doc.lineCount(); ++i) lines.push_back(doc.line(i));
+        javaFile_ = std::make_unique<sourcemap::JavaFile>(lines);
+        javaDoc_ = &doc;
+        javaRevision_ = doc.textRevision();
+        javaLines_ = doc.lineCount();
+    }
+    return javaFile_.get();
+}
+
+static bool isJavaSource(const Document& doc) {
+    const std::string& t = doc.title();
+    return doc.rootKind() == RootKind::Decompiled && t.size() > 5 && t.compare(t.size() - 5, 5, ".java") == 0;
+}
+
+void AnalysisPanel::syncFromEditor(const ApkAnalysis& a) {
+    const Workspace::EditorCursor& cur = workspace_.editorCursor();
+    if (cur.serial == cursorSerial_) return;
+    cursorSerial_ = cur.serial;
+    if (!syncJava_ || !cur.doc) return;
+    // The click may be on a document closed since: only use one that is still open.
+    const Document* doc = nullptr;
+    for (const auto& d : workspace_.documents())
+        if (d.get() == cur.doc) doc = d.get();
+    if (!doc || !isJavaSource(*doc) || doc->rootGroup() != currentGroup_) return;
+    sourcemap::Target t;
+    if (!sourcemap::javaToBytecode(a, *javaFile(*doc), cur.line, t)) return;
+    const bool same = sel_ == Selection::Method && selMethod_.dex == t.method.dex && selMethod_.method.methodIdx == t.method.method.methodIdx;
+    if (!same) selectMethod(a, t.method, currentGroup_, false);  // the editor stays where the user is
+    syncPcs_ = t.pcs;
+    syncExact_ = t.exact;
+    if (!t.pcs.empty()) {
+        listingPc_ = static_cast<int32_t>(t.pcs.front());
+        listingScroll_ = true;
+    }
+}
+
+Document* AnalysisPanel::openJavaFor(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m) const {
+    const DexFile& dex = *a.dexes()[m.dex];
+    std::string rel = DexFile::descriptorToJava(dex.typeDescriptor(dex.methodClass(m.method.methodIdx)));
+    rel = rel.substr(0, rel.find('$'));  // inner classes live in the outer class's file
+    std::replace(rel.begin(), rel.end(), '.', '/');
+    rel = "/" + rel + ".java";
+    for (const auto& d : workspace_.documents()) {
+        if (!isJavaSource(*d) || d->rootGroup() != currentGroup_ || !d->node()) continue;
+        std::string path = d->node()->path();
+        std::replace(path.begin(), path.end(), '\\', '/');
+        if (path.size() >= rel.size() && path.compare(path.size() - rel.size(), rel.size(), rel) == 0) return d.get();
+    }
+    return nullptr;
+}
+
+void AnalysisPanel::syncToJava(const ApkAnalysis& a, uint32_t pc) {
+    if (!syncJava_ || sel_ != Selection::Method) return;
+    // Only a Java file already open moves: an instruction click never opens tabs.
+    Document* doc = openJavaFor(a, selMethod_);
+    if (!doc) return;
+    const int line = sourcemap::bytecodeToJava(a, *javaFile(*doc), selMethod_, pc);
+    if (line >= 0) doc->goTo(line);
 }
 
 void AnalysisPanel::openClass(const ApkAnalysis& a, const ApkAnalysis::ClassEntry& c, const std::string& group) {
@@ -805,7 +894,7 @@ void AnalysisPanel::drawQueryResults(const ApkAnalysis& a, Root& apk) {
 // Strings
 // ---------------------------------------------------------------------------
 
-void AnalysisPanel::drawStrings(const ApkAnalysis& a, Root& apk) {
+void AnalysisPanel::drawStrings(const ApkAnalysis& a, Root& /*apk*/) {
     ImGui::SetNextItemWidth(std::min(ui::em(9.f), ImGui::GetContentRegionAvail().x));
     bool refresh = ImGui::Combo("##cat", &stringCategory_, kCategoryNames, IM_ARRAYSIZE(kCategoryNames));
     ui::sameLineIfFits(ui::em(10.f));
@@ -876,7 +965,6 @@ void AnalysisPanel::drawStrings(const ApkAnalysis& a, Root& apk) {
         }
         ImGui::EndTable();
     }
-    (void)apk;
 }
 
 // ---------------------------------------------------------------------------
@@ -904,7 +992,7 @@ void AnalysisPanel::showGraph(const ApkAnalysis& a, const ApkAnalysis::MethodDef
     for (size_t i = 0; i <= listing.size(); ++i)
         if (i == listing.size() || listing[i] == '\n') {
             if (li < pcs.size() && pcs[li] >= 0) {
-                std::string l = listing.substr(start, i - start);
+                std::string const l = listing.substr(start, i - start);
                 const size_t first = l.find_first_not_of(' ');
                 lines.emplace_back(pcs[li], first == std::string::npos ? l : l.substr(first));
             }
@@ -935,7 +1023,7 @@ void AnalysisPanel::showGraph(const ApkAnalysis& a, const ApkAnalysis::MethodDef
             e.kind = branch ? (k == 0 ? graphlayout::EdgeKind::Taken : graphlayout::EdgeKind::Fallthrough) : graphlayout::EdgeKind::Jump;
             edges.push_back(std::move(e));
         }
-        for (uint32_t h : block.exceptional) {
+        for (uint32_t const h : block.exceptional) {
             graphlayout::Edge e;
             e.from = static_cast<int>(b);
             e.to = static_cast<int>(h);
@@ -971,7 +1059,7 @@ void AnalysisPanel::showCallGraph(const ApkAnalysis& a, const ApkAnalysis::Metho
     std::vector<graphlayout::Edge> edges;
     const auto addNode = [&](const std::string& ref, bool caller) {
         const auto seen = std::find(graphRefs_.begin(), graphRefs_.end(), ref);
-        int index = static_cast<int>(seen - graphRefs_.begin());
+        int const index = static_cast<int>(seen - graphRefs_.begin());
         if (seen == graphRefs_.end()) {
             graphRefs_.push_back(ref);
             GraphView::Block block;
@@ -1062,6 +1150,17 @@ void AnalysisPanel::drawMethodView(const ApkAnalysis& a, Root& apk) {
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
         ImGui::IsKeyPressed(ImGuiKey_Space, false))
         functionMode_ = functionMode_ == 0 ? 1 : 0;
+    if (functionMode_ == 0) {
+        ImGui::SameLine(0.f, ui::em(1.f));
+        ImGui::Checkbox("Java sync", &syncJava_);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Click a line of jadx's Java (Editor) to select its method and highlight its instructions here;\n"
+                              "click an instruction to move the highlight in the open Java file.");
+        if (!syncPcs_.empty()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled(syncExact_ ? "%zu instructions (debug lines)" : "%zu instructions (matched by calls)", syncPcs_.size());
+        }
+    }
     if (functionMode_ != 0) {
         if (functionMode_ == 2) ImGui::SameLine(), ImGui::TextDisabled("callers left, callees right");
         // Build the graph the mode asks for when it is not the one on screen.
@@ -1100,8 +1199,13 @@ void AnalysisPanel::drawMethodListing(const ApkAnalysis& a, Root& apk) {
             ImGui::PushID(i);
             const ImVec2 pos = ImGui::GetCursorScreenPos();
             const bool focus = l.pc >= 0 && l.pc == listingPc_;
+            // Instructions of the Java line clicked in the editor.
+            if (l.pc >= 0 && std::find(syncPcs_.begin(), syncPcs_.end(), static_cast<uint32_t>(l.pc)) != syncPcs_.end())
+                ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + ImGui::GetContentRegionAvail().x, pos.y + ImGui::GetTextLineHeight()),
+                                                          theme::u32(Col::FindMatch, 0.55f));
             if (ImGui::Selectable("##l", focus, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0, ImGui::GetTextLineHeight()))) {
                 listingPc_ = l.pc;
+                if (l.pc >= 0) syncToJava(a, static_cast<uint32_t>(l.pc));
                 // Double-click a call: go to the called method when the APK defines it.
                 const size_t arrow = l.text.find("->");
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && arrow != std::string::npos) {
@@ -1599,117 +1703,13 @@ void AnalysisPanel::openMethodDiff(Root& a, Root& b, const std::string& signatur
     workspace_.openGenerated(a.title, path, shortName(cls) + "." + name + ".diff", std::move(text), 0);
 }
 
-void AnalysisPanel::drawCompare(Root& apk) {
-    std::vector<Root*> apks = workspace_.apkRoots();
-    if (apks.size() < 2) {
-        ImGui::TextDisabled("Add a second APK (another version) to the project to compare them.");
-        return;
-    }
-    if (compareWith_ < 0 || compareWith_ >= static_cast<int>(apks.size()) || apks[static_cast<size_t>(compareWith_)] == &apk)
-        for (int i = 0; i < static_cast<int>(apks.size()); ++i)
-            if (apks[static_cast<size_t>(i)] != &apk) compareWith_ = i;
-    Root& other = *apks[static_cast<size_t>(compareWith_)];
-    ImGui::Text("Compare %s with", apk.title.c_str());
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(std::min(ui::em(12.f), ImGui::GetContentRegionAvail().x));
-    if (ImGui::BeginCombo("##other", other.title.c_str())) {
-        for (int i = 0; i < static_cast<int>(apks.size()); ++i)
-            if (apks[static_cast<size_t>(i)] != &apk && ImGui::Selectable(apks[static_cast<size_t>(i)]->title.c_str(), i == compareWith_)) compareWith_ = i;
-        ImGui::EndCombo();
-    }
-    ImGui::SameLine();
-    const bool running = diffJob_.valid();
-    if (running) ImGui::BeginDisabled();
-    if (ImGui::Button("Compare")) {
-        auto* archA = dynamic_cast<ApkArchive*>(apk.source.get());
-        auto* archB = dynamic_cast<ApkArchive*>(other.source.get());
-        if (archA && archB) {
-            // Central directories and manifests are read here (UI thread
-            // owns the archives); the code diff runs on a worker.
-            auto entriesA = archA->entries(), entriesB = archB->entries();
-            workspace_.resources(apk.title);
-            workspace_.resources(other.title);
-            const ApkInfo ia = ApkInfo::extract(apk), ib = ApkInfo::extract(other);
-            permAdded_.clear();
-            permRemoved_.clear();
-            std::set<std::string> pa(ia.permissions.begin(), ia.permissions.end()), pb(ib.permissions.begin(), ib.permissions.end());
-            for (const auto& p : pb)
-                if (!pa.count(p)) permAdded_.push_back(p);
-            for (const auto& p : pa)
-                if (!pb.count(p)) permRemoved_.push_back(p);
-            diffTitle_ = apk.title + " (" + ia.versionName + ") -> " + other.title + " (" + ib.versionName + ")";
-            auto anA = workspace_.analysis().get(apk.title), anB = workspace_.analysis().get(other.title);
-            diffJob_ = std::async(std::launch::async, [entriesA = std::move(entriesA), entriesB = std::move(entriesB), anA, anB] {
-                ApkDiff d = ApkDiff::compareEntries(entriesA, entriesB);
-                if (anA && anB) d.compareCode(*anA, *anB, 20000, nullptr);
-                return d;
-            });
-            diffValid_ = false;
-        }
-    }
-    if (running) {
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::TextDisabled("comparing...");
-    }
-    if (ready(diffJob_)) {
-        diff_ = diffJob_.get();
-        diffValid_ = true;
-    }
-    if (!workspace_.analysis().get(apk.title) || !workspace_.analysis().get(other.title))
-        ImGui::TextDisabled("Tip: analyse both APKs to also compare classes and method bodies.");
-    if (!diffValid_) return;
-    ImGui::TextColored(kAccent(), "%s", diffTitle_.c_str());
-    ImGui::Text("%zu entries changed, %zu unchanged", diff_.entries.size(), diff_.entriesUnchanged);
-    const auto list = [](const char* title, const std::vector<std::string>& items) {
-        char header[128];
-        std::snprintf(header, sizeof header, "%s (%zu)###%s", title, items.size(), title);
-        if (ImGui::CollapsingHeader(header)) {
-            ImGui::BeginChild(title, ImVec2(0, std::min(240.f, 20.f + 18.f * static_cast<float>(items.size()))), ImGuiChildFlags_Borders);
-            ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(items.size()));
-            while (clipper.Step())
-                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) ImGui::TextUnformatted(items[static_cast<size_t>(i)].c_str());
-            ImGui::EndChild();
-        }
-    };
-    if (ImGui::CollapsingHeader("Archive entries")) {
-        ImGui::BeginChild("##entries", ImVec2(0, 240.f), ImGuiChildFlags_Borders);
-        for (const auto& e : diff_.entries) {
-            const ImVec4 col = e.kind == ApkDiff::Kind::Added ? theme::vec(Col::Success)
-                               : e.kind == ApkDiff::Kind::Removed ? theme::vec(Col::Error)
-                                                                  : theme::vec(Col::Warning);
-            ImGui::TextColored(col, "%-8s", ApkDiff::kindName(e.kind));
-            ImGui::SameLine();
-            ImGui::Text("%s  (%llu -> %llu bytes)", e.path.c_str(), static_cast<unsigned long long>(e.sizeA), static_cast<unsigned long long>(e.sizeB));
-        }
-        ImGui::EndChild();
-    }
-    list("Permissions added", permAdded_);
-    list("Permissions removed", permRemoved_);
-    if (diff_.codeCompared) {
-        list("Classes added", diff_.classesAdded);
-        list("Classes removed", diff_.classesRemoved);
-        {
-            const auto& items = diff_.methodsChanged;
-            char header[96];
-            std::snprintf(header, sizeof header, "Methods changed (%zu) - click one for its smali diff###Methods changed", items.size());
-            if (ImGui::CollapsingHeader(header)) {
-                ImGui::BeginChild("##changedMethods", ImVec2(0, std::min(240.f, 20.f + 18.f * static_cast<float>(items.size()))), ImGuiChildFlags_Borders);
-                ImGuiListClipper clipper;
-                clipper.Begin(static_cast<int>(items.size()));
-                while (clipper.Step())
-                    for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                        ImGui::PushID(i);
-                        if (ImGui::Selectable(items[static_cast<size_t>(i)].c_str())) openMethodDiff(apk, other, items[static_cast<size_t>(i)]);
-                        ImGui::PopID();
-                    }
-                ImGui::EndChild();
-            }
-        }
-        list("Methods added", diff_.methodsAdded);
-        list("Methods removed", diff_.methodsRemoved);
-    }
+void AnalysisPanel::drawCompare(Root& /*apk*/) {
+    // The comparison has its own panel: sections, filters and side-by-side code.
+    ImGui::PushTextWrapPos(0.f);
+    ImGui::TextDisabled("Compare two versions of the app: manifest, permissions, classes, methods side by side, "
+                        "resources, native libraries, bundled libraries and endpoints.");
+    ImGui::PopTextWrapPos();
+    if (ui::flowButton("Open the Diff panel") && showPanel_) showPanel_("Diff");
 }
 
 // ---------------------------------------------------------------------------
@@ -1717,7 +1717,7 @@ void AnalysisPanel::drawCompare(Root& apk) {
 // ---------------------------------------------------------------------------
 
 void AnalysisPanel::drawResources(Root& apk) {
-    std::shared_ptr<const ResourceTable> table = workspace_.resources(apk.title);
+    std::shared_ptr<const ResourceTable> const table = workspace_.resources(apk.title);
     if (!table) {
         ImGui::TextDisabled("This APK has no readable resources.arsc.");
         return;

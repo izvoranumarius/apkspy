@@ -102,7 +102,7 @@ void CommandPalette::collect() {
         it.icon = icons::FILE;
         files_.push_back(std::move(it));
     }
-    for (Root* apk : workspace_.apkRoots())
+    for (Root const* apk : workspace_.apkRoots())
         if (auto a = workspace_.analysis().get(apk->title))
             for (const auto& c : a->classes()) {
                 Item it;

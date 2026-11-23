@@ -167,9 +167,9 @@ private:
 
 // Convenience builders for tool input schemas.
 namespace schema {
-Json object(std::initializer_list<std::pair<std::string, Json>> props, std::vector<std::string> required = {});
+Json object(std::initializer_list<std::pair<std::string, Json>> props, const std::vector<std::string>& required = {});
 Json str(const std::string& description);
-Json strEnum(const std::string& description, std::vector<std::string> values);
+Json strEnum(const std::string& description, const std::vector<std::string>& values);
 Json integer(const std::string& description, int64_t min, int64_t max);
 Json boolean(const std::string& description);
 }  // namespace schema

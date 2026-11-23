@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+﻿﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="mbedTLS">
@@ -546,6 +546,12 @@
     <ClInclude Include="src\core\WorkerSet.hpp">
       <Filter>Header Files\core</Filter>
     </ClInclude>
+    <ClInclude Include="src\core\UniqueFile.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\UniqueHandle.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
     <ClInclude Include="src\ui\McpSettings.hpp">
       <Filter>Header Files\ui</Filter>
     </ClInclude>
@@ -595,6 +601,42 @@
       <Filter>Header Files\smali</Filter>
     </ClInclude>
     <ClInclude Include="src\analysis\ApkDiff.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\DependenciesPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\Dependencies.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\VulnDb.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\SecurityPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\SecurityScanner.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\SourceMap.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\TextDiff.hpp">
+      <Filter>Header Files\core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\DiffPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\BehaviorPanel.hpp">
+      <Filter>Header Files\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\Jni.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\BehaviorGraph.hpp">
+      <Filter>Header Files\analysis</Filter>
+    </ClInclude>
+    <ClInclude Include="src\analysis\LibraryCatalog.hpp">
       <Filter>Header Files\analysis</Filter>
     </ClInclude>
     <ClInclude Include="src\mcp\McpServer.hpp">
@@ -675,7 +717,7 @@
     <ClInclude Include="src\core\Codec.hpp">
       <Filter>Header Files\core</Filter>
     </ClInclude>
-    <ClInclude Include="src\core\TextDiff.hpp">
+    <ClInclude Include="src\core\LineDiff.hpp">
       <Filter>Header Files\core</Filter>
     </ClInclude>
     <ClInclude Include="src\core\SafePath.hpp">
@@ -951,6 +993,36 @@
       <Filter>Source Files\smali</Filter>
     </ClCompile>
     <ClCompile Include="src\analysis\ApkDiff.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\DependenciesPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\Dependencies.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\VulnDb.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\SecurityPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\SecurityScanner.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\SourceMap.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\DiffPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\BehaviorPanel.cpp">
+      <Filter>Source Files\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\BehaviorGraph.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\LibraryCatalog.cpp">
       <Filter>Source Files\analysis</Filter>
     </ClCompile>
     <ClCompile Include="src\mcp\McpServer.cpp">

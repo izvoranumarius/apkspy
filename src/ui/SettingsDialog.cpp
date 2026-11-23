@@ -433,7 +433,7 @@ void SettingsDialog::drawAndroidPage() {
     if (ImGui::Button("Test adb")) {
         const std::string path = adbPath_;
         adbTest_ = std::async(std::launch::async, [path] {
-            adb::Adb probe(path.empty() ? "adb" : path);
+            adb::Adb const probe(path.empty() ? "adb" : path);
             std::string error;
             const std::string version = probe.version(error);
             return version.empty() ? (error.empty() ? std::string("adb did not answer") : error) : "OK - " + version;

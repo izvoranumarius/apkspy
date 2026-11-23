@@ -104,7 +104,7 @@ void Annotations::replaceAll(std::vector<Annotation> items) {
 std::string Annotations::escape(const std::string& s) {
     std::string out;
     out.reserve(s.size());
-    for (char c : s) {
+    for (char const c : s) {
         if (c == '\\') out += "\\\\";
         else if (c == '\n') out += "\\n";
         else if (c == '\r') out += "\\r";

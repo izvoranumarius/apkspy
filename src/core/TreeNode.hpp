@@ -77,9 +77,9 @@ public:
                                            "Makefile", "Dockerfile"};
         for (const char* n : kTextNames)
             if (fileName == n) return NodeKind::Text;
-        size_t dot = fileName.find_last_of('.');
+        size_t const dot = fileName.find_last_of('.');
         if (dot == std::string::npos) return NodeKind::Binary;
-        std::string ext = tex::asciiLower(fileName.substr(dot + 1));
+        std::string const ext = tex::asciiLower(fileName.substr(dot + 1));
         if (ext == "java") return NodeKind::Java;
         if (ext == "kt" || ext == "kts") return NodeKind::Kotlin;
         if (ext == "xml") return NodeKind::Xml;

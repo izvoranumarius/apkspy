@@ -81,7 +81,8 @@ std::shared_ptr<NativeCode> NativeCode::build(std::shared_ptr<const ElfFile> elf
         error = why;
         return nullptr;
     }
-    std::shared_ptr<NativeCode> nc(new NativeCode());
+    struct Made : NativeCode {};  // reaches the private constructor for make_shared
+    std::shared_ptr<NativeCode> nc = std::make_shared<Made>();
     nc->elf_ = std::move(elf);
     const abi::Info info = abi::fromElf(abi::peekElf(nc->elf_->data().data(), nc->elf_->data().size()));
     nc->isa_ = info.id == abi::Id::Arm64 ? Isa::Arm64 : info.id == abi::Id::Arm32 ? Isa::Arm32 : info.id == abi::Id::X86 ? Isa::X86 : Isa::X86_64;
@@ -469,8 +470,8 @@ void NativeCode::discoverPlt(std::vector<Function>& fns) const {
                 if (i1.size != 4 || i1.mnemonic != "movw" || i1.operands.compare(0, 4, "r12,") != 0) continue;
                 native::Insn i2 = decodeAt(a + 4, true), i3 = decodeAt(a + 8, true);
                 if (i2.size != 4 || i2.mnemonic != "movt" || i3.mnemonic != "add" || i3.operands != "r12, pc") continue;
-                const auto imm = [](const native::Insn& i) { return static_cast<uint32_t>(std::strtoul(i.operands.c_str() + i.operands.find('#') + 1, nullptr, 0)); };
-                const uint64_t got = (static_cast<uint64_t>(imm(i1) | (imm(i2) << 16)) + a + 8 + 4) & 0xffffffffull;
+                const auto movImm = [](const native::Insn& i) { return static_cast<uint32_t>(std::strtoul(i.operands.c_str() + i.operands.find('#') + 1, nullptr, 0)); };
+                const uint64_t got = (static_cast<uint64_t>(movImm(i1) | (movImm(i2) << 16)) + a + 8 + 4) & 0xffffffffull;
                 if (!gotName(got, name)) continue;
                 Function f;
                 f.addr = a;

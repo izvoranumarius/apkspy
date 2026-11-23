@@ -1,6 +1,7 @@
 #include "core/Socket.hpp"
 #include <algorithm>
 #include <cstring>
+#include <memory>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -104,7 +105,7 @@ bool Socket::connectLoopback(int port, int timeoutMs, std::string& error) {
     const int flags = fcntl(fd_, F_GETFL, 0);
     fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
 #endif
-    int rc = ::connect(static_cast<decltype(fd_)>(fd_), reinterpret_cast<sockaddr*>(&addr), sizeof addr);
+    int const rc = ::connect(static_cast<decltype(fd_)>(fd_), reinterpret_cast<sockaddr*>(&addr), sizeof addr);
     bool ok = rc == 0;
     if (!ok) {
 #ifdef _WIN32
@@ -145,13 +146,18 @@ bool Socket::connectHost(const std::string& host, int port, int timeoutMs, std::
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
-    addrinfo* list = nullptr;
+    struct AddrInfoFreer {
+        void operator()(addrinfo* p) const noexcept { freeaddrinfo(p); }
+    };
+    addrinfo* raw = nullptr;
     const std::string service = std::to_string(port);
-    if (getaddrinfo(host.c_str(), service.c_str(), &hints, &list) != 0 || !list) {
+    const bool resolved = getaddrinfo(host.c_str(), service.c_str(), &hints, &raw) == 0;
+    const std::unique_ptr<addrinfo, AddrInfoFreer> list(raw);  // freed on every return below
+    if (!resolved || !list) {
         error = "cannot resolve " + host;
         return false;
     }
-    for (addrinfo* ai = list; ai; ai = ai->ai_next) {
+    for (const addrinfo* ai = list.get(); ai; ai = ai->ai_next) {
         fd_ = static_cast<Fd>(::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol));
         if (fd_ == kInvalid) continue;
 #ifdef _WIN32
@@ -182,7 +188,6 @@ bool Socket::connectHost(const std::string& host, int port, int timeoutMs, std::
         fcntl(fd_, F_SETFL, flags);
 #endif
         if (ok) {
-            freeaddrinfo(list);
             int one = 1;
             setsockopt(static_cast<decltype(fd_)>(fd_), IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&one), sizeof one);
 #ifdef SO_NOSIGPIPE
@@ -192,7 +197,6 @@ bool Socket::connectHost(const std::string& host, int port, int timeoutMs, std::
         }
         close();
     }
-    freeaddrinfo(list);
     error = "cannot connect to " + host + ":" + std::to_string(port);
     return false;
 }
@@ -240,7 +244,7 @@ int Socket::localPort() const {
 
 Socket Socket::accept(int timeoutMs) {
     if (fd_ == kInvalid || !waitFor(static_cast<uintptr_t>(fd_), false, timeoutMs)) return Socket();
-    Fd c = static_cast<Fd>(::accept(static_cast<decltype(fd_)>(fd_), nullptr, nullptr));
+    Fd const c = static_cast<Fd>(::accept(static_cast<decltype(fd_)>(fd_), nullptr, nullptr));
     if (c == kInvalid) return Socket();
 #ifdef SO_NOSIGPIPE
     int one = 1;

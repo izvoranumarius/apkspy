@@ -445,6 +445,7 @@ void EditorPanel::drawCode(Document& doc) {
                 if (right || (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyCtrl)) {
                     lineDoc_ = &doc;
                     line_ = i;
+                    workspace_.setEditorCursor(&doc, i);  // Java <-> smali sync follows it
                 }
                 if (right) ImGui::OpenPopup("##lineMenu");
             }
@@ -746,8 +747,7 @@ void EditorPanel::processShortcuts(Document& doc) {
     }
 }
 
-void EditorPanel::openFind(Document& doc, FindState& f) {
-    (void)doc;
+void EditorPanel::openFind(Document& /*doc*/, FindState& f) {
     f.open = true;
     f.focusInput = true;
     // Prefill with the editor selection (single line, captured while it was

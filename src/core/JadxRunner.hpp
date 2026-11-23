@@ -57,7 +57,7 @@ public:
     std::string takeTestResult(bool& ok);
 
 private:
-    void runDecompile(std::vector<std::string> argv);
+    void runDecompile(const std::vector<std::string>& argv);
     void countLine(const std::string& line);
     void pushLine(std::string line);
 

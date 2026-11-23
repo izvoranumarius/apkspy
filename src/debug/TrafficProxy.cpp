@@ -715,9 +715,9 @@ void TrafficProxy::serveHttps(Socket& client, const std::string& connectHost, in
     for (;;) {
         std::shared_ptr<Flow> flow;  // created when the next request arrives
         const auto ex0 = std::chrono::steady_clock::now();
-        std::string pending = std::move(carry);
+        std::string next = std::move(carry);
         carry.clear();
-        const bool more = serveExchange(clientStream, flow, &preset, std::move(pending), true, &carry);
+        const bool more = serveExchange(clientStream, flow, &preset, std::move(next), true, &carry);
         if (flow) finish(flow, ex0);  // an idle session that never sends again leaves no empty row
         if (!more || !running_.load()) break;
     }

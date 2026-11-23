@@ -196,7 +196,7 @@ Annotation AnalysisPanel::nativeLocation(const NativeCode& nc, const NativeCode:
     a.path = nc.elf().name();
     a.addr = line.insn.addr;
     a.context = line.insn.mnemonic + " " + line.insn.operands;
-    if (std::string where = nc.symbolize(line.insn.addr); !where.empty()) a.context = where + ":  " + a.context;
+    if (std::string const where = nc.symbolize(line.insn.addr); !where.empty()) a.context = where + ":  " + a.context;
     return a;
 }
 

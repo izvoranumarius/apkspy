@@ -1,5 +1,48 @@
 # Changelog
 
+## Security workspace
+
+- **Security** scanner: hardcoded secrets (code, resources, bundled files,
+  key stores), manifest and network security configuration, exported
+  components, cryptography, TLS validation, WebView settings, file modes,
+  SQL, logging, command execution and dynamic code loading. Every finding
+  has a severity, a confidence, masked evidence, its location (opens the
+  Java at the instruction's line, the manifest element or the file), CWE and
+  MASVS. Library code is labelled and can be hidden. Export to Markdown or JSON.
+- **Dependencies**: bundled libraries and frameworks by package, META-INF
+  version files and native libraries, with version, category, license and
+  share of the code, as a table, a graph or by license. Known
+  vulnerabilities of the detected versions come from a built-in database
+  that **Update** refreshes from OSV.dev through the configured Python.
+- The library catalogue grew to about 140 SDKs (ad networks, analytics,
+  Adobe AIR, Play Core...), which also sharpens the behavior graph and the
+  diff's library section; the manifest now records `usesCleartextTraffic`,
+  the network security config, explicit exports and component permissions,
+  and the behavior graph starts at the `Application` class too.
+- MCP: `security_scan` and `dependencies`.
+
+## Behavior graph, version diff, Java <-> smali
+
+- **Behavior** panel (Analysis workspace): what the app does, from the
+  manifest down. Each component is walked through the code it reaches,
+  including listener, `Runnable` and lambda callbacks, to the permissions,
+  network endpoints, storage and native code it touches. Exported
+  components, permissions used but not declared (for the target SDK) and
+  cleartext endpoints are flagged. Overview, Classes and Methods levels,
+  filters, find, focus on a node's neighbourhood, evidence and the call path
+  to each capability; double-click opens the code.
+- **Diff** panel replaces the Compare list: manifest and signing
+  certificate, permissions, components, classes (obfuscator renames
+  matched), methods (what changed in each, register-only changes hidden),
+  resources, native library exports, bundled library versions, endpoints
+  and files. A changed method shows side by side, as smali or decompiled,
+  with change navigation. It compares on its own once both APKs are analysed.
+- **Java sync**: click a line of jadx's Java and its method and instructions
+  are highlighted in Function; click an instruction and the Java follows.
+  Exact with jadx's `--add-debug-lines`, matched by calls, constants,
+  fields and control flow otherwise; lambdas and anonymous classes included.
+- MCP: `behavior_graph`, `map_java_smali`, the GUI tool `show_diff`, and
+  `compare_apks` now reports every section above.
 ## Proxy tools (mitmproxy-style)
 
 - **Proxy modes** (File > Settings > Network): *Regular* (HTTP proxy +

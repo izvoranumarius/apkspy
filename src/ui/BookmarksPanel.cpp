@@ -66,7 +66,7 @@ void BookmarksPanel::go(const Annotation& a) {
     }
     NavLocation origin;
     const NavLocation* originPtr = nullptr;
-    if (Document* d = workspace_.activeDocument()) {
+    if (Document const* d = workspace_.activeDocument()) {
         origin = workspace_.locationOf(*d);
         originPtr = &origin;
     }

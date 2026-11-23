@@ -20,7 +20,7 @@ namespace pathutil {
 
 std::string exeDir() {
     namespace fs = std::filesystem;
-    std::error_code ec;
+    std::error_code const ec;
 #ifdef _WIN32
     std::wstring exe(32768, L'\0');
     const DWORD n = GetModuleFileNameW(nullptr, exe.data(), static_cast<DWORD>(exe.size()));

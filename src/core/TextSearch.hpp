@@ -1,4 +1,5 @@
 #pragma once
+#include <concepts>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -48,7 +49,14 @@ inline bool matchesAt(std::string_view view, size_t at, std::string_view needle,
 // short. An empty query yields an empty result; matches never span lines.
 // Overlapping matches are reported ("aa" in "aaaa" = 3 hits): the scan
 // advances one byte per hit so users can step through every occurrence.
-template <typename Lines>
+// Anything indexable as lines of text: a vector of strings, a document, ...
+template <typename L>
+concept LineSequence = requires(const L& lines, size_t i) {
+    { lines.size() } -> std::convertible_to<size_t>;
+    { lines[i] } -> std::convertible_to<std::string_view>;
+};
+
+template <LineSequence Lines>
 inline std::vector<Match> findAll(const Lines& lines, const std::string& query,
                                   const Options& opt, size_t maxMatches, bool& truncated) {
     truncated = false;
@@ -82,7 +90,7 @@ inline std::vector<Match> findAll(const Lines& lines, const std::string& query,
     return out;
 }
 
-template <typename Lines>
+template <LineSequence Lines>
 inline std::vector<Match> findAll(const Lines& lines, const std::string& query,
                                   const Options& opt, bool& truncated) {
     return findAll(lines, query, opt, kDefaultMaxMatches, truncated);

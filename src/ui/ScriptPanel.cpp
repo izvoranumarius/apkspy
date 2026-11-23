@@ -34,9 +34,9 @@ int resizeText(ImGuiInputTextCallbackData* data) {
 }
 
 // A plain file name: script names can never leave the scripts folder.
-std::string cleanName(std::string name) {
+std::string cleanName(const std::string& name) {
     std::string out;
-    for (char c : name)
+    for (char const c : name)
         if (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-') out.push_back(c);
         else if (c == '.' && out.find('.') == std::string::npos) break;
     return out.empty() ? out : out + ".py";
@@ -56,7 +56,7 @@ void ScriptPanel::refreshFiles() {
 }
 
 void ScriptPanel::openFile(const std::string& name) {
-    std::ifstream in(scriptsDir() / pathutil::fromUtf8(name), std::ios::binary);
+    std::ifstream const in(scriptsDir() / pathutil::fromUtf8(name), std::ios::binary);
     if (!in) {
         report("Error: cannot open " + name);
         return;
@@ -233,7 +233,7 @@ void ScriptPanel::drawSource() {
     // The input's inner child window, named by BeginChildEx: see EditorPanel::drawEditable.
     char childName[256];
     std::snprintf(childName, sizeof childName, "%s/##source_%08X", ImGui::GetCurrentWindow()->Name, id);
-    ImGuiWindow* input = ImGui::FindWindowByName(childName);
+    ImGuiWindow const* input = ImGui::FindWindowByName(childName);
     if (input) {
         const ImVec2 frameMin = ImGui::GetItemRectMin(), frameMax = ImGui::GetItemRectMax();
         const ImGuiStyle& style = ImGui::GetStyle();

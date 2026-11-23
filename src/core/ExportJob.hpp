@@ -29,7 +29,7 @@ public:
 
     // Starts a job. `destDir` is normalized once here; item names are
     // sanitized at write time (they come from archive content).
-    void start(std::string destDir, std::vector<Item> items, bool decoded);
+    void start(const std::string& destDir, std::vector<Item> items, bool decoded);
     // Stops after the current item; remaining items are dropped.
     void cancel();
     // Processes one item. Call from Workspace::update() (UI thread).

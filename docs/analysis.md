@@ -11,6 +11,8 @@ The workspace is laid out like Cutter (and JADX, Ghidra, Binary Ninja):
 | --- | --- | --- |
 | **Analysis** | left | the navigator: Classes, Strings, Native, Resources, Compare |
 | **Function** | center | the selected method or native function: listing, control-flow graph or call graph |
+| **Behavior** | center, a tab | what the app does: components, call paths, permissions, endpoints, storage, native code (see [Behavior graph](#behavior-graph)) |
+| **Diff** | center, a tab | two versions of the app compared (see [Comparing versions](#comparing-versions)) |
 | **References** | under Function | what calls the selection and what it calls, or the last query's results |
 | **Decompiler** / **Editor** | right, as tabs | the selection decompiled (see [Decompiler](#decompiler)); jadx's Java |
 
@@ -51,10 +53,7 @@ The workspace is laid out like Cutter (and JADX, Ghidra, Binary Ninja):
   and the common Advanced SIMD groups (more than 99.6 % of the
   instructions in Android's libc, libz and libblas); anything else prints
   as `.inst 0x...`. 32-bit ARM and x86 libraries keep the ELF views.
-- **Compare** - pick a second APK of the project: changed / added / removed
-  archive entries, permission changes and - when both APKs are analysed -
-  added / removed classes and changed method bodies (compared on a
-  normalised disassembly, so index renumbering between builds is ignored).
+- **Compare** - opens the **Diff** panel (see [Comparing versions](#comparing-versions)).
 
 The analysis of an APK is freed when it is removed from the project or the
 project is closed.
@@ -126,6 +125,88 @@ current selection. The same output, with the same names, is available over
 MCP as `decompile_method` and `decompile_native`, which also list the
 variables with their types. MCP clients rename and retype with
 `rename_variable` (`name` and/or `type`), and the panel updates live.
+
+## Java and smali side by side
+
+With **Java sync** on (in the Function header, on by default), jadx's Java
+in the Editor and the smali in Function follow each other:
+
+- Click a line of Java: its method becomes the selection (Function,
+  References and Decompiler follow) and the line's instructions are
+  highlighted in the listing. Lines inside a lambda go to its
+  `lambda$<method>$N` method, lines inside an anonymous class to `Outer$1`,
+  `Outer$2`... as javac numbers them.
+- Click an instruction: the Java file, if it is open, highlights the line
+  the instruction belongs to. No tab is opened for you.
+
+Where jadx wrote debug line comments (add `--add-debug-lines` to the jadx
+arguments in Settings > Decompiler) and the dex has line numbers, the mapping
+is exact. Otherwise ApkSpy matches what each line and each instruction does,
+in evaluation order: calls, `new`, `this(...)` / `super(...)`, string
+constants, field accesses, branches, returns, throws and switches. A call
+that appears twice maps to the right occurrence, and the instructions that
+prepare a statement (constants, moves, `new-instance`) belong to it. Lines
+with nothing to match, such as a closing brace, map to nothing. The header
+says how a match was made. Selecting a method also opens the Java at the
+right overload. MCP clients use `map_java_smali` for the same mapping.
+
+## Behavior graph
+
+**Behavior** maps what the app does, starting from the manifest. Every
+activity, service, receiver and provider is walked through the code it
+reaches: its own methods (and inherited app methods), what they call, and the
+callbacks of the listeners, `Runnable`s and lambdas they create. Calls into
+known libraries (OkHttp, AndroidX, Firebase... about a hundred are
+recognised) are treated as API calls rather than walked. Each reached method
+is classified by what it touches:
+
+| Node | Found from |
+| --- | --- |
+| **Permission** | APIs that need one (location, camera, microphone, SMS, phone state, accounts, Wi-Fi, Bluetooth, notifications, network, ...); flagged when used but not declared, taking the target SDK and equivalent grants into account |
+| **Endpoint** | URL constants, grouped by host (cleartext `http://` flagged), and network clients (HttpURLConnection, OkHttp, Retrofit, WebView, Volley, sockets...) called without a constant URL |
+| **Storage** | SQLite, Room, SharedPreferences, DataStore, Realm, SQLCipher, MMKV, files, content providers, Firebase; named by the constant passed (`getSharedPreferences("session")`), with SQL statements as evidence |
+| **Native** | `native` methods (as their JNI symbol) and `System.loadLibrary` targets |
+
+Methods that lead to none of these are left out. Exported components are
+flagged, except the launcher activity.
+
+The **Overview** level shows each component with everything it can reach,
+however deep. **Classes** and **Methods** show the code paths in between.
+Kind filters, **Flagged paths** (only what leads to or from a flagged node),
+**Find** (Enter for the next match) and **Focus** (a node and its neighbours,
+1 to 6 hops) narrow large graphs. Click a node to see its evidence, the call
+path from a component to each capability, and what uses it. Double-click
+opens the code: a method or class opens its Java (Function, References and
+Decompiler follow), a native method or library opens the native listing. MCP
+clients get the same data from `behavior_graph`, including the shortest call
+path to each capability.
+
+## Comparing versions
+
+Add another version of the app to the project (File > Add APK to Project),
+then open **Diff** (or **Compare** in the navigator). Once both APKs are
+analysed, the comparison runs on its own, in the background. **Swap** and
+**Compare again** redo it. The sections:
+
+| Section | Compares |
+| --- | --- |
+| **Summary** | everything below in a few lines; a changed signing certificate is called out |
+| **Manifest** | package, versions, SDKs, label, `debuggable`, `allowBackup`, signing scheme and certificate, permissions |
+| **Components** | added and removed components; changed ones with what changed (exported, intent filter actions and categories) |
+| **Classes** | added and removed classes, and classes **renamed** by an obfuscator (the same code under a new name is matched, not reported twice) |
+| **Methods** | changed, added and removed methods. Bodies are compared with offsets and branch labels renumbered, so rebuilds do not show up; methods that only use other registers are counted as cosmetic and hidden. Each change says what is new: instructions added and removed, calls and strings that appeared or vanished |
+| **Resources** | every resource by type and name: value or configuration count changes |
+| **Native libraries** | changed `.so` files with the exported symbols added and removed |
+| **Libraries** | bundled libraries added, removed or updated, with versions from `META-INF/*.version` |
+| **Endpoints** | URLs that appeared or disappeared |
+| **Files** | every archive entry, by CRC and size |
+
+Select a changed method to see it **side by side**: the smali exactly as
+compared, or the built-in decompiler's output, with changed lines
+highlighted, **Prev change** / **Next change** and the new calls and strings
+in a tooltip. Double-click a method to open it in the Analysis panel. MCP
+clients use `compare_apks` for the data and `show_diff` to show a change to
+the user.
 
 ## Graphs
 

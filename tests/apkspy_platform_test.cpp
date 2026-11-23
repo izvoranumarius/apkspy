@@ -91,6 +91,8 @@ static int passes = 0;
         }                                                    \
     } while (0)
 
+#include "FeatureTests.hpp"
+
 // ---------------------------------------------------------------------------
 // In-memory DEX builder (one class LFoo; with bar()V and baz(String)V)
 // ---------------------------------------------------------------------------
@@ -6030,6 +6032,11 @@ int main(int argc, char** argv) {
     testProjectEdits();
     testAnnotationsMarkdown();
     testMcpToolsEndToEnd();
+    testBehaviorGraph();
+    testApkDiff();
+    testSourceMap();
+    testSecurityScanner();
+    testDependencies();
     std::printf("\n%d passed, %d failed\n", passes, failures);
     return failures ? 1 : 0;
 }

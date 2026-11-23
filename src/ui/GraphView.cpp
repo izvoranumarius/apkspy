@@ -107,7 +107,7 @@ GraphView::Result GraphView::draw(const char* id, ImFont* font) {
                            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle | ImGuiButtonFlags_MouseButtonRight);
     const bool hovered = ImGui::IsItemHovered();
     const bool active = ImGui::IsItemActive();
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO const& io = ImGui::GetIO();
 
     if (wantInitialView_) {
         // Small graphs fit; a large one opens on its entry block, readable.

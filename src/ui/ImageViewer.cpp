@@ -22,7 +22,7 @@ std::string ImageViewer::formatSize(size_t bytes) {
 
 float ImageViewer::fitScale(const Texture& tex, ImVec2 view) {
     if (view.x < 8.f || view.y < 8.f) return 1.f;
-    float s = std::min((view.x - 2.f) / static_cast<float>(tex.width()), (view.y - 2.f) / static_cast<float>(tex.height()));
+    float const s = std::min((view.x - 2.f) / static_cast<float>(tex.width()), (view.y - 2.f) / static_cast<float>(tex.height()));
     return std::clamp(s, kMinZoom, kMaxFit);
 }
 
@@ -57,24 +57,24 @@ void ImageViewer::drawToolbar(Document& doc) {
 }
 
 void ImageViewer::drawChecker(ImDrawList* dl, ImVec2 min, ImVec2 max) {
-    ImVec2 clipMin = dl->GetClipRectMin();
-    ImVec2 clipMax = dl->GetClipRectMax();
-    ImVec2 a(std::max(min.x, clipMin.x), std::max(min.y, clipMin.y));
-    ImVec2 b(std::min(max.x, clipMax.x), std::min(max.y, clipMax.y));
+    ImVec2 const clipMin = dl->GetClipRectMin();
+    ImVec2 const clipMax = dl->GetClipRectMax();
+    ImVec2 const a(std::max(min.x, clipMin.x), std::max(min.y, clipMin.y));
+    ImVec2 const b(std::min(max.x, clipMax.x), std::min(max.y, clipMax.y));
     if (a.x >= b.x || a.y >= b.y) return;
     // Transparency checkerboard in two control shades (light on light themes).
     dl->AddRectFilled(a, b, theme::u32(Col::Control));
-    int ix0 = static_cast<int>(std::floor((a.x - min.x) / kTile));
-    int iy0 = static_cast<int>(std::floor((a.y - min.y) / kTile));
+    int const ix0 = static_cast<int>(std::floor((a.x - min.x) / kTile));
+    int const iy0 = static_cast<int>(std::floor((a.y - min.y) / kTile));
     for (int iy = iy0;; ++iy) {
-        float y0 = min.y + iy * kTile;
+        float const y0 = min.y + iy * kTile;
         if (y0 >= b.y) break;
         for (int ix = ix0;; ++ix) {
-            float x0 = min.x + ix * kTile;
+            float const x0 = min.x + ix * kTile;
             if (x0 >= b.x) break;
             if (((ix + iy) & 1) == 0) continue;
-            ImVec2 p0(std::max(x0, a.x), std::max(y0, a.y));
-            ImVec2 p1(std::min(x0 + kTile, b.x), std::min(y0 + kTile, b.y));
+            ImVec2 const p0(std::max(x0, a.x), std::max(y0, a.y));
+            ImVec2 const p1(std::min(x0 + kTile, b.x), std::min(y0 + kTile, b.y));
             dl->AddRectFilled(p0, p1, theme::u32(Col::ControlHover));
         }
     }
@@ -89,13 +89,13 @@ void ImageViewer::drawCanvas(Document& doc) {
     ImGui::BeginChild("##canvas", ImVec2(0.f, -footer), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
     ImGui::PopStyleVar();
 
-    ImVec2 view = ImGui::GetContentRegionAvail();
-    float scale = v.fit ? fitScale(tex, view) : v.zoom;
+    ImVec2 const view = ImGui::GetContentRegionAvail();
+    float const scale = v.fit ? fitScale(tex, view) : v.zoom;
     v.lastScale = scale;
     tex.setNearest(scale >= 2.f);
 
-    ImVec2 size(static_cast<float>(tex.width()) * scale, static_cast<float>(tex.height()) * scale);
-    ImVec2 offset(std::max(0.f, (view.x - size.x) * 0.5f), std::max(0.f, (view.y - size.y) * 0.5f));
+    ImVec2 const size(static_cast<float>(tex.width()) * scale, static_cast<float>(tex.height()) * scale);
+    ImVec2 const offset(std::max(0.f, (view.x - size.x) * 0.5f), std::max(0.f, (view.y - size.y) * 0.5f));
 
     if (v.hasPendingScroll) {
         ImGui::SetScrollX(v.pendingScroll.x);
@@ -104,25 +104,25 @@ void ImageViewer::drawCanvas(Document& doc) {
     }
 
     ImGui::SetCursorPos(offset);
-    ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImVec2 const origin = ImGui::GetCursorScreenPos();
     if (v.checker) drawChecker(ImGui::GetWindowDrawList(), origin, ImVec2(origin.x + size.x, origin.y + size.y));
     ImGui::Image(static_cast<ImTextureID>(tex.id()), size);
 
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO const& io = ImGui::GetIO();
     int px = -1, py = -1;
     if (ImGui::IsItemHovered()) {
         px = static_cast<int>(std::floor((io.MousePos.x - origin.x) / scale));
         py = static_cast<int>(std::floor((io.MousePos.y - origin.y) / scale));
     }
 
-    bool hovered = ImGui::IsWindowHovered();
+    bool const hovered = ImGui::IsWindowHovered();
     if (hovered && io.KeyCtrl && io.MouseWheel != 0.f) {
-        float newScale = std::clamp(scale * std::pow(1.15f, io.MouseWheel), kMinZoom, kMaxZoom);
-        ImVec2 winPos = ImGui::GetWindowPos();
-        ImVec2 m(io.MousePos.x - winPos.x, io.MousePos.y - winPos.y);
-        ImVec2 point((m.x + ImGui::GetScrollX() - offset.x) / scale, (m.y + ImGui::GetScrollY() - offset.y) / scale);
-        ImVec2 newSize(static_cast<float>(tex.width()) * newScale, static_cast<float>(tex.height()) * newScale);
-        ImVec2 newOffset(std::max(0.f, (view.x - newSize.x) * 0.5f), std::max(0.f, (view.y - newSize.y) * 0.5f));
+        float const newScale = std::clamp(scale * std::pow(1.15f, io.MouseWheel), kMinZoom, kMaxZoom);
+        ImVec2 const winPos = ImGui::GetWindowPos();
+        ImVec2 const m(io.MousePos.x - winPos.x, io.MousePos.y - winPos.y);
+        ImVec2 const point((m.x + ImGui::GetScrollX() - offset.x) / scale, (m.y + ImGui::GetScrollY() - offset.y) / scale);
+        ImVec2 const newSize(static_cast<float>(tex.width()) * newScale, static_cast<float>(tex.height()) * newScale);
+        ImVec2 const newOffset(std::max(0.f, (view.x - newSize.x) * 0.5f), std::max(0.f, (view.y - newSize.y) * 0.5f));
         v.pendingScroll = ImVec2(std::max(0.f, point.x * newScale + newOffset.x - m.x),
                                  std::max(0.f, point.y * newScale + newOffset.y - m.y));
         v.hasPendingScroll = true;

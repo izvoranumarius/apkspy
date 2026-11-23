@@ -135,7 +135,7 @@ void Theme::loadFonts(ImGuiIO& io, float scale, bool fullCjk) {
             break;
         }
 
-    ImFont* ui = tryLoad(io, {"C:/Windows/Fonts/segoeui.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ImFont const* ui = tryLoad(io, {"C:/Windows/Fonts/segoeui.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                               "/System/Library/Fonts/Supplemental/Arial.ttf"},
                          uiSize, base, nullptr);
     if (!ui) ui = io.Fonts->AddFontDefault();

@@ -66,7 +66,7 @@ void Project::removeApk(const std::string& group) {
 }
 
 std::string Project::uniqueGroupName(const std::string& stem) const {
-    std::string base = stem.empty() ? "apk" : stem;
+    std::string const base = stem.empty() ? "apk" : stem;
     std::string candidate = base;
     int suffix = 2;
     auto taken = [&](const std::string& name) {
@@ -137,7 +137,7 @@ bool Project::load(const std::string& path) {
     if (in.getString("format") != kProjectFormat) return false;
 
     std::vector<ProjectApk> apks;
-    int count = in.getInt("apk.count", 0);
+    int const count = in.getInt("apk.count", 0);
     if (count < 0 || count > kMaxApkEntries) return false;
     for (int i = 0; i < count; ++i) {
         const std::string idx = std::to_string(i);
@@ -148,12 +148,12 @@ bool Project::load(const std::string& path) {
     }
 
     std::vector<Tab> tabs;
-    int tabCount = in.getInt("tab.count", 0);
+    int const tabCount = in.getInt("tab.count", 0);
     if (tabCount < 0 || tabCount > kMaxTabEntries) return false;
     for (int i = 0; i < tabCount; ++i) {
         const std::string idx = std::to_string(i);
         Tab tab;
-        int kind = in.getInt("tab." + idx + ".kind", 0);
+        int const kind = in.getInt("tab." + idx + ".kind", 0);
         if (kind != static_cast<int>(RootKind::Apk) && kind != static_cast<int>(RootKind::Decompiled)) continue;
         tab.rootKind = static_cast<RootKind>(kind);
         tab.group = in.getString("tab." + idx + ".group");

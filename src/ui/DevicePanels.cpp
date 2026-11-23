@@ -219,7 +219,7 @@ void DevicesPanel::drawContents() {
         if (d.serial == selected && !d.model.empty()) current = d.model + "  [" + d.serial + "]";
     if (ImGui::BeginCombo("##device", current.c_str())) {
         for (const auto& d : devices) {
-            std::string label = (d.model.empty() ? d.serial : d.model + "  [" + d.serial + "]") + "  - " + d.state;
+            std::string const label = (d.model.empty() ? d.serial : d.model + "  [" + d.serial + "]") + "  - " + d.state;
             if (ImGui::Selectable(label.c_str(), d.serial == selected, d.state == "device" ? 0 : ImGuiSelectableFlags_Disabled)) {
                 devices_.select(d.serial);
                 devices_.refreshProcesses();
@@ -400,7 +400,7 @@ void DevicesPanel::drawMonitor() {
 void DebuggerPanel::followFrame(const DebugSession::FrameRow& frame) {
     std::string cls, name, proto;
     if (!ApkAnalysis::splitMethodRef(frame.method, cls, name, proto)) return;
-    for (Root* r : workspace_.apkRoots())
+    for (Root const* r : workspace_.apkRoots())
         if (auto analysis = workspace_.analysis().get(r->title)) {
             const auto defs = analysis->findMethodDefs(cls, name, proto);
             if (!defs.empty()) {
@@ -408,7 +408,7 @@ void DebuggerPanel::followFrame(const DebugSession::FrameRow& frame) {
                 return;
             }
         }
-    for (Root* r : workspace_.decompiledRoots())
+    for (Root const* r : workspace_.decompiledRoots())
         if (workspace_.openSymbol(r->title, javaClassOf(frame.method), {}, nullptr)) {
             if (frame.line > 0)
                 if (Document* doc = workspace_.activeDocument()) doc->goTo(frame.line - 1);
@@ -543,7 +543,7 @@ void DebuggerPanel::drawContents() {
                 if (ImGui::MenuItem("Open decompiled source")) {
                     const std::string cls = javaClassOf(f.method);
                     bool opened = false;
-                    for (Root* r : workspace_.decompiledRoots())
+                    for (Root const* r : workspace_.decompiledRoots())
                         if (workspace_.openSymbol(r->title, cls, {}, nullptr)) {
                             opened = true;
                             if (f.line > 0)
@@ -710,7 +710,7 @@ void LogcatPanel::drawContents() {
         selection_.reset();
     }
     if (ui::flowButton(paused_ ? "Continue" : "Pause")) paused_ = !paused_;
-    const char* levels[] = {"V", "D", "I", "W", "E", "F"};
+    const char* const levels[] = {"V", "D", "I", "W", "E", "F"};
     ui::sameLineIfFits(ui::em(3.5f));
     ImGui::SetNextItemWidth(ui::em(3.5f));
     ImGui::Combo("##lvl", &level_, levels, 6);
