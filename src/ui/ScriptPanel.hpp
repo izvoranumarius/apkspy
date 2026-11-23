@@ -33,6 +33,12 @@ private:
     McpHost& mcp_;
     ScriptRunner runner_;
     bool wasRunning_ = false;
+    // Plugins: scripts switched on in the list run once at startup, one after another.
+    std::vector<std::string> pluginNames() const;       // enabled script names, in list order
+    void setPlugin(const std::string& name, bool on);
+    void launch(const std::string& name);               // starts a script of the scripts folder
+    std::vector<std::string> pluginQueue_;
+    bool pluginsStarted_ = false;
     std::vector<std::string> files_;
     std::string current_;  // file name inside the scripts folder
     std::string text_;

@@ -48,6 +48,7 @@ public:
     static constexpr const char* kTrafficReverseTarget = "traffic.reverseTarget";  // "https://api.example.com"
     static constexpr const char* kTrafficUpstream = "traffic.upstream";            // "host:port", "" = direct
     static constexpr const char* kTrafficUpstreamAuth = "traffic.upstreamAuth";    // "user:password"
+    static constexpr const char* kScriptsAutorun = "scripts.autorun";              // scripts enabled as plugins: run at startup ('|'-separated names)
     static constexpr const char* kTrafficScript = "traffic.script";                // last loaded traffic scripts ('|'-separated)
     static constexpr const char* kTrafficRouting = "traffic.routing";              // ignore / allow hosts, map local / remote (JSON)
     static constexpr const char* kTrafficConditions = "traffic.conditions";        // network conditions (JSON)

@@ -85,6 +85,34 @@ bool ScriptPanel::saveFile() {
 
 void ScriptPanel::run() {
     if (runner_.running() || !saveFile()) return;
+    launch(current_);
+}
+
+std::vector<std::string> ScriptPanel::pluginNames() const {
+    std::vector<std::string> out;
+    std::string cur;
+    const std::string saved = settings_.getString(Settings::kScriptsAutorun, "");
+    for (size_t i = 0; i <= saved.size(); ++i) {
+        if (i == saved.size() || saved[i] == '|') {
+            if (!cur.empty()) out.push_back(cur);
+            cur.clear();
+        } else {
+            cur += saved[i];
+        }
+    }
+    return out;
+}
+
+void ScriptPanel::setPlugin(const std::string& name, bool on) {
+    std::vector<std::string> names = pluginNames();
+    names.erase(std::remove(names.begin(), names.end(), name), names.end());
+    if (on) names.push_back(name);
+    std::string joined;
+    for (const std::string& n : names) joined += (joined.empty() ? "" : "|") + n;
+    settings_.set(Settings::kScriptsAutorun, joined);
+}
+
+void ScriptPanel::launch(const std::string& name) {
     std::string url, token, error;
     if (!mcp_.scriptEndpoint(url, token, error)) {
         report("Error: scripting endpoint: " + error);
@@ -95,9 +123,9 @@ void ScriptPanel::run() {
         report("Error: " + error);
         return;
     }
-    ranName_ = current_;
+    ranName_ = name;
     report("Running " + ranName_);
-    const std::string script = pathutil::toUtf8(scriptsDir() / pathutil::fromUtf8(current_));
+    const std::string script = pathutil::toUtf8(scriptsDir() / pathutil::fromUtf8(name));
     const std::string python = settings_.getString(Settings::kPythonPath, "python");
     if (!runner_.start(scripting::command(python, support, script), error)) {
         report("Error: " + error + ". Set the Python executable under File > Settings > Scripts.");
@@ -107,6 +135,19 @@ void ScriptPanel::run() {
 }
 
 void ScriptPanel::pollOutput() {
+    // Plugins start once, after ApkSpy is up: the enabled scripts that still exist, one after another.
+    if (!pluginsStarted_) {
+        pluginsStarted_ = true;
+        refreshFiles();
+        for (const std::string& name : pluginNames())
+            if (std::find(files_.begin(), files_.end(), name) != files_.end()) pluginQueue_.push_back(name);
+        if (!pluginQueue_.empty()) report("Starting " + std::to_string(pluginQueue_.size()) + " plugin script(s)");
+    }
+    if (!pluginQueue_.empty() && !runner_.running() && !wasRunning_) {
+        const std::string next = pluginQueue_.front();
+        pluginQueue_.erase(pluginQueue_.begin());
+        launch(next);
+    }
     const bool running = runner_.running();  // read first: the last lines arrive before this turns false
     for (std::string& line : runner_.takeOutput()) report(std::move(line));
     if (wasRunning_ && !running) {
@@ -289,8 +330,15 @@ void ScriptPanel::drawContents() {
     const float availableW = ImGui::GetContentRegionAvail().x;
     const bool sideBySide = availableW > ui::em(36.f);
     ImGui::BeginChild("##scripts", sideBySide ? ImVec2(ui::em(11.f), 0) : ImVec2(0, ui::em(5.f)), ImGuiChildFlags_Borders);
+    const std::vector<std::string> plugins = pluginNames();
     for (const std::string& name : files_) {
         const std::string label = name + (name == current_ && dirty_ ? " *" : "");
+        bool on = std::find(plugins.begin(), plugins.end(), name) != plugins.end();
+        ImGui::PushID(name.c_str());
+        if (ImGui::Checkbox("##plugin", &on)) setPlugin(name, on);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Plugin: run this script every time ApkSpy starts");
+        ImGui::PopID();
+        ImGui::SameLine();
         if (ImGui::Selectable(label.c_str(), name == current_) && name != current_) {
             if (dirty_) saveFile();
             openFile(name);

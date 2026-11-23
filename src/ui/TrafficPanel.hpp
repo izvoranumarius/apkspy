@@ -90,7 +90,8 @@ private:
     void applyRouting();        // to the proxy and the settings
     void pollScript();          // start job, log, auto-reload
     void loadScripts(std::vector<std::string> paths);  // by value: a reload passes the running host's own list
-    std::vector<std::string> scriptPathList() const;
+    std::vector<std::string> scriptPathList() const;   // the enabled scripts (lines not starting with #)
+    std::vector<std::string> scriptLines() const;      // every script line, disabled ones keep their leading #
     // Filter expressions (mitmproxy syntax) typed into the filter box.
     void updateExpression(const std::string& text);
     void drawFilterHelp();

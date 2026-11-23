@@ -259,7 +259,16 @@ void TrafficPanel::copyAsMenu(uint64_t flowId) {
 // Scripts
 // ---------------------------------------------------------------------------
 
+// A script is a line of the list; a line starting with # is switched off: it stays in the list (and in the saved
+// settings) but is not loaded. The toggles under the list add and remove the #.
 std::vector<std::string> TrafficPanel::scriptPathList() const {
+    std::vector<std::string> out;
+    for (const std::string& line : scriptLines())
+        if (line[0] != '#') out.push_back(line);
+    return out;
+}
+
+std::vector<std::string> TrafficPanel::scriptLines() const {
     std::vector<std::string> out;
     std::string line;
     for (const char* c = scriptPaths_;; ++c) {
@@ -278,7 +287,7 @@ std::vector<std::string> TrafficPanel::scriptPathList() const {
 void TrafficPanel::loadScripts(std::vector<std::string> paths) {
     if (scriptJob_.valid() || paths.empty()) return;
     std::string joined;  // '|' cannot appear in a path (Windows) and keeps the settings file one line per key
-    for (const auto& path : paths) joined += (joined.empty() ? "" : "|") + path;
+    for (const auto& line : scriptLines()) joined += (joined.empty() ? "" : "|") + line;  // enabled and disabled ones
     settings_.set(Settings::kTrafficScript, joined);
     devices_.traffic().setHooks(nullptr);
     if (script_) {
@@ -350,6 +359,43 @@ void TrafficPanel::drawScripts() {
         scriptSaver_.setDefaultName("apkspy_script.py");
     }
     ImGui::EndGroup();
+    // Per-script switches: a switched-off script stays in the list but is not loaded.
+    {
+        std::vector<std::string> lines = scriptLines();
+        bool changed = false;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            const bool wasOn = lines[i][0] != '#';
+            bool on = wasOn;
+            const std::string full = wasOn ? lines[i] : lines[i].substr(1);
+            ImGui::PushID(static_cast<int>(i));
+            if (ImGui::Checkbox(pathutil::toUtf8(pathutil::fromUtf8(full).filename()).c_str(), &on)) {
+                lines[i] = on ? full : "#" + full;
+                changed = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s", full.c_str(), on ? "enabled: loaded with the others" : "disabled: stays in the list, not loaded");
+            ImGui::PopID();
+        }
+        if (changed) {
+            std::string text;
+            for (const auto& l : lines) text += (text.empty() ? "" : "\n") + l;
+            std::snprintf(scriptPaths_, sizeof scriptPaths_, "%s", text.c_str());
+            const std::vector<std::string> enabled = scriptPathList();
+            settings_.set(Settings::kTrafficScript, [&] {
+                std::string joined;
+                for (const auto& l : lines) joined += (joined.empty() ? "" : "|") + l;
+                return joined;
+            }());
+            if (enabled.empty() && script_ && !loading) {  // everything switched off: unload
+                devices_.traffic().setHooks(nullptr);
+                for (auto& line : script_->takeLog()) scriptLog_.push_back(std::move(line));
+                script_->stop();
+                script_.reset();
+                scriptLog_.push_back("[ApkSpy] all scripts switched off - unloaded");
+            } else if (!enabled.empty() && (script_ || scriptJob_.valid())) {
+                loadScripts(enabled);  // a loaded set follows the switches at once
+            }
+        }
+    }
     const std::vector<std::string> paths = scriptPathList();
     ImGui::BeginDisabled(loading || paths.empty());
     if (ImGui::Button(active ? "Reload" : "Load")) loadScripts(paths);
@@ -387,12 +433,12 @@ void TrafficPanel::drawScripts() {
     scriptOpener_.render();
     std::string path;
     const auto addPath = [&](const std::string& added) {
-        std::vector<std::string> all = scriptPathList();
-        if (std::find(all.begin(), all.end(), added) == all.end()) all.push_back(added);
+        std::vector<std::string> all = scriptLines();  // switched-off scripts stay in the list
+        if (std::find(all.begin(), all.end(), added) == all.end() && std::find(all.begin(), all.end(), "#" + added) == all.end()) all.push_back(added);
         std::string text;
         for (const auto& s : all) text += (text.empty() ? "" : "\n") + s;
         std::snprintf(scriptPaths_, sizeof scriptPaths_, "%s", text.c_str());
-        loadScripts(all);
+        loadScripts(scriptPathList());
     };
     if (scriptOpener_.takeAccepted(path)) addPath(path);
     scriptSaver_.render();
