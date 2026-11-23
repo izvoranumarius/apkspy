@@ -200,6 +200,10 @@
     <ClInclude Include="src\ui\TitleBar.hpp" />
     <ClCompile Include="src\analysis\Arm32.cpp" />
     <ClCompile Include="src\analysis\Abi.cpp" />
+    <ClCompile Include="src\analysis\Interpreter.cpp" />
+    <ClCompile Include="src\analysis\EmuCrypto.cpp" />
+    <ClInclude Include="src\analysis\EmuCrypto.hpp" />
+    <ClInclude Include="src\analysis\Interpreter.hpp" />
     <ClCompile Include="src\analysis\X86.cpp" />
     <ClInclude Include="src\analysis\Abi.hpp" />
     <ClInclude Include="src\analysis\X86.hpp" />
@@ -211,6 +215,8 @@
     <ClInclude Include="src\debug\FridaBridge.hpp" />
     <ClCompile Include="src\core\ApkRepack.cpp" />
     <ClCompile Include="src\core\Bundle.cpp" />
+    <ClCompile Include="src\core\ProtoXml.cpp" />
+    <ClInclude Include="src\core\ProtoXml.hpp" />
     <ClInclude Include="src\core\ApkRepack.hpp" />
     <ClInclude Include="src\core\Bundle.hpp" />
   </ItemGroup>

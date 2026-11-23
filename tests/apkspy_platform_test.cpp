@@ -28,6 +28,11 @@
 #include "analysis/ApkDiff.hpp"
 #include "analysis/Dalvik.hpp"
 #include "analysis/Decompiler.hpp"
+#include "analysis/EmuCrypto.hpp"
+#include "analysis/Interpreter.hpp"
+#include "core/AxmlDecoder.hpp"
+#include "core/ProtoXml.hpp"
+#include "core/ResourceTable.hpp"
 #include "analysis/AnalysisService.hpp"
 #include "analysis/Abi.hpp"
 #include "core/Codec.hpp"
@@ -5271,6 +5276,355 @@ static void testArmFloatingPointAndFrida() {
     fs::remove_all(dir);
 }
 
+// ---- Android App Bundles --------------------------------------------------------------------------------------------
+
+namespace pb {
+static std::string varint(uint64_t v) {
+    std::string s;
+    do {
+        uint8_t b = v & 0x7f;
+        v >>= 7;
+        if (v) b |= 0x80;
+        s.push_back(static_cast<char>(b));
+    } while (v);
+    return s;
+}
+static std::string field(uint32_t n, const std::string& payload) { return varint((n << 3) | 2) + varint(payload.size()) + payload; }
+static std::string num(uint32_t n, uint64_t v) { return varint(n << 3) + varint(v); }
+}  // namespace pb
+
+// An aapt2 XmlNode for <manifest package="com.example.aab" android:versionCode="7"> with a permission and an activity.
+static std::vector<uint8_t> buildProtoManifest() {
+    const std::string ns = "http://schemas.android.com/apk/res/android";
+    const auto attr = [&](const std::string& nsUri, const std::string& name, const std::string& value, uint32_t resId, const std::string& item) {
+        std::string a = pb::field(1, nsUri) + pb::field(2, name) + pb::field(3, value);
+        if (resId) a += pb::num(5, resId);
+        if (!item.empty()) a += pb::field(6, item);
+        return pb::field(4, a);
+    };
+    const auto element = [&](const std::string& nsUri, const std::string& name, const std::string& attrs, const std::string& children, const std::string& decl) {
+        return pb::field(1, decl + pb::field(2, nsUri) + pb::field(3, name) + attrs + children);
+    };
+    const std::string intItem = pb::field(7, pb::num(6, 7));        // prim: int_decimal_value = 7
+    const std::string boolItem = pb::field(7, pb::num(8, 1));       // prim: boolean_value = true
+    const std::string perm = pb::field(5, element("", "uses-permission", attr(ns, "name", "android.permission.INTERNET", 0x01010003, ""), "", ""));
+    const std::string act = pb::field(5, element("", "activity", attr(ns, "name", "com.example.aab.Main", 0x01010003, "") + attr(ns, "exported", "true", 0x01010010, boolItem), "", ""));
+    const std::string app = pb::field(5, element("", "application", attr(ns, "label", "AabApp", 0x01010001, ""), act, ""));
+    const std::string decl = pb::field(1, pb::field(1, "android") + pb::field(2, ns));
+    const std::string manifest = element("", "manifest", attr("", "package", "com.example.aab", 0, "") + attr(ns, "versionCode", "7", 0x0101021b, intItem), perm + app, decl);
+    const std::string all = manifest;
+    return std::vector<uint8_t>(all.begin(), all.end());
+}
+
+// An aapt2 ResourceTable: string/app_name = "AabApp", color/brand = #ff112233, string/home_label -> @string/app_name.
+static std::vector<uint8_t> buildProtoResources() {
+    const auto idMsg = [](uint32_t v) { return pb::field(1, pb::num(1, v)); };
+    const auto entry = [&](uint32_t id, const std::string& name, const std::string& item) {
+        const std::string value = pb::field(4, item);  // Value.item
+        const std::string configValue = pb::field(1, "") + pb::field(2, value);
+        return pb::field(3, pb::field(1, pb::num(1, id)) + pb::field(2, name) + pb::field(6, configValue));
+    };
+    const std::string str = pb::field(2, pb::field(1, "AabApp"));
+    const std::string color = pb::field(7, pb::num(9, 0xff112233u));
+    const std::string ref = pb::field(1, pb::num(2, 0x7f010000u));
+    const std::string stringType = pb::field(3, pb::field(1, pb::num(1, 1)) + pb::field(2, "string") + entry(0, "app_name", str) + entry(1, "home_label", ref));
+    const std::string colorType = pb::field(3, pb::field(1, pb::num(1, 2)) + pb::field(2, "color") + entry(0, "brand", color));
+    (void)idMsg;
+    const std::string package = pb::field(2, pb::field(1, pb::num(1, 0x7f)) + pb::field(2, "com.example.aab") + stringType + colorType);
+    return std::vector<uint8_t>(package.begin(), package.end());
+}
+
+static void testAppBundle() {
+    std::printf("== android app bundle (.aab) ==\n");
+    const auto manifest = buildProtoManifest();
+    std::vector<uint8_t> axml;
+    std::string err;
+    CHECK(protoxml::toBinaryXml(manifest, axml, err) && AxmlDecoder::looksLikeAxml(axml), "protobuf manifest converts to binary XML");
+    std::string xml;
+    CHECK(AxmlDecoder::decode(axml, xml, err), "the converted manifest decodes");
+    CHECK(xml.find("package=\"com.example.aab\"") != std::string::npos && xml.find("android.permission.INTERNET") != std::string::npos &&
+              xml.find("com.example.aab.Main") != std::string::npos, "package, permission and activity survive");
+    CHECK(xml.find("versionCode") != std::string::npos && xml.find("=\"7\"") != std::string::npos, "typed integer attribute");
+    CHECK(xml.find("exported=\"true\"") != std::string::npos, "typed boolean attribute");
+    CHECK(!protoxml::toBinaryXml({}, axml, err) && !protoxml::toBinaryXml({0xff, 0xff, 0xff}, axml, err) && !protoxml::toBinaryXml({0x0a, 0x05, 0x01}, axml, err),
+          "empty or malformed protobuf is refused, not crashed on");
+
+    // The proto resource table becomes a resources.arsc that the ordinary resource reader understands.
+    {
+        std::vector<uint8_t> arsc;
+        CHECK(protoxml::toArsc(buildProtoResources(), arsc, err), "protobuf resource table converts");
+        const auto table = ResourceTable::parse(arsc, err);
+        CHECK(table != nullptr && table->packageName() == "com.example.aab", "the converted table parses as resources.arsc");
+        if (table) {
+            CHECK(table->reference(0x7f010000) == "@string/app_name" && table->value(0x7f010000) == "AabApp", "string resource: name and value");
+            CHECK(table->reference(0x7f010001) == "@string/home_label" && table->value(0x7f010001) == "AabApp", "a reference resolves to the string it points at");
+            ResourceTable::Item item;
+            CHECK(table->lookup(0x7f020000, item) && item.type == "color" && item.name == "brand" && item.value.find("112233") != std::string::npos, "colour resource");
+            CHECK(table->find("string/app_name") == 0x7f010000, "lookup by name");
+        }
+        CHECK(!protoxml::toArsc({}, arsc, err) && !protoxml::toArsc({0xff, 0xff}, arsc, err), "empty or malformed resource tables are refused");
+    }
+
+    // A bundle with a base module (code, native library, an asset) and a code-less feature module.
+    const fs::path dir = fs::temp_directory_path() / "apkspy_aab_test";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const std::vector<uint8_t> dex = buildDex();
+    CHECK(writeApk(dir / "app.aab", {{"base/manifest/AndroidManifest.xml", manifest},
+                                     {"base/dex/classes.dex", dex},
+                                     {"base/dex/classes2.dex", dex},
+                                     {"base/lib/arm64-v8a/libx.so", buildArm64Elf()},
+                                     {"base/assets/readme.txt", {65, 66}},
+                                     {"base/root/META-INF/x.txt", {1}},
+                                     {"base/resources.pb", buildProtoResources()},
+                                     {"feature/manifest/AndroidManifest.xml", manifest},
+                                     {"feature/res/raw/a.bin", {1}},
+                                     {"BundleConfig.pb", {1}}}), "bundle written");
+    CHECK(bundle::isBundle((dir / "app.aab").string()), ".aab is a bundle");
+    const bundle::Result r = bundle::extract((dir / "app.aab").string(), (dir / "out").string());
+    CHECK(r.ok() && r.apks.size() == 1 && r.apks[0].base && r.apks[0].hasCode && r.apks[0].hasNative && r.skipped == 1, "base module extracted, code-less feature module skipped");
+    if (r.ok()) {
+        ApkArchive apk;
+        CHECK(apk.open(r.apks[0].path), "the module APK opens");
+        std::vector<uint8_t> m, d2, so, asset, root;
+        CHECK(apk.readEntry("AndroidManifest.xml", m) && AxmlDecoder::looksLikeAxml(m), "binary manifest inside");
+        std::vector<uint8_t> arscBytes;
+        std::string tableError;
+        CHECK(apk.readEntry("resources.arsc", arscBytes) && ResourceTable::parse(arscBytes, tableError) != nullptr, "resources.arsc inside the module APK");
+        CHECK(apk.readEntry("classes.dex", d2) && apk.readEntry("classes2.dex", d2) && apk.readEntry("lib/arm64-v8a/libx.so", so) &&
+                  apk.readEntry("assets/readme.txt", asset) && apk.readEntry("META-INF/x.txt", root), "dex, libraries, assets and root files are in place");
+        AnalysisService service;
+        const auto inv = service.nativeInventory(r.apks[0].path);
+        CHECK(inv && inv->libs.size() == 1 && inv->dirs.front() == "arm64-v8a", "the module's native libraries are inventoried");
+    }
+    fs::remove_all(dir);
+}
+
+// ---- Running an app's own string decoder ------------------------------------------------------------------------------
+//
+// LDec; has   static String d(String s)  { char[] c = s.toCharArray(); for (i...) c[i] = (char)(c[i] ^ 3); return new String(c); }
+// and three callers  static String c1() { return d("kfool"); }  (c2, c3 likewise with other constants),
+// and  static String e(String s) { return Cipher.getInstance(s).toString(); }  which uses an unsupported library.
+static std::vector<uint8_t> buildDecoderDex(std::string* expect1) {
+    const std::vector<std::string> strs = {"<init>", "L", "LDec;", "LL", "VL", "[C", "c1", "c2", "c3", "d", "e", "fcqmg", "kfool", "Ljava/lang/String;", "toCharArray",
+                                           "getInstance", "Ljavax/crypto/Cipher;", "abcd", "V"};
+    std::vector<std::string> sorted = strs;
+    std::sort(sorted.begin(), sorted.end());
+    const auto sidx = [&](const std::string& x) { return static_cast<uint32_t>(std::find(sorted.begin(), sorted.end(), x) - sorted.begin()); };
+    // types sorted by their descriptor's string index
+    std::vector<std::string> typeNames = {"Ljava/lang/String;", "LDec;", "[C", "V", "Ljavax/crypto/Cipher;"};
+    std::sort(typeNames.begin(), typeNames.end(), [&](const std::string& a, const std::string& b) { return sidx(a) < sidx(b); });
+    const auto tidx = [&](const std::string& x) { return static_cast<uint32_t>(std::find(typeNames.begin(), typeNames.end(), x) - typeNames.begin()); };
+    struct Proto { std::string shorty, ret; std::vector<std::string> params; };
+    std::vector<Proto> protos = {{"LL", "Ljava/lang/String;", {"Ljava/lang/String;"}}, {"VL", "V", {"[C"}}, {"L", "[C", {}}, {"L", "Ljava/lang/String;", {}},
+                                 {"LL", "Ljavax/crypto/Cipher;", {"Ljava/lang/String;"}}};
+    std::sort(protos.begin(), protos.end(), [&](const Proto& a, const Proto& b) {
+        if (tidx(a.ret) != tidx(b.ret)) return tidx(a.ret) < tidx(b.ret);
+        return a.params.size() < b.params.size();
+    });
+    const auto pidx = [&](const std::string& ret, size_t nparams, const std::string& p0 = {}) {
+        for (size_t i = 0; i < protos.size(); ++i)
+            if (protos[i].ret == ret && protos[i].params.size() == nparams && (nparams == 0 || protos[i].params[0] == p0)) return static_cast<uint32_t>(i);
+        return 0u;
+    };
+    struct Meth { std::string cls, name; uint32_t proto; };
+    std::vector<Meth> meths = {{"Ljava/lang/String;", "<init>", pidx("V", 1, "[C")}, {"Ljava/lang/String;", "toCharArray", pidx("[C", 0)},
+                               {"LDec;", "d", pidx("Ljava/lang/String;", 1, "Ljava/lang/String;")}, {"LDec;", "c1", pidx("Ljava/lang/String;", 0)},
+                               {"LDec;", "c2", pidx("Ljava/lang/String;", 0)}, {"LDec;", "c3", pidx("Ljava/lang/String;", 0)},
+                               {"LDec;", "e", pidx("Ljava/lang/String;", 1, "Ljava/lang/String;")},
+                               {"Ljavax/crypto/Cipher;", "getInstance", pidx("Ljavax/crypto/Cipher;", 1, "Ljava/lang/String;")}};
+    std::sort(meths.begin(), meths.end(), [&](const Meth& a, const Meth& b) {
+        if (tidx(a.cls) != tidx(b.cls)) return tidx(a.cls) < tidx(b.cls);
+        return sidx(a.name) < sidx(b.name);
+    });
+    const auto midx = [&](const std::string& cls, const std::string& name) {
+        for (size_t i = 0; i < meths.size(); ++i)
+            if (meths[i].cls == cls && meths[i].name == name) return static_cast<uint32_t>(i);
+        return 0u;
+    };
+    Buf d;
+    d.b.resize(0x70, 0);
+    std::memcpy(d.b.data(), "dex\n035\0", 8);
+    d.put32(0x28, 0x12345678);
+    const size_t stringIdsOff = d.b.size();
+    for (size_t i = 0; i < sorted.size(); ++i) d.u32(0);
+    const size_t typeIdsOff = d.b.size();
+    for (const auto& t : typeNames) d.u32(sidx(t));
+    const size_t protoIdsOff = d.b.size();
+    std::vector<size_t> paramPatch;
+    for (const auto& pr : protos) {
+        d.u32(sidx(pr.shorty)), d.u32(tidx(pr.ret));
+        paramPatch.push_back(d.b.size());
+        d.u32(0);
+    }
+    const size_t methodIdsOff = d.b.size();
+    for (const auto& m : meths) d.u16(static_cast<uint16_t>(tidx(m.cls))), d.u16(static_cast<uint16_t>(m.proto)), d.u32(sidx(m.name));
+    const size_t classDefsOff = d.b.size();
+    d.u32(tidx("LDec;")), d.u32(1), d.u32(0xFFFFFFFFu), d.u32(0), d.u32(0xFFFFFFFFu), d.u32(0);
+    const size_t classDataPatch = d.b.size();
+    d.u32(0), d.u32(0);
+    for (size_t i = 0; i < sorted.size(); ++i) {
+        d.put32(stringIdsOff + 4 * i, static_cast<uint32_t>(d.b.size()));
+        d.uleb(static_cast<uint32_t>(sorted[i].size()));
+        for (char c : sorted[i]) d.u8(static_cast<uint8_t>(c));
+        d.u8(0);
+    }
+    d.align(4);
+    for (size_t i = 0; i < protos.size(); ++i) {
+        if (protos[i].params.empty()) continue;
+        d.put32(paramPatch[i], static_cast<uint32_t>(d.b.size()));
+        d.u32(static_cast<uint32_t>(protos[i].params.size()));
+        for (const auto& t : protos[i].params) d.u16(static_cast<uint16_t>(tidx(t)));
+        d.align(4);
+    }
+    const auto codeItem = [&](uint16_t regs, uint16_t ins, uint16_t outs, const std::vector<uint16_t>& insns) {
+        d.align(4);
+        const uint32_t off = static_cast<uint32_t>(d.b.size());
+        d.u16(regs), d.u16(ins), d.u16(outs), d.u16(0), d.u32(0), d.u32(static_cast<uint32_t>(insns.size()));
+        for (uint16_t u : insns) d.u16(u);
+        return off;
+    };
+    const uint16_t tString = static_cast<uint16_t>(tidx("Ljava/lang/String;"));
+    const uint16_t mToChars = static_cast<uint16_t>(midx("Ljava/lang/String;", "toCharArray")), mInit = static_cast<uint16_t>(midx("Ljava/lang/String;", "<init>"));
+    const uint16_t mD = static_cast<uint16_t>(midx("LDec;", "d")), mCipher = static_cast<uint16_t>(midx("Ljavax/crypto/Cipher;", "getInstance"));
+    const std::vector<uint16_t> decode = {
+        0x106e, mToChars, 0x0005,   // 0  invoke-virtual {v5}, String.toCharArray()
+        0x000c,                     // 3  move-result-object v0
+        0x0121,                     // 4  array-length v1, v0
+        0x0212,                     // 5  const/4 v2, 0
+        0x1235, 0x000c,             // 6  if-ge v2, v1, +12 (to 18)
+        0x0349, 0x0200,             // 8  aget-char v3, v0, v2
+        0x03df, 0x0303,             // 10 xor-int/lit8 v3, v3, #3
+        0x338e,                     // 12 int-to-char v3, v3
+        0x0350, 0x0200,             // 13 aput-char v3, v0, v2
+        0x02d8, 0x0102,             // 15 add-int/lit8 v2, v2, #1
+        0xf528,                     // 17 goto -11 (to 6)
+        0x0422, tString,            // 18 new-instance v4, String
+        0x2070, mInit, 0x0004,      // 20 invoke-direct {v4, v0}, String.<init>([C)V
+        0x0411};                    // 23 return-object v4
+    const auto caller = [&](const char* text) {
+        return std::vector<uint16_t>{0x001a, static_cast<uint16_t>(sidx(text)), 0x1071, mD, 0x0000, 0x000c, 0x0011};
+    };
+    // e(s): invoke-static {v0}, Cipher.getInstance ; move-result-object v0 ; return-object v0  (v0 = arg: registers 1, ins 1)
+    const std::vector<uint16_t> cipher = {0x1071, mCipher, 0x0000, 0x000c, 0x0011};
+    std::map<std::string, uint32_t> codeOf;
+    codeOf["d"] = codeItem(6, 1, 2, decode);
+    codeOf["c1"] = codeItem(1, 0, 1, caller("kfool"));
+    codeOf["c2"] = codeItem(1, 0, 1, caller("fcqmg"));
+    codeOf["c3"] = codeItem(1, 0, 1, caller("kfool"));
+    codeOf["e"] = codeItem(1, 1, 1, cipher);
+    d.align(4);
+    d.put32(classDataPatch, static_cast<uint32_t>(d.b.size()));
+    d.uleb(0), d.uleb(0), d.uleb(5), d.uleb(0);
+    uint32_t prev = 0;
+    for (size_t i = 0; i < meths.size(); ++i) {
+        if (meths[i].cls != "LDec;") continue;
+        d.uleb(static_cast<uint32_t>(i) - prev), d.uleb(0x9), d.uleb(codeOf[meths[i].name]);
+        prev = static_cast<uint32_t>(i);
+    }
+    d.put32(0x38, static_cast<uint32_t>(sorted.size())), d.put32(0x3C, static_cast<uint32_t>(stringIdsOff));
+    d.put32(0x40, static_cast<uint32_t>(typeNames.size())), d.put32(0x44, static_cast<uint32_t>(typeIdsOff));
+    d.put32(0x48, static_cast<uint32_t>(protos.size())), d.put32(0x4C, static_cast<uint32_t>(protoIdsOff));
+    d.put32(0x50, 0), d.put32(0x54, static_cast<uint32_t>(methodIdsOff));
+    d.put32(0x58, static_cast<uint32_t>(meths.size())), d.put32(0x5C, static_cast<uint32_t>(methodIdsOff));
+    d.put32(0x60, 1), d.put32(0x64, static_cast<uint32_t>(classDefsOff));
+    d.put32(0x20, static_cast<uint32_t>(d.b.size()));
+    if (expect1) {
+        std::string x = "kfool";
+        for (char& c : x) c = static_cast<char>(c ^ 3);
+        *expect1 = x;
+    }
+    return d.b;
+}
+
+static void testStringDecoderEmulation() {
+    std::printf("== running an app's string decoder ==\n");
+    std::string expect1;
+    auto bytes = std::make_shared<std::vector<uint8_t>>(buildDecoderDex(&expect1));
+    std::string err;
+    auto dex = DexFile::parse(bytes, "dec.dex", err);
+    CHECK(dex != nullptr, "decoder dex parses");
+    if (!dex) return;
+    std::atomic<bool> stop{false};
+    auto a = ApkAnalysis::build({dex}, stop);
+    CHECK(a != nullptr, "analysis builds");
+    if (!a) return;
+    const auto d = a->findMethodDefs("LDec;", "d");
+    CHECK(d.size() == 1, "decoder method found");
+    if (d.empty()) return;
+    if (std::getenv("DEC_DEBUG")) std::printf("%s\n", a->disassemble(d.front()).c_str());
+    const emu::Outcome r = emu::runStatic(*a, d.front(), {emu::Arg::string("kfool")});
+    CHECK(r.ok && r.isString && r.text == "hello", (std::string("d(\"kfool\") runs and returns hello (got '") + r.text + "' " + r.error + ")").c_str());
+    CHECK(r.steps > 20 && r.steps < 1000, "a bounded number of steps");
+    const emu::Outcome r2 = emu::runStatic(*a, d.front(), {emu::Arg::string("")});
+    CHECK(r2.ok && r2.text.empty(), "an empty string decodes to an empty string");
+    const emu::Outcome tiny = emu::runStatic(*a, d.front(), {emu::Arg::string("kfool")}, 10);
+    CHECK(!tiny.ok && tiny.error.find("step limit") != std::string::npos, "a step limit stops the run");
+    const emu::Outcome bad = emu::runStatic(*a, d.front(), {});
+    CHECK(!bad.ok, "wrong argument count is refused");
+    const auto e = a->findMethodDefs("LDec;", "e");
+    CHECK(e.size() == 1, "cipher routine found");
+    if (!e.empty()) {
+        const emu::Outcome c = emu::runStatic(*a, e.front(), {emu::Arg::string("RSA/ECB/PKCS1Padding")});
+        CHECK(!c.ok && c.error.find("RSA/ECB/PKCS1Padding") != std::string::npos && c.error.find("not emulated") != std::string::npos,
+              "a cipher the interpreter does not have stops the run and names it");
+    }
+    // The crypto behind javax.crypto / MessageDigest, against published test vectors.
+    {
+        const auto hex = [](const std::string& h) {
+            std::vector<uint8_t> v;
+            for (size_t i = 0; i + 1 < h.size(); i += 2) v.push_back(static_cast<uint8_t>(std::stoi(h.substr(i, 2), nullptr, 16)));
+            return v;
+        };
+        const auto toHex = [](const std::vector<uint8_t>& v) {
+            std::string s;
+            char b[4];
+            for (uint8_t x : v) std::snprintf(b, sizeof b, "%02x", x), s += b;
+            return s;
+        };
+        std::vector<uint8_t> out;
+        std::string why;
+        const auto cbc = emu::crypto::parse("AES/CBC/NoPadding");
+        CHECK(cbc.ok && emu::crypto::run(cbc, true, hex("2b7e151628aed2a6abf7158809cf4f3c"), hex("000102030405060708090a0b0c0d0e0f"), hex("6bc1bee22e409f96e93d7e117393172a"), out, why) &&
+                  toHex(out) == "7649abac8119b246cee98e9b12e9197d", "AES-128-CBC matches the NIST vector");
+        CHECK(emu::crypto::run(cbc, false, hex("2b7e151628aed2a6abf7158809cf4f3c"), hex("000102030405060708090a0b0c0d0e0f"), hex("7649abac8119b246cee98e9b12e9197d"), out, why) &&
+                  toHex(out) == "6bc1bee22e409f96e93d7e117393172a", "AES-128-CBC decrypts back");
+        const auto ecb = emu::crypto::parse("AES");
+        std::vector<uint8_t> ct;
+        CHECK(ecb.ok && ecb.mode == "ECB" && ecb.pkcs5, "AES alone means ECB with PKCS5 padding");
+        CHECK(emu::crypto::run(ecb, true, hex("000102030405060708090a0b0c0d0e0f"), {}, {'h', 'e', 'l', 'l', 'o'}, ct, why) && ct.size() == 16, "PKCS5 padding fills the block");
+        CHECK(emu::crypto::run(ecb, false, hex("000102030405060708090a0b0c0d0e0f"), {}, ct, out, why) && std::string(out.begin(), out.end()) == "hello", "PKCS5 padding is removed on decrypt");
+        CHECK(!emu::crypto::run(ecb, false, hex("0f0e0d0c0b0a09080706050403020100"), {}, ct, out, why) && why.find("BadPadding") != std::string::npos, "a wrong key is a BadPaddingException");
+        CHECK(!emu::crypto::run(ecb, true, hex("0001020304"), {}, {1}, out, why) && why.find("InvalidKey") != std::string::npos, "a bad key length is refused");
+        for (const char* t : {"DES/CBC/PKCS5Padding", "DESede/ECB/PKCS5Padding", "AES/CTR/NoPadding"}) {
+            const auto tr = emu::crypto::parse(t);
+            const std::vector<uint8_t> key = hex(std::string(t).rfind("DESede", 0) == 0 ? "0123456789abcdef0123456789abcdef0123456789abcdef" : std::string(t).rfind("DES", 0) == 0 ? "0123456789abcdef" : "000102030405060708090a0b0c0d0e0f");
+            const std::vector<uint8_t> iv = hex(std::string(t).rfind("AES", 0) == 0 ? "000102030405060708090a0b0c0d0e0f" : "0001020304050607");
+            std::vector<uint8_t> enc, dec;
+            const bool ok = tr.ok && emu::crypto::run(tr, true, key, iv, {'s', 'e', 'c', 'r', 'e', 't', '!', '?', 'x'}, enc, why) && emu::crypto::run(tr, false, key, iv, enc, dec, why) &&
+                            std::string(dec.begin(), dec.end()) == "secret!?x";
+            CHECK(ok, (std::string(t) + " round-trips").c_str());
+        }
+        CHECK(!emu::crypto::parse("RSA/ECB/PKCS1Padding").ok && !emu::crypto::parse("AES/GCM/NoPadding").ok, "unsupported transformations are not parsed");
+        CHECK(emu::crypto::digest("MD5", {'a', 'b', 'c'}, out) && toHex(out) == "900150983cd24fb0d6963f7d28e17f72", "MD5(abc)");
+        CHECK(emu::crypto::digest("SHA-1", {'a', 'b', 'c'}, out) && toHex(out) == "a9993e364706816aba3e25717850c26c9cd0d89d", "SHA-1(abc)");
+        CHECK(emu::crypto::digest("SHA-256", {'a', 'b', 'c'}, out) && toHex(out) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "SHA-256(abc)");
+        CHECK(!emu::crypto::digest("SHA3-256", {}, out), "an unknown digest");
+    }
+    emu::SweepStats stats;
+    const auto sweep = emu::decryptCallSites(*a, stop, 100, &stats);
+    CHECK(stats.decoders >= 1 && stats.working >= 1, "the decoder is found among the static String methods");
+    size_t hello = 0, other = 0;
+    for (const auto& x : sweep) {
+        if (x.result == "hello") ++hello;
+        else ++other;
+    }
+    CHECK(sweep.size() == 3 && hello == 2 && other == 1, "every call site with constant arguments is decoded");
+    bool described = false;
+    for (const auto& x : sweep) described = described || (x.decoder.find("LDec;->d(") == 0 && x.args == "\"kfool\"" && x.caller.find("LDec;->c") == 0);
+    CHECK(described, "each result names its caller, decoder and arguments");
+}
+
 static void testJniRegistrations() {
     std::printf("== jni registrations ==\n");
     for (bool relr : {false, true}) {
@@ -5668,6 +6022,8 @@ int main(int argc, char** argv) {
     testNativeArchitectures();
     testRealLibraries();
     testArmFloatingPointAndFrida();
+    testAppBundle();
+    testStringDecoderEmulation();
     testJniRegistrations();
     testBundle();
     testDexContainer();

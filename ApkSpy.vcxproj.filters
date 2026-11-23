@@ -917,6 +917,12 @@
     <ClCompile Include="src\analysis\X86.cpp">
       <Filter>Source Files\analysis</Filter>
     </ClCompile>
+    <ClCompile Include="src\core\ProtoXml.cpp">
+      <Filter>Source Files\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\analysis\Interpreter.cpp">
+      <Filter>Source Files\analysis</Filter>
+    </ClCompile>
     <ClCompile Include="src\analysis\Insights.cpp">
       <Filter>Source Files\analysis</Filter>
     </ClCompile>

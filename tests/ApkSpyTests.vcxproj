@@ -345,11 +345,14 @@
     <ClCompile Include="..\lib\miniz\miniz_zip.c" />
     <ClCompile Include="..\src\analysis\Arm32.cpp" />
     <ClCompile Include="..\src\analysis\Abi.cpp" />
+    <ClCompile Include="..\src\analysis\Interpreter.cpp" />
+    <ClCompile Include="..\src\analysis\EmuCrypto.cpp" />
     <ClCompile Include="..\src\analysis\X86.cpp" />
     <ClCompile Include="..\src\analysis\KotlinMetadata.cpp" />
     <ClCompile Include="..\src\debug\FridaBridge.cpp" />
     <ClCompile Include="..\src\core\ApkRepack.cpp" />
     <ClCompile Include="..\src\core\Bundle.cpp" />
+    <ClCompile Include="..\src\core\ProtoXml.cpp" />
     <ClCompile Include="..\src\app\Shortcuts.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
