@@ -1,11 +1,14 @@
 #pragma once
+#include <atomic>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
 #include "analysis/ApkAnalysis.hpp"
 #include "analysis/Insights.hpp"
+#include "analysis/Interpreter.hpp"
 #include "analysis/ManifestAudit.hpp"
 #include "analysis/Mapping.hpp"
 #include "analysis/NetSecConfig.hpp"
@@ -54,6 +57,12 @@ private:
     std::string netsecFile_;  // the entry the config was read from
     std::vector<insights::EndpointHost> endpoints_;
     std::vector<insights::DecodedString> decoded_;
+    // Strings decoded by running the app's own routines (emulator): a worker, then the rows.
+    std::future<std::pair<std::vector<emu::Decrypted>, emu::SweepStats>> emuJob_;
+    std::shared_ptr<std::atomic<bool>> emuStop_;
+    std::vector<emu::Decrypted> emuResults_;
+    emu::SweepStats emuStats_;
+    bool emuRan_ = false;
     std::vector<insights::PermissionUse> permUse_;      // requested permissions -> APIs used
     std::vector<insights::PermissionUse> permMissing_;  // guarded APIs used without the permission
     bool showValues_ = false;

@@ -1,4 +1,5 @@
 #include "mcp/McpTools.hpp"
+#include "analysis/Interpreter.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -1190,6 +1191,68 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                          }
                          out.set(std::string(ApkAnalysis::categoryName(c)) + "s", std::move(list));
                      }
+                     return McpToolResult::ok(std::move(out));
+                 });
+
+    analysisTool("run_method", "Run a static method",
+                 "Runs one of the APK's own static methods in a sandboxed Dalvik interpreter - typically a string decoder like "
+                 "`static String d(String)` or `static String a(int)` - with the given constant arguments and returns what it "
+                 "returns. The class's static initialiser runs first. Library calls are limited to String / StringBuilder / "
+                 "Integer / Math / Base64 / array operations and javax.crypto (AES / DES / DESede, MessageDigest); reflection, I/O, RSA, GCM and exceptions are not emulated and "
+                 "stop the run with a message naming what was needed. Bounded in steps, depth and memory; nothing executes outside "
+                 "the interpreter.",
+                 schema::object({{"apk", apkArg()},
+                                 {"method", str("Method reference: Lcom/a/B;->d(Ljava/lang/String;)Ljava/lang/String; or com.a.B.d")},
+                                 {"args", Json::obj({{"type", "array"}, {"description", "Arguments in order: strings, integers, or {\"hex\": \"...\"} byte arrays"}, {"items", Json::obj({})}})},
+                                 {"max_steps", integer("Step limit (default 2000000)", 1000, 50000000)}},
+                                {"method"}),
+                 [](const ApkAnalysis& a, const Json& args, McpToolContext&) {
+                     std::string cls, name, proto;
+                     if (!ApkAnalysis::splitMethodRef(argStr(args, "method"), cls, name, proto)) return McpToolResult::error("cannot parse the method reference");
+                     const auto defs = a.findMethodDefs(cls, name, proto);
+                     const ApkAnalysis::MethodDef* def = nullptr;
+                     for (const auto& d : defs)
+                         if ((d.method.accessFlags & 0x8) && d.method.codeOff) def = &d;
+                     if (!def) return McpToolResult::error("no static method with code matches " + argStr(args, "method"));
+                     std::vector<emu::Arg> callArgs;
+                     const Json& list = args.get("args");
+                     for (size_t i = 0; list.isArray() && i < list.size(); ++i) {
+                         const Json& v = list[i];
+                         if (v.isString()) callArgs.push_back(emu::Arg::string(v.asString()));
+                         else if (v.isNumber()) callArgs.push_back(emu::Arg::integer(v.asInt()));
+                         else if (v.isObject() && v.get("hex").isString()) {
+                             std::vector<uint8_t> bytes;
+                             const std::string& h = v.get("hex").asString();
+                             for (size_t k = 0; k + 1 < h.size(); k += 2) bytes.push_back(static_cast<uint8_t>(std::strtoul(h.substr(k, 2).c_str(), nullptr, 16)));
+                             callArgs.push_back(emu::Arg::byteArray(std::move(bytes)));
+                         } else return McpToolResult::error("arguments must be strings, integers or {\"hex\": \"..\"}");
+                     }
+                     const emu::Outcome r = emu::runStatic(a, *def, callArgs, static_cast<uint64_t>(argInt(args, "max_steps", 2000000)));
+                     Json out = Json::obj({{"ok", r.ok}, {"steps", static_cast<unsigned long long>(r.steps)}});
+                     if (r.ok) out.set(r.isString ? "string" : "value", json::sanitizeUtf8(r.text));
+                     else out.set("error", r.error);
+                     return McpToolResult::ok(std::move(out));
+                 });
+
+    analysisTool("decrypt_strings", "Decode strings with the app's own routines",
+                 "Finds the APK's string-decoding routines (static methods returning String, called from many places), evaluates "
+                 "every call whose arguments are constants (a const-string / const just before the call) in the sandboxed "
+                 "interpreter, and lists the decrypted strings with the calling method. Reports how many candidates ran and the "
+                 "first reason others did not (for example RSA or reflection, which are not emulated).",
+                 schema::object({{"apk", apkArg()}, {"limit", integer("Max results (default 500)", 1, 20000)}}),
+                 [](const ApkAnalysis& a, const Json& args, McpToolContext&) {
+                     std::atomic<bool> stop{false};
+                     emu::SweepStats stats;
+                     const auto rows = emu::decryptCallSites(a, stop, static_cast<size_t>(argInt(args, "limit", 500)), &stats);
+                     Json list = Json::array();
+                     for (const auto& d : rows)
+                         list.push(Json::obj({{"result", json::sanitizeUtf8(d.result)}, {"caller", d.caller}, {"pc", d.pc}, {"decoder", d.decoder},
+                                              {"args", json::sanitizeUtf8(d.args)}}));
+                     Json out = Json::obj({{"strings", std::move(list)}, {"decoder_candidates", static_cast<unsigned long long>(stats.decoders)},
+                                           {"decoders_that_ran", static_cast<unsigned long long>(stats.working)},
+                                           {"constant_call_sites", static_cast<unsigned long long>(stats.callSites)},
+                                           {"failed_call_sites", static_cast<unsigned long long>(stats.failed)}});
+                     if (!stats.firstError.empty()) out.set("first_error", stats.firstError);
                      return McpToolResult::ok(std::move(out));
                  });
 

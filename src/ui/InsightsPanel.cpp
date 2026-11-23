@@ -1,4 +1,5 @@
 #include "ui/InsightsPanel.hpp"
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <set>
@@ -305,6 +306,51 @@ void InsightsPanel::drawEndpoints() {
 }
 
 void InsightsPanel::drawDecoded() {
+    // The app's own decoders, run in a small sandboxed Dalvik interpreter on the constants their callers pass.
+    if (emuJob_.valid() && emuJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        auto r = emuJob_.get();
+        emuResults_ = std::move(r.first);
+        emuStats_ = r.second;
+        emuRan_ = true;
+    }
+    if (emuJob_.valid()) {
+        ImGui::TextDisabled("Running the app's string decoders...");
+        ImGui::SameLine();
+        if (ui::smallButton("Stop") && emuStop_) emuStop_->store(true);
+    } else if (ImGui::Button("Run the app's string decoders")) {
+        emuStop_ = std::make_shared<std::atomic<bool>>(false);
+        auto analysis = analysis_;
+        auto stop = emuStop_;
+        emuJob_ = std::async(std::launch::async, [analysis, stop] {
+            emu::SweepStats stats;
+            auto rows = emu::decryptCallSites(*analysis, *stop, 3000, &stats);
+            return std::make_pair(std::move(rows), stats);
+        });
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Finds static String-returning methods called from many places and evaluates every call with constant\narguments in a sandboxed interpreter. AES / DES ciphers and digests work; RSA, GCM, reflection and I/O are not emulated.");
+    if (emuRan_) {
+        ImGui::PushTextWrapPos(0.f);
+        ImGui::TextDisabled("%zu decoder candidate(s), %zu ran, %zu call site(s) with constant arguments, %zu could not be run%s%s", emuStats_.decoders,
+                            emuStats_.working, emuStats_.callSites, emuStats_.failed, emuStats_.firstError.empty() ? "" : " - first reason: ", emuStats_.firstError.c_str());
+        ImGui::PopTextWrapPos();
+        for (size_t i = 0; i < emuResults_.size(); ++i) {
+            const auto& d = emuResults_[i];
+            ImGui::PushID(static_cast<int>(100000 + i));
+            std::string shown = d.result.substr(0, 120);
+            for (char& c : shown)
+                if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+            ImGui::TextUnformatted(shown.c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s(%s)", d.caller.c_str(), d.decoder.c_str(), d.args.c_str());
+            if (ImGui::BeginPopupContextItem("##ectx")) {
+                if (ImGui::MenuItem("Copy decrypted text")) ImGui::SetClipboardText(d.result.c_str());
+                if (ImGui::MenuItem("Copy caller")) ImGui::SetClipboardText(d.caller.c_str());
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
+        }
+        ImGui::Separator();
+    }
     if (decoded_.empty()) {
         ImGui::TextDisabled("No base64 / hex / URL-encoded text constants.");
         return;
