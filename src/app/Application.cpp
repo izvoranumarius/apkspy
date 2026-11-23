@@ -381,7 +381,7 @@ void Application::onDrop(GLFWwindow* window, int count, const char** paths) {
     std::vector<std::string> apks;
     for (int i = 0; i < count; ++i) {
         std::string ext = tex::asciiLower(fs::path(paths[i]).extension().string());
-        if (ext == ".apk" || ext == ".xapk" || ext == ".apks" || ext == ".apkm") apks.push_back(paths[i]);
+        if (ext == ".apk" || ext == ".xapk" || ext == ".apks" || ext == ".apkm" || ext == ".aab") apks.push_back(paths[i]);
     }
     if (!apks.empty()) {
         app->addApkPaths(apks);

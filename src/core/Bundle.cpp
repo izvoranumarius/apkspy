@@ -5,6 +5,7 @@
 #include <fstream>
 #include "core/ApkArchive.hpp"
 #include "core/Paths.hpp"
+#include "core/ProtoXml.hpp"
 #include "core/SafePath.hpp"
 
 namespace bundle {
@@ -40,7 +41,82 @@ std::string splitLabel(const std::string& entry) {
 
 bool isBundle(const std::string& path) {
     const std::string ext = lower(pathutil::toUtf8(fs::path(pathutil::fromUtf8(path)).extension()));
-    return ext == ".xapk" || ext == ".apks" || ext == ".apkm";
+    return ext == ".xapk" || ext == ".apks" || ext == ".apkm" || ext == ".aab";
+}
+
+// An Android App Bundle holds modules (base/, feature folders) instead of APKs. Each module becomes an APK: its
+// protobuf manifest converted to binary XML, dex/*.dex as classes*.dex, lib/, assets/, root/ and res/ as they are.
+// resources.pb (the proto resource table) becomes a resources.arsc with the default-configuration values of simple entries.
+static Result extractAab(ApkArchive& zip, const std::string& bundlePath, const fs::path& dir, const std::string& safeStem) {
+    Result res;
+    std::vector<std::string> modules;
+    for (const auto& e : zip.entries()) {
+        const size_t slash = e.path.find('/');
+        if (slash == std::string::npos) continue;
+        if (e.path.compare(slash, std::string::npos, "/manifest/AndroidManifest.xml") != 0) continue;
+        modules.push_back(e.path.substr(0, slash));
+    }
+    if (modules.empty()) {
+        res.error = "no module manifest inside " + bundlePath;
+        return res;
+    }
+    std::stable_sort(modules.begin(), modules.end(), [](const std::string& a, const std::string& b) { return (a == "base") > (b == "base"); });
+    std::error_code ec;
+    const auto entries = zip.entries();
+    for (const std::string& module : modules) {
+        const bool isBase = module == "base";
+        std::vector<uint8_t> pb, axml;
+        std::string err;
+        if (!zip.readEntry(module + "/manifest/AndroidManifest.xml", pb) || !protoxml::toBinaryXml(pb, axml, err)) {
+            if (isBase) {
+                res.error = "cannot convert the manifest of the base module: " + err;
+                return res;
+            }
+            continue;
+        }
+        std::string safeLabel;
+        if (!safepath::segment(module, safeLabel)) safeLabel = "module";
+        const fs::path out = dir / (isBase ? safeStem + ".apk" : safeStem + "-" + safeLabel + ".apk");
+        mz_zip_archive w{};
+        if (!mz_zip_writer_init_file(&w, pathutil::toUtf8(out).c_str(), 0)) continue;
+        Extracted ex;
+        ex.path = pathutil::toUtf8(out);
+        ex.label = isBase ? "base" : module;
+        ex.base = isBase;
+        mz_zip_writer_add_mem(&w, "AndroidManifest.xml", axml.data(), axml.size(), MZ_DEFAULT_LEVEL);
+        {   // the proto resource table as a resources.arsc, so resource names and values resolve
+            std::vector<uint8_t> table, arsc;
+            std::string tableError;
+            if (zip.readEntry(module + "/resources.pb", table) && protoxml::toArsc(table, arsc, tableError))
+                mz_zip_writer_add_mem(&w, "resources.arsc", arsc.data(), arsc.size(), MZ_DEFAULT_LEVEL);
+        }
+        const std::string prefix = module + "/";
+        for (const auto& e : entries) {
+            if (e.path.rfind(prefix, 0) != 0 || e.path.back() == '/') continue;
+            const std::string rel = e.path.substr(prefix.size());
+            std::string target;
+            if (rel.rfind("dex/", 0) == 0 && endsWith(rel, ".dex")) target = rel.substr(4), ex.hasCode = true;
+            else if (rel.rfind("lib/", 0) == 0 || rel.rfind("assets/", 0) == 0 || rel.rfind("res/", 0) == 0) target = rel;
+            else if (rel.rfind("root/", 0) == 0) target = rel.substr(5);
+            else continue;
+            if (rel.rfind("lib/", 0) == 0 && endsWith(rel, ".so")) ex.hasNative = true;
+            std::string safe;
+            if (!safepath::relativePath(target, safe)) continue;
+            std::vector<uint8_t> bytes;
+            if (!zip.readEntry(e.path, bytes)) continue;
+            mz_zip_writer_add_mem(&w, safe.c_str(), bytes.data(), bytes.size(), MZ_DEFAULT_LEVEL);
+        }
+        const bool ok = mz_zip_writer_finalize_archive(&w);
+        mz_zip_writer_end(&w);
+        if (!ok) continue;
+        if (ex.base || ex.hasCode || ex.hasNative) res.apks.push_back(std::move(ex));
+        else {
+            ++res.skipped;
+            fs::remove(out, ec);
+        }
+    }
+    if (res.apks.empty()) res.error = "no usable module inside " + bundlePath;
+    return res;
 }
 
 Result extract(const std::string& bundlePath, const std::string& destRoot) {
@@ -62,6 +138,8 @@ Result extract(const std::string& bundlePath, const std::string& destRoot) {
         res.error = "cannot create " + pathutil::toUtf8(dir);
         return res;
     }
+
+    if (lower(pathutil::toUtf8(fs::path(pathutil::fromUtf8(bundlePath)).extension())) == ".aab") return extractAab(zip, bundlePath, dir, safeStem);
 
     // Inner APKs (anywhere in the bundle). base.apk (or the entry without a
     // "split"/"config" in its name) is the base.
