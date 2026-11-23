@@ -132,12 +132,13 @@ void DiffPanel::drawContents() {
         pendingMethod_.clear();
     }
     if (!valid_) return;
-    ImGui::Separator();
+    ui::toolbarSeparator();
     const float listWidth = std::min(ui::em(13.f), ImGui::GetContentRegionAvail().x * 0.3f);
-    ImGui::BeginChild("##sections", ImVec2(listWidth, 0), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##sections", ImVec2(listWidth, 0));
     drawSectionList();
     ImGui::EndChild();
-    ImGui::SameLine();
+    ImGui::SameLine(0.f, ui::em(1.f));
+    ui::verticalDivider();
     ImGui::BeginChild("##section", ImVec2(0, 0));
     drawSection();
     ImGui::EndChild();
@@ -333,13 +334,13 @@ void DiffPanel::drawSection() {
             ImGui::TextDisabled("Analyse both APKs to compare their classes.");
             break;
         }
-        if (!diff_.classesRenamed.empty() && ImGui::CollapsingHeader(("Renamed (" + std::to_string(diff_.classesRenamed.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (!diff_.classesRenamed.empty() && ui::collapsingHeader(("Renamed (" + std::to_string(diff_.classesRenamed.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
             for (const auto& r : diff_.classesRenamed)
                 if (passes(r.from) || passes(r.to)) ImGui::TextColored(kindColor(ApkDiff::Kind::Changed), "~ %s  ->  %s", r.from.c_str(), r.to.c_str());
         }
-        if (ImGui::CollapsingHeader(("Added (" + std::to_string(diff_.classesAdded.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+        if (ui::collapsingHeader(("Added (" + std::to_string(diff_.classesAdded.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen))
             markedList("added", ApkDiff::Kind::Added, diff_.classesAdded, keep);
-        if (ImGui::CollapsingHeader(("Removed (" + std::to_string(diff_.classesRemoved.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+        if (ui::collapsingHeader(("Removed (" + std::to_string(diff_.classesRemoved.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen))
             markedList("removed", ApkDiff::Kind::Removed, diff_.classesRemoved, keep);
         break;
     case Methods: drawMethods(); break;
@@ -379,7 +380,7 @@ void DiffPanel::drawSection() {
                           static_cast<unsigned long long>(n.sizeA), static_cast<unsigned long long>(n.sizeB), n.exportsAdded.size(),
                           n.exportsRemoved.size(), i);
             ImGui::PushStyleColor(ImGuiCol_Text, kindColor(n.kind));
-            const bool open = ImGui::CollapsingHeader(header);
+            const bool open = ui::collapsingHeader(header);
             ImGui::PopStyleColor();
             if (!open) continue;
             ImGui::Indent();
@@ -414,9 +415,9 @@ void DiffPanel::drawSection() {
             ImGui::TextDisabled("Analyse both APKs to compare their endpoints.");
             break;
         }
-        if (ImGui::CollapsingHeader(("Added (" + std::to_string(diff_.endpointsAdded.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+        if (ui::collapsingHeader(("Added (" + std::to_string(diff_.endpointsAdded.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen))
             markedList("eadded", ApkDiff::Kind::Added, diff_.endpointsAdded, keep);
-        if (ImGui::CollapsingHeader(("Removed (" + std::to_string(diff_.endpointsRemoved.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+        if (ui::collapsingHeader(("Removed (" + std::to_string(diff_.endpointsRemoved.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen))
             markedList("eremoved", ApkDiff::Kind::Removed, diff_.endpointsRemoved, keep);
         break;
     case Files:
@@ -458,7 +459,7 @@ void DiffPanel::drawMethods() {
     ImGui::BeginChild("##methodLists", ImVec2(0, listHeight));
     char header[96];
     std::snprintf(header, sizeof header, "Changed (%zu)###changed", diff_.methodDetails.size());
-    if (ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen) &&
+    if (ui::collapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen) &&
         ImGui::BeginTable("##changed", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable)) {
         ImGui::TableSetupColumn("Method", ImGuiTableColumnFlags_WidthStretch, 3.f);
         ImGui::TableSetupColumn("+/-", ImGuiTableColumnFlags_WidthFixed, ui::em(5.f));
@@ -493,10 +494,10 @@ void DiffPanel::drawMethods() {
     }
     const auto keep = [this](std::string_view s) { return passes(s); };
     std::snprintf(header, sizeof header, "Added (%zu)###madded", diff_.methodsAdded.size());
-    if (ImGui::CollapsingHeader(header))
+    if (ui::collapsingHeader(header))
         markedList("madded", ApkDiff::Kind::Added, diff_.methodsAdded, keep, [this](const std::string& s) { openMethod(s, true); });
     std::snprintf(header, sizeof header, "Removed (%zu)###mremoved", diff_.methodsRemoved.size());
-    if (ImGui::CollapsingHeader(header))
+    if (ui::collapsingHeader(header))
         markedList("mremoved", ApkDiff::Kind::Removed, diff_.methodsRemoved, keep, [this](const std::string& s) { openMethod(s, false); });
     if (diff_.methodsCosmetic) ImGui::TextDisabled("%zu more differ only in register allocation (not listed).", diff_.methodsCosmetic);
     ImGui::EndChild();

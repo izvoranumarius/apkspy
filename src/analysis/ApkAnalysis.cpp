@@ -696,8 +696,27 @@ const char* ApkAnalysis::categoryName(StringCategory c) {
     return "string";
 }
 
+bool ApkAnalysis::stringUsedInCode(uint16_t dex, uint32_t index) const {
+    const Xref key{index, 0, 0, dex, XrefKind::String};
+    const auto it = std::lower_bound(xrefs_.begin(), xrefs_.end(), key, [](const Xref& x, const Xref& k) {
+        if (x.kind != k.kind) return x.kind < k.kind;
+        if (x.dex != k.dex) return x.dex < k.dex;
+        return x.target < k.target;
+    });
+    return it != xrefs_.end() && it->kind == XrefKind::String && it->dex == dex && it->target == index;
+}
+
 std::vector<ApkAnalysis::StringHit> ApkAnalysis::strings(std::string_view needle, StringCategory category,
-                                                         size_t limit) const {
+                                                         size_t limit, bool codeOnly, bool readableOnly) const {
+    // MUTF-8: a NUL is stored as C0 80, other control characters as themselves.
+    const auto binary = [](std::string_view s) {
+        for (size_t k = 0; k < s.size(); ++k) {
+            const auto c = static_cast<unsigned char>(s[k]);
+            if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') return true;
+            if (c == 0xC0 && k + 1 < s.size() && static_cast<unsigned char>(s[k + 1]) == 0x80) return true;
+        }
+        return false;
+    };
     std::vector<StringHit> out;
     std::unordered_set<std::string_view> seen;
     std::unordered_set<std::string> urlSeen;
@@ -707,6 +726,8 @@ std::vector<ApkAnalysis::StringHit> ApkAnalysis::strings(std::string_view needle
             const std::string_view raw = d.stringView(i);
             if (raw.empty()) continue;
             if (!needle.empty() && tex::ciFind(raw, needle) == std::string_view::npos) continue;
+            if (readableOnly && binary(raw)) continue;
+            if (codeOnly && !stringUsedInCode(di, i)) continue;
             const StringCategory c = classify(raw);
             if (category != StringCategory::Any && c != category) continue;
             if (category == StringCategory::Url) {

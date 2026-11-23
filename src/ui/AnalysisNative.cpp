@@ -203,7 +203,7 @@ Annotation AnalysisPanel::nativeLocation(const NativeCode& nc, const NativeCode:
 void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
     const NativeCode::Function* f = funcAddr_ != UINT64_MAX ? nc.functionAt(funcAddr_) : nullptr;
     if (!f) {
-        ImGui::TextDisabled("Select a function. Double-click a call or jump to follow it; Backspace goes back.");
+        ui::emptyState("No function selected", "Select a function in the list.\nDouble-click a call or jump to follow it; Backspace goes back.");
         return;
     }
     ImGui::BeginDisabled(nativeBack_.empty());

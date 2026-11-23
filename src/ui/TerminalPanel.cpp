@@ -312,9 +312,13 @@ void TerminalPanel::drawContents() {
         active_ = sp->id;
     }
     if (!sp) {
-        ImGui::Spacing();
-        ImGui::TextDisabled("No open terminals.");
-        if (ui::smallButton(ui::icon(icons::ADD, "New Terminal").c_str())) add();
+        const std::string label = ui::icon(icons::ADD, "New Terminal");
+        const float buttonH = ImGui::GetFrameHeightWithSpacing();
+        ImGui::BeginChild("##noTerminal", ImVec2(0.f, -buttonH * 3.f));
+        ui::emptyState("No open terminals", "A shell with adb and the configured tools on its path.");
+        ImGui::EndChild();
+        ImGui::SetCursorPosX(std::max(0.f, (ImGui::GetWindowWidth() - ui::smallButtonWidth(label.c_str())) * 0.5f));
+        if (ui::smallButton(label.c_str())) add();
         return;
     }
     Session& s = *sp;

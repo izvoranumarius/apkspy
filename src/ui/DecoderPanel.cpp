@@ -145,7 +145,7 @@ void DecoderPanel::drawInput(float height) {
     }
     if (!note_.empty()) ImGui::TextDisabled("%s", note_.c_str());
     ImGui::PushFont(Theme::monoFont());
-    if (ImGui::InputTextMultiline("##in", input_.data(), input_.capacity() + 1, ImVec2(-FLT_MIN, height),
+    if (ui::codeBox("##in", input_.data(), input_.capacity() + 1, ImVec2(-FLT_MIN, height),
                                   ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_AllowTabInput, resizeText, &input_))
         dirty_ = true;
     ImGui::PopFont();
@@ -262,6 +262,6 @@ void DecoderPanel::drawOutput() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Continue from here: the output becomes the input, the steps are cleared");
     if (dirty_) recompute();
     ImGui::PushFont(Theme::monoFont());
-    ImGui::InputTextMultiline("##out", shown_.data(), shown_.size() + 1, ImVec2(-FLT_MIN, -FLT_MIN), ImGuiInputTextFlags_ReadOnly);
+    ui::codeBox("##out", shown_.data(), shown_.size() + 1, ImVec2(-FLT_MIN, -FLT_MIN), ImGuiInputTextFlags_ReadOnly);
     ImGui::PopFont();
 }

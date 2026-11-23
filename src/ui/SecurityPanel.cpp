@@ -78,7 +78,7 @@ void SecurityPanel::start(const std::string& group) {
 void SecurityPanel::drawContents() {
     std::vector<Root*> apks = workspace_.apkRoots();
     if (apks.empty()) {
-        ImGui::TextDisabled("Open an APK to review its security.");
+        ui::emptyState("No APK open", "Add an APK to scan it for secrets, risky configuration and weak code patterns.");
         return;
     }
     if (apkIdx_ >= static_cast<int>(apks.size())) apkIdx_ = 0;
@@ -120,7 +120,8 @@ void SecurityPanel::drawContents() {
     drawTable();
     ImGui::EndChild();
     if (selected_ >= 0 && selected_ < static_cast<int>(report_.findings.size())) {
-        ImGui::BeginChild("##details", ImVec2(0, 0), ImGuiChildFlags_Borders);
+        ui::toolbarSeparator();
+        ImGui::BeginChild("##details", ImVec2(0, 0));
         drawDetails(report_.findings[static_cast<size_t>(selected_)]);
         ImGui::EndChild();
     }
@@ -155,13 +156,13 @@ void SecurityPanel::drawToolbar() {
         const auto n = std::count_if(report_.findings.begin(), report_.findings.end(),
                                      [&](const security::Finding& f) { return f.severity == sev && (!hideLibraries_ || f.library.empty()); });
         char label[48];
-        std::snprintf(label, sizeof label, "%s %lld###sev%d", security::severityName(sev), static_cast<long long>(n), s);
-        ImGui::PushStyleColor(ImGuiCol_CheckMark, severityColor(sev));
-        ui::sameLineIfFits(ui::checkboxWidth(label));
-        ImGui::Checkbox(label, &showSeverity_[s]);
-        ImGui::PopStyleColor();
+        std::snprintf(label, sizeof label, "%s  %lld###sev%d", security::severityName(sev), static_cast<long long>(n), s);
+        ui::flowToggleChip(label, &showSeverity_[s], ImGui::GetColorU32(severityColor(sev)));
     }
-    ui::sameLineIfFits(ui::em(12.f));
+    // Second row: narrowing the list, then what to do with it.
+    ImGui::SetNextItemWidth(ui::em(14.f));
+    ImGui::InputTextWithHint("##filter", "Filter findings", filter_, sizeof filter_);
+    ui::sameLineIfFits(ui::em(10.f));
     ImGui::SetNextItemWidth(ui::em(10.f));
     if (ImGui::BeginCombo("##cat", category_ == 0 ? "All categories" : categories_[static_cast<size_t>(category_ - 1)].c_str())) {
         if (ImGui::Selectable("All categories", category_ == 0)) category_ = 0;
@@ -172,11 +173,11 @@ void SecurityPanel::drawToolbar() {
     if (category_ > static_cast<int>(categories_.size())) category_ = 0;
     ui::flowCheckbox("Hide library code", &hideLibraries_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hide findings in bundled third-party libraries (OkHttp, Firebase, ads SDKs...)");
-    ui::sameLineIfFits(ui::em(14.f));
-    ImGui::SetNextItemWidth(ui::em(13.f));
-    ImGui::InputTextWithHint("##filter", "Filter findings", filter_, sizeof filter_);
-    ImGui::SameLine();
-    if (ui::smallButton(ui::icon(icons::SAVE, "Export").c_str())) ImGui::OpenPopup("##export");
+    const std::string exportLabel = ui::icon(icons::SAVE, "Export...");
+    const float exportW = ui::smallButtonWidth(exportLabel.c_str());
+    const float right = ImGui::GetWindowContentRegionMax().x - exportW;
+    if (ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x + ImGui::GetStyle().ItemSpacing.x <= right) ImGui::SameLine(right);
+    if (ui::smallButton(exportLabel.c_str())) ImGui::OpenPopup("##export");
     if (ImGui::BeginPopup("##export")) {
         if (ImGui::MenuItem("Markdown report...")) {
             exportJson_ = false;
@@ -191,8 +192,9 @@ void SecurityPanel::drawToolbar() {
         ImGui::EndPopup();
     }
     if (!report_.bytecodeScanned && scanned_) {
-        ImGui::TextColored(theme::vec(Col::Warning), "Manifest, resources and files only: the bytecode rules run once the analysis is ready.");
+        ui::wrappedColored(theme::vec(Col::Warning), "Manifest, resources and files only: the bytecode rules run once the analysis is ready.");
     }
+    ui::toolbarSeparator();
 }
 
 void SecurityPanel::drawExport() {
@@ -237,7 +239,8 @@ void SecurityPanel::drawTable() {
             if (ImGui::Selectable(security::severityName(f.severity), selected_ == i,
                                   ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
                 selected_ = i;
-                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) navigate(f);
+                // A click previews the code on the right; a double-click goes into it.
+                navigate(f, ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left));
             }
             ImGui::PopStyleColor();
             ImGui::PopID();
@@ -288,7 +291,7 @@ void SecurityPanel::drawDetails(const security::Finding& f) {
     ImGui::PopTextWrapPos();
 }
 
-void SecurityPanel::navigate(const security::Finding& f) {
+void SecurityPanel::navigate(const security::Finding& f, bool focus) {
     const security::Location& l = f.location;
     Root* apk = workspace_.rootByGroup(group_, Root::Kind::Apk);
     if (!apk) return;
@@ -343,6 +346,7 @@ void SecurityPanel::navigate(const security::Finding& f) {
     }
     case security::Location::Kind::Resource: {
         // resources.arsc has no text: show the value through the Analysis panel's Resources view instead.
+        if (!focus) return;  // nothing to show beside the list
         workspace_.log("@" + l.ref + " = " + f.evidence, "security");
         if (showPanel_) showPanel_("Output");
         return;
@@ -350,5 +354,5 @@ void SecurityPanel::navigate(const security::Finding& f) {
     case security::Location::Kind::File: openEntry(l.ref, l.line, {}); break;
     default: return;
     }
-    if (showPanel_) showPanel_("Editor");
+    if (showPanel_) showPanel_(focus ? "Editor" : "reveal:Editor");
 }

@@ -17,6 +17,7 @@ protected:
 private:
     char query_[256] = {};
     int mode_ = 0;       // SearchService::Mode
+    std::string searched_;  // the query of the results shown (highlighted in each line)
     int rootIdx_ = 0;    // which APK's decompiled tree to search (multi-APK projects)
     bool focusQuery_ = false;
 };

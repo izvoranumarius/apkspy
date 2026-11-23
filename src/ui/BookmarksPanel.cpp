@@ -98,7 +98,7 @@ void BookmarksPanel::drawContents() {
     }
     rebuildRows();
     if (notes.all().empty()) {
-        ImGui::TextDisabled("Nothing yet. In the editor or a native listing press Ctrl+B for a bookmark or ; for a comment.");
+        ui::emptyState("No bookmarks or comments yet", "In the editor or a native listing, press Ctrl+B for a bookmark or ; for a comment.");
         popup_.draw(notes);
         return;
     }

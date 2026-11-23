@@ -64,7 +64,7 @@ void TrafficPanel::drawRules() {
         ImGui::EndPopup();
     }
     if (rules_.empty()) {
-        ImGui::TextDisabled("No rules yet.");
+        ui::emptyState("No rules yet", "Add a rule, or start from one of the Presets.");
         return;
     }
 

@@ -160,7 +160,7 @@ void AnalysisPanel::resetCaches(bool keepNative) {
 void AnalysisPanel::drawContents() {
     std::vector<Root*> apks = workspace_.apkRoots();
     if (apks.empty()) {
-        ImGui::TextDisabled("Open an APK to analyse it.");
+        ui::emptyState("No APK open", "Add an APK to the project to browse its classes, strings, native code and resources.");
         return;
     }
     if (apkIdx_ >= static_cast<int>(apks.size())) apkIdx_ = 0;
@@ -261,7 +261,7 @@ void AnalysisPanel::showQuery() {
 
 void AnalysisPanel::showFunction(int mode) {
     functionMode_ = mode;
-    if (showPanel_) showPanel_("Function");
+    present("Function");
 }
 
 void AnalysisPanel::drawHeader(Root& apk, const AnalysisService::Status& st) {
@@ -470,7 +470,7 @@ void AnalysisPanel::drawClassTree(const ApkAnalysis& a, Root& apk) {
     if (ui::smallButton("...##hidelibs")) ImGui::OpenPopup("##hidelibspopup");
     if (ImGui::BeginPopup("##hidelibspopup")) {
         ImGui::TextDisabled("Package prefixes to hide, one per line (e.g. androidx. or com.google.)");
-        ImGui::InputTextMultiline("##hidelist", excludeBuf_, sizeof excludeBuf_, ImVec2(ui::em(24.f), ui::em(10.f)));
+        ui::codeBox("##hidelist", excludeBuf_, sizeof excludeBuf_, ImVec2(ui::em(24.f), ui::em(10.f)));
         if (ImGui::Button("Apply")) {
             saveExcludes();
             buildPackageTree(a);
@@ -517,8 +517,20 @@ void AnalysisPanel::drawClassTree(const ApkAnalysis& a, Root& apk) {
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
             const bool clicked = ImGui::Selectable("##row", selected, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap);
             const bool hovered = ImGui::IsItemHovered();
+            const bool mouseOver = ImGui::IsItemHovered(ImGuiHoveredFlags_NoNavOverride);  // the mouse, not the keyboard cursor
             const bool doubleClick = clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
             const bool onArrow = hovered && ImGui::GetIO().MousePos.x < rowMin.x + static_cast<float>(row.depth) * indent + h;
+            // Keyboard, as in any tree: Right opens the focused package / class, Left closes it.
+            if (row.kind != TreeRow::Method && ImGui::IsItemFocused() && !ImGui::GetIO().WantTextInput) {
+                const bool isOpen = row.kind == TreeRow::Package ? packageOpen_[row.index] != 0 : classOpen_.count(row.index) > 0;
+                const bool wantOpen = ImGui::IsKeyPressed(ImGuiKey_RightArrow, false), wantClose = ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false);
+                if ((wantOpen && !isOpen) || (wantClose && isOpen)) {
+                    if (row.kind == TreeRow::Package) packageOpen_[row.index] = !isOpen;
+                    else if (isOpen) classOpen_.erase(row.index);
+                    else classOpen_.insert(row.index);
+                    toggled = true;
+                }
+            }
             ImGui::SameLine(x0);
             // Expand arrow (packages and classes).
             if (row.kind != TreeRow::Method) {
@@ -547,7 +559,11 @@ void AnalysisPanel::drawClassTree(const ApkAnalysis& a, Root& apk) {
                         if (!classOpen_.erase(row.index)) classOpen_.insert(row.index);
                         toggled = true;
                     }
-                    if (!onArrow) selectClass(a, row.index, apk.title, doubleClick);
+                    if (!onArrow) {
+                        browsing_ = !doubleClick;
+                        selectClass(a, row.index, apk.title, doubleClick);
+                        browsing_ = false;
+                    }
                 }
             } else {
                 const ApkAnalysis::MethodDef& m = methodsOfClass(a, row.index)[row.method];
@@ -556,9 +572,15 @@ void AnalysisPanel::drawClassTree(const ApkAnalysis& a, Root& apk) {
                 if (m.method.accessFlags & 0x0002) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
                 ImGui::TextUnformatted(row.label.c_str());
                 if (m.method.accessFlags & 0x0002) ImGui::PopStyleColor();
-                if (clicked) selectMethod(a, m, apk.title, true, doubleClick);
+                if (clicked) {
+                    browsing_ = !doubleClick;
+                    selectMethod(a, m, apk.title, true, doubleClick);
+                    browsing_ = false;
+                }
                 if (hovered && !ImGui::GetIO().WantTextInput) {
-                    if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) showGraph(a, m);
+                    // Space over a method shows its graph - with the mouse only: for the
+                    // keyboard Space is "activate", which already selected the row.
+                    if (mouseOver && ImGui::IsKeyPressed(ImGuiKey_Space, false)) showGraph(a, m);
                     if (ImGui::IsKeyPressed(ImGuiKey_X, false)) {
                         selectMethod(a, m, apk.title, false);
                         refsQuery_ = false;
@@ -623,9 +645,13 @@ void AnalysisPanel::selectClass(const ApkAnalysis& a, uint32_t cls, const std::s
     refsQuery_ = false;
     const auto& c = a.classes()[cls];
     const std::string name = DexFile::descriptorToJava(a.classDescriptor(c));
+    selClassUses_ = a.typeUses(name, 2000);
+    selClassSubs_ = a.subclassesOf(name, 500);
+    for (std::string& s : a.implementersOf(name, 500)) selClassSubs_.push_back(std::move(s));
     const auto mode = keep ? Workspace::OpenMode::Permanent : Workspace::OpenMode::Preview;
-    if (!workspace_.openClassSource(group, name, mode)) openClass(a, c, group);
-    if (showPanel_) showPanel_("Editor");
+    if (!workspace_.openClassSource(group, name, mode)) openBuiltInJava(a, c, group);
+    present("Function");  // the class view
+    present("Editor");    // its Java (or smali) beside it
 }
 
 // A method: the Function and References panels follow it; the Java opens at
@@ -689,10 +715,18 @@ void AnalysisPanel::selectMethod(const ApkAnalysis& a, const ApkAnalysis::Method
         }
         // The listing stays in front: the Decompiler panel shows the method next to it,
         // jadx's Java waits in the Editor tab.
-        if (focusFunction && showPanel_) showPanel_("Function");
-        else if (!focusFunction && showPanel_) showPanel_("Editor");
+        if (focusFunction) {
+            present("Function");
+            if (showPanel_) showPanel_("reveal:Editor");  // the Java at the method, beside the listing
+        } else {
+            present("Editor");
+        }
     } else if (focusFunction) {
-        showFunction(0);  // no Java: the smali listing is the code
+        // No jadx Java: the smali listing is the code, and the built-in
+        // decompiler beside it shows the same method as Java (instead of the
+        // class's smali again in the Editor).
+        showFunction(0);
+        if (showPanel_) showPanel_("reveal:Decompiler");
     } else {
         openMethod(a, m, group);  // the smali listing in the Editor
         if (showPanel_) showPanel_("Editor");
@@ -771,6 +805,84 @@ void AnalysisPanel::openClass(const ApkAnalysis& a, const ApkAnalysis::ClassEntr
     const std::string desc(a.classDescriptor(c));
     workspace_.openGenerated(group, "smali/" + sanitizeForPath(desc) + ".smali", shortName(desc) + ".smali",
                              a.disassembleClass(c, workspace_.listingOptions(group)), 0);
+}
+
+void AnalysisPanel::openBuiltInJava(const ApkAnalysis& a, const ApkAnalysis::ClassEntry& c, const std::string& group) {
+    const std::string desc(a.classDescriptor(c));
+    const std::string java = DexFile::descriptorToJava(desc);
+    const DexFile& dex = *a.dexes()[c.dex];
+    const DexFile::ClassDef& def = a.classDef(c);
+    std::string out = "// Built-in decompiler: jadx output is not available for this APK.\n"
+                      "// Set up jadx in File > Settings > JADX for complete Java (inner classes, generics, lambdas).\n";
+    if (const size_t dot = java.rfind('.'); dot != std::string::npos) out += "package " + java.substr(0, dot) + ";\n";
+    out += "\n";
+    // Java modifiers only (no dex-level words like synthetic / bridge / constructor).
+    enum class Of { Class, Field, Method };
+    const auto javaMods = [](uint32_t f, Of of) {
+        std::string m;
+        const auto add = [&](uint32_t bit, const char* word) {
+            if (f & bit) m += std::string(word) + " ";
+        };
+        add(0x0001, "public");
+        add(0x0002, "private");
+        add(0x0004, "protected");
+        add(0x0008, "static");
+        add(0x0010, "final");
+        if (of == Of::Field) {
+            add(0x0040, "volatile");
+            add(0x0080, "transient");
+        }
+        if (of == Of::Method) {
+            add(0x0020, "synchronized");
+            add(0x0100, "native");
+        }
+        if (!(of == Of::Class && (f & 0x0200))) add(0x0400, "abstract");  // interfaces are abstract anyway
+        return m;
+    };
+    // Declaration.
+    const bool isInterface = (def.accessFlags & 0x0200) != 0;
+    std::string decl = javaMods(def.accessFlags, Of::Class);
+    decl += (def.accessFlags & 0x2000) ? "@interface " : isInterface ? "interface " : (def.accessFlags & 0x4000) ? "enum " : "class ";
+    decl += shortName(desc);
+    if (def.superclassIdx != DexFile::kNoIndex) {
+        const std::string_view super = dex.typeDescriptor(def.superclassIdx);
+        if (super != "Ljava/lang/Object;" && super != "Ljava/lang/Enum;") decl += " extends " + prettyType(super);
+    }
+    const std::vector<uint32_t> ifaces = dex.interfaces(def);
+    for (size_t i = 0; i < ifaces.size(); ++i)
+        decl += (i ? ", " : isInterface ? " extends " : " implements ") + prettyType(dex.typeDescriptor(ifaces[i]));
+    out += decl + " {\n";
+    // Fields.
+    DexFile::ClassData data;
+    dex.classData(def, data);
+    for (const DexFile::EncodedField& f : data.fields) {
+        out += "    " + javaMods(f.accessFlags, Of::Field) + prettyType(dex.typeDescriptor(dex.fieldType(f.fieldIdx))) + " " +
+               std::string(dex.fieldName(f.fieldIdx)) + ";\n";
+    }
+    // Methods, each as the Decompiler panel shows it.
+    for (const ApkAnalysis::MethodDef& m : a.methodsOf(c)) {
+        out += "\n";
+        const uint32_t idx = m.method.methodIdx;
+        if (!m.method.codeOff) {  // abstract / native: the declaration alone, Java order "R name(A)"
+            std::string sig = prettyMethod(desc, dex.methodName(idx), dex.protoDescriptor(dex.methodProto(idx)));
+            if (const size_t colon = sig.rfind(" : "); colon != std::string::npos) sig = sig.substr(colon + 3) + " " + sig.substr(0, colon);
+            out += "    " + javaMods(m.method.accessFlags, Of::Method) + sig + ";\n";
+            continue;
+        }
+        const decompiler::Output d = decompiler::decompileMethod(a, m);
+        if (!d.error.empty() || d.lines.empty()) {
+            out += "    // " + prettyMethod(desc, dex.methodName(idx), dex.protoDescriptor(dex.methodProto(idx))) + ": " +
+                   (d.error.empty() ? std::string("no output") : d.error) + "\n";
+            continue;
+        }
+        for (size_t i = 0; i < d.lines.size(); ++i) {
+            const decompiler::Line& l = d.lines[i];
+            if (i == 0 && l.text == "// " + java) continue;  // the panel's class banner
+            out += std::string(static_cast<size_t>(l.indent + 1) * 4, ' ') + l.text + "\n";
+        }
+    }
+    out += "}\n";
+    workspace_.openGenerated(group, "java/" + sanitizeForPath(desc) + ".java", shortName(desc) + ".java", std::move(out), 0);
 }
 
 void AnalysisPanel::openMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m, const std::string& group,
@@ -903,12 +1015,22 @@ void AnalysisPanel::drawStrings(const ApkAnalysis& a, Root& /*apk*/) {
                                         ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
     refresh |= ImGui::Button("Search");
+    refresh |= ui::flowCheckbox("Used by code", &stringsCodeOnly_);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Only strings some code loads (const-string).\nOff: everything in the dex string tables, including\n"
+                          "class and member names.");
+    refresh |= ui::flowCheckbox("Text only", &stringsReadable_);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hide binary data (strings with control characters, such as protobuf schemas)");
     if (refresh || !stringsLoaded_) {
-        strings_ = a.strings(stringFilter_, kCategories[stringCategory_], 20000);
+        strings_ = a.strings(stringFilter_, kCategories[stringCategory_], 20000, stringsCodeOnly_, stringsReadable_);
         stringsLoaded_ = true;
     }
-    ImGui::TextDisabled("%zu strings%s - click to list the code using one", strings_.size(),
-                        strings_.size() >= 20000 ? " (capped)" : "");
+    {
+        char count[96];
+        if (strings_.size() >= 20000) std::snprintf(count, sizeof count, "20000+ strings: filter to narrow. Click one for the code using it.");
+        else std::snprintf(count, sizeof count, "%zu strings. Click one for the code using it.", strings_.size());
+        ui::wrappedColored(theme::vec(Col::TextMuted), count);
+    }
     if (ImGui::BeginTable("##st", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 5.f);
@@ -1090,7 +1212,7 @@ void AnalysisPanel::showCallGraph(const ApkAnalysis& a, const ApkAnalysis::Metho
 
 void AnalysisPanel::drawGraph(const ApkAnalysis& a, Root& /*apk*/) {
     if (!graphValid_) {
-        ImGui::TextDisabled("Press CFG or Calls on a method (Classes tab) to show its graph.");
+        ui::emptyState("No graph", "Press CFG or Calls on a method in the Classes tab to draw its graph.");
         return;
     }
     // The method is named in the Function header above.
@@ -1132,15 +1254,165 @@ void AnalysisPanel::drawFunctionView() {
     }
     auto analysis = current_.lock();
     Root* apk = workspace_.rootByGroup(currentGroup_, Root::Kind::Apk);
+    if (sel_ == Selection::Class && analysis && apk && selClass_ < analysis->classes().size()) {
+        drawClassView(*analysis, *apk);
+        return;
+    }
     if (sel_ != Selection::Method || !analysis || !apk) {
-        ImGui::TextDisabled("Select a method in Classes, or a function in Native.");
+        ui::emptyState("Nothing selected", "Select a class or a method in Classes, or a function in Native.");
         return;
     }
     drawMethodView(*analysis, *apk);
 }
 
+void AnalysisPanel::drawClassView(const ApkAnalysis& a, Root& apk) {
+    const ApkAnalysis::ClassEntry& entry = a.classes()[selClass_];
+    const DexFile& dex = *a.dexes()[entry.dex];
+    const DexFile::ClassDef& def = a.classDef(entry);
+    const std::string_view desc = a.classDescriptor(entry);
+    const auto modifiers = [](uint32_t f, bool forClass) {
+        std::string m;
+        const auto add = [&](uint32_t bit, const char* word) {
+            if (f & bit) (m += m.empty() ? "" : " ") += word;
+        };
+        add(0x0001, "public");
+        add(0x0002, "private");
+        add(0x0004, "protected");
+        add(0x0008, "static");
+        add(0x0010, "final");
+        if (!forClass) {
+            add(0x0020, "synchronized");
+            add(0x0100, "native");
+        }
+        if (!(forClass && (f & 0x0200))) add(0x0400, "abstract");
+        return m;
+    };
+
+    // Declaration: name, then "public final class extends X implements Y, Z".
+    ImGui::AlignTextToFramePadding();  // the title shares its row with the Smali button
+    ImGui::PushStyleColor(ImGuiCol_Text, kAccent());
+    ImGui::TextUnformatted(DexFile::descriptorToJava(desc).c_str());
+    ImGui::PopStyleColor();
+    {
+        const char* smaliLabel = "Smali";
+        const float w = ui::smallButtonWidth(smaliLabel);
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - w));
+        if (ui::smallButton(smaliLabel)) {
+            openClass(a, entry, apk.title);
+            if (showPanel_) showPanel_("Editor");
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The whole class as smali, in the Editor");
+    }
+    const uint32_t flags = def.accessFlags;
+    std::string decl = modifiers(flags, true);
+    (decl += decl.empty() ? "" : " ") += (flags & 0x2000) ? "@interface" : (flags & 0x4000) ? "enum" : (flags & 0x0200) ? "interface" : "class";
+    if (def.superclassIdx != DexFile::kNoIndex) {
+        const std::string_view super = dex.typeDescriptor(def.superclassIdx);
+        if (super != "Ljava/lang/Object;" && super != "Ljava/lang/Enum;") decl += "  extends " + DexFile::descriptorToJava(super);
+    }
+    const std::vector<uint32_t> ifaces = dex.interfaces(def);
+    for (size_t i = 0; i < ifaces.size(); ++i)
+        decl += (i ? ", " : "  implements ") + DexFile::descriptorToJava(dex.typeDescriptor(ifaces[i]));
+    ui::wrappedColored(theme::vec(Col::TextMuted), decl);
+
+    DexFile::ClassData data;
+    dex.classData(def, data);
+    const auto& methods = methodsOfClass(a, selClass_);
+    {
+        std::string facts = "classes" + (entry.dex ? std::to_string(entry.dex + 1) : std::string()) + ".dex";
+        if (def.sourceFileIdx != DexFile::kNoIndex) facts += "  \xc2\xb7  " + dex.string(def.sourceFileIdx);
+        facts += "  \xc2\xb7  " + std::to_string(data.fields.size()) + " fields, " + std::to_string(methods.size()) + " methods";
+        ImGui::TextDisabled("%s", facts.c_str());
+    }
+    ui::toolbarSeparator();
+
+    ImGui::BeginChild("##classBody", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+    const ImGuiTableFlags tableFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoPadOuterX;
+    if (!data.fields.empty()) {
+        char heading[32];
+        std::snprintf(heading, sizeof heading, "Fields  %zu", data.fields.size());
+        ui::sectionHeader(heading);
+        if (ImGui::BeginTable("##fields", 3, tableFlags)) {
+            ImGui::TableSetupColumn("mods", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("type", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch);
+            for (const DexFile::EncodedField& f : data.fields) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s", modifiers(f.accessFlags, false).c_str());
+                ImGui::TableNextColumn();
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::syntax(SyntaxToken::Type));
+                ImGui::TextUnformatted(prettyType(dex.typeDescriptor(dex.fieldType(f.fieldIdx))).c_str());
+                ImGui::PopStyleColor();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(std::string(dex.fieldName(f.fieldIdx)).c_str());
+            }
+            ImGui::EndTable();
+        }
+    }
+
+    char heading[32];
+    std::snprintf(heading, sizeof heading, "Methods  %zu", methods.size());
+    ui::sectionHeader(heading);
+    if (methods.empty()) ImGui::TextDisabled("No methods.");
+    else if (ImGui::BeginTable("##methods", 3, tableFlags)) {
+        ImGui::TableSetupColumn("mods", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("signature", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("size", ImGuiTableColumnFlags_WidthFixed);
+        for (size_t k = 0; k < methods.size(); ++k) {
+            const ApkAnalysis::MethodDef& m = methods[k];
+            const uint32_t idx = m.method.methodIdx;
+            ImGui::PushID(static_cast<int>(k));
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            // The whole row is the click target; the cells are drawn over it.
+            const bool clicked = ImGui::Selectable("##m", false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap |
+                                                                     ImGuiSelectableFlags_AllowDoubleClick);
+            const bool doubleClick = clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nClick: listing    Double-click: keep the Java tab open", dex.methodSignature(idx).c_str());
+            ImGui::SameLine(0.f, 0.f);
+            ImGui::TextDisabled("%s", modifiers(m.method.accessFlags, false).c_str());
+            ImGui::TableNextColumn();
+            const bool hidden = (m.method.accessFlags & 0x0002) != 0;
+            if (hidden) ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(Col::TextMuted));
+            ImGui::TextUnformatted(prettyMethod(desc, dex.methodName(idx), dex.protoDescriptor(dex.methodProto(idx))).c_str());
+            if (hidden) ImGui::PopStyleColor();
+            ImGui::TableNextColumn();
+            DexFile::CodeItem code;
+            if (m.method.codeOff && dex.codeItem(m.method.codeOff, code)) ImGui::TextDisabled("%u B", code.insnsSize * 2u);
+            else ImGui::TextDisabled("%s", (m.method.accessFlags & 0x0100) ? "native" : "abstract");
+            ImGui::PopID();
+            if (clicked) {
+                const ApkAnalysis::MethodDef target = m;  // selectMethod refreshes the per-class cache
+                selectMethod(a, target, apk.title, true, doubleClick);
+                break;
+            }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::EndChild();
+}
+
 void AnalysisPanel::drawMethodView(const ApkAnalysis& a, Root& apk) {
-    ui::wrappedColored(kAccent(), prettyRef(a.methodSignature(selMethod_)));
+    // Breadcrumb: the class (back to its member list) > the method.
+    if (selClass_ < a.classes().size()) {
+        const std::string cls = shortName(a.classDescriptor(a.classes()[selClass_]));
+        ImGui::PushID("crumb");
+        if (ImGui::TextLink(cls.c_str())) sel_ = Selection::Class;
+        ImGui::PopID();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back to the class: its fields and methods");
+        ImGui::SameLine(0.f, ui::em(0.4f));
+        ImGui::TextDisabled(">");
+        ImGui::SameLine(0.f, ui::em(0.4f));
+        const DexFile& dex = *a.dexes()[selMethod_.dex];
+        const uint32_t idx = selMethod_.method.methodIdx;
+        ImGui::PushStyleColor(ImGuiCol_Text, kAccent());
+        ImGui::TextUnformatted(prettyMethod(dex.typeDescriptor(dex.methodClass(idx)), dex.methodName(idx),
+                                            dex.protoDescriptor(dex.methodProto(idx))).c_str());
+        ImGui::PopStyleColor();
+    } else {
+        ui::wrappedColored(kAccent(), prettyRef(a.methodSignature(selMethod_)));
+    }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", a.methodSignature(selMethod_).c_str());
     static const char* const kModes[] = {"Smali", "Graph", "Calls"};
     int mode = functionMode_;
@@ -1328,8 +1600,50 @@ void AnalysisPanel::drawReferences() {
         if (go) go();
         return;
     }
+    if (sel_ == Selection::Class && analysis && apk && selClass_ < analysis->classes().size()) {
+        const ApkAnalysis& a = *analysis;
+        twoColumns("Used by", selClassUses_.size(), "Subclasses & implementers", selClassSubs_.size(),
+                   [&](size_t i) {
+                       const auto& h = selClassUses_[i];
+                       const std::string sig = a.methodSignature(h.from);
+                       entryText = sig;
+                       if (ImGui::Selectable(prettyRef(sig).c_str())) {
+                           const DexFile& dex = *a.dexes()[h.from.dex];
+                           const auto defs = a.findMethodDefs(dex.typeDescriptor(dex.methodClass(h.from.method)), dex.methodName(h.from.method),
+                                                              dex.protoDescriptor(dex.methodProto(h.from.method)));
+                           if (!defs.empty()) {
+                               const ApkAnalysis::MethodDef target = defs.front();
+                               const int32_t pc = static_cast<int32_t>(h.from.pc);
+                               go = [this, &a, apk, target, pc] {
+                                   selectMethod(a, target, apk->title, true);
+                                   listingPc_ = pc;
+                                   listingScroll_ = true;
+                               };
+                           }
+                       }
+                       if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nuses the type at %04x", sig.c_str(), h.from.pc);
+                   },
+                   [&](size_t i) {
+                       const std::string& name = selClassSubs_[i];
+                       entryText = name;
+                       ImGui::PushID("sub");
+                       if (ImGui::Selectable(name.c_str())) {
+                           if (const ApkAnalysis::ClassEntry* e = a.findClass(name)) {
+                               const auto& all = a.classes();
+                               for (uint32_t k = 0; k < static_cast<uint32_t>(all.size()); ++k)
+                                   if (all[k].dex == e->dex && all[k].def == e->def) {
+                                       go = [this, &a, apk, k] { selectClass(a, k, apk->title, false); };
+                                       break;
+                                   }
+                           }
+                       }
+                       ImGui::PopID();
+                   });
+        if (go) go();
+        return;
+    }
     if (sel_ != Selection::Method || !analysis || !apk) {
-        ImGui::TextDisabled("Select a method to see what calls it and what it calls.");
+        ui::emptyState("Nothing selected", "Select a class to see where it is used, or a method to see what calls it and what it calls.");
         return;
     }
     const ApkAnalysis& a = *analysis;
@@ -1426,7 +1740,7 @@ void AnalysisPanel::drawNative(Root& apk) {
                 }
     }
     if (libs_.empty()) {
-        ImGui::TextDisabled("This APK ships no native libraries (lib/<abi>/*.so).");
+        ui::emptyState("No native libraries", "This APK ships no lib/<abi>/*.so files: all of its code is Dalvik bytecode.");
         return;
     }
     if (ready(elfLoad_)) {
@@ -1547,7 +1861,7 @@ void AnalysisPanel::drawNative(Root& apk) {
                 if (!jniRegs_.empty()) {
                     char header[64];
                     std::snprintf(header, sizeof header, "Registered natives (%zu)###regnatives", jniRegs_.size());
-                    if (ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen)) {
+                    if (ui::collapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen)) {
                         if (ImGui::BeginTable("##regs", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY,
                                               ImVec2(0, std::min(ui::em(14.f), ImGui::GetTextLineHeightWithSpacing() * (jniRegs_.size() + 2.f))))) {
                             ImGui::TableSetupScrollFreeze(0, 1);

@@ -95,11 +95,10 @@ void TrafficPanel::sendRepeater(RepeaterTab& tab) {
 
 void TrafficPanel::drawRepeater() {
     if (repeater_.empty()) {
-        ImGui::PushTextWrapPos(0.f);
-        ImGui::TextDisabled("Right-click a request and choose Send to Repeater (Ctrl+R) to edit it and send it again, "
-                            "or start from an empty request.");
-        ImGui::PopTextWrapPos();
         if (ui::smallButton(ui::icon(icons::ADD, "New request").c_str())) newRepeaterTab({"example.com", 80, false}, kNewRequest);
+        ui::emptyState("No requests in the Repeater",
+                       "Right-click a request and choose Send to Repeater (Ctrl+R) to edit it and send it again, "
+                       "or start from an empty request.");
         return;
     }
     int close = -1;
@@ -221,7 +220,7 @@ void TrafficPanel::drawRepeaterTab(RepeaterTab& tab) {
     ImGui::SameLine();
     ImGui::TextDisabled("%s", tab.target.label().c_str());
     ImGui::PushFont(Theme::monoFont());
-    ImGui::InputTextMultiline("##req", tab.request.data(), tab.request.capacity() + 1, ImVec2(-FLT_MIN, -FLT_MIN),
+    ui::codeBox("##req", tab.request.data(), tab.request.capacity() + 1, ImVec2(-FLT_MIN, -FLT_MIN),
                               ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_AllowTabInput, resizeText, &tab.request);
     ImGui::PopFont();
     ImGui::EndChild();
@@ -273,15 +272,13 @@ void TrafficPanel::drawRepeaterTab(RepeaterTab& tab) {
             std::replace(tab.rawCache.begin(), tab.rawCache.end(), '\0', '.');
         }
         ImGui::PushFont(Theme::monoFont());
-        ImGui::InputTextMultiline("##resp", tab.rawCache.data(), tab.rawCache.size() + 1, ImVec2(-FLT_MIN, -FLT_MIN),
+        ui::codeBox("##resp", tab.rawCache.data(), tab.rawCache.size() + 1, ImVec2(-FLT_MIN, -FLT_MIN),
                                   ImGuiInputTextFlags_ReadOnly);
         ImGui::PopFont();
-    } else {
-        ImGui::PushTextWrapPos(0.f);
-        ImGui::TextDisabled("Edit the request and press Send (Ctrl+Enter). Plain HTTP and HTTPS both go out exactly as "
-                            "typed, over a socket or a verified TLS connection (mbedTLS). Redirects are not followed "
-                            "and no cookies are kept.");
-        ImGui::PopTextWrapPos();
+    } else if (!sending) {
+        ui::emptyState("No response yet",
+                       "Edit the request and press Send (Ctrl+Enter).\n"
+                       "It goes out exactly as typed, over plain HTTP or verified TLS; redirects are not followed and no cookies are kept.");
     }
     ImGui::EndChild();
 

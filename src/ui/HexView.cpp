@@ -130,7 +130,8 @@ void HexView::draw(const std::vector<uint8_t>& bytes) {
     drawBody(bytes);
     ImGui::EndChild();
     if (inspector) {
-        ImGui::SameLine();
+        ImGui::SameLine(0.f, ui::em(1.f));
+        ui::verticalDivider();
         drawInspector(bytes);
     }
 }
@@ -193,6 +194,14 @@ void HexView::drawToolbar(const std::vector<uint8_t>& bytes) {
     ui::sameLineIfFits(ImGui::CalcTextSize(info.c_str()).x);
     if (!status_.empty()) ImGui::TextColored(theme::vec(Col::Warning), "%s", info.c_str());
     else ImGui::TextDisabled("%s", info.c_str());
+    // Formats ApkSpy decodes elsewhere: say where, instead of leaving only the bytes.
+    const char* decoded = format_.rfind("DEX", 0) == 0                  ? "Its classes and code: Analysis workspace (Ctrl+2)"
+                          : format_ == "Android resource table"        ? "Decoded: Analysis workspace > Resources (Ctrl+2)"
+                                                                      : nullptr;
+    if (decoded) {
+        ui::sameLineIfFits(ImGui::CalcTextSize(decoded).x + ui::em(1.f));
+        ImGui::TextColored(theme::vec(Col::Info), "%s", decoded);
+    }
 }
 
 void HexView::find(const std::vector<uint8_t>& bytes, bool backward) {
@@ -404,7 +413,7 @@ void HexView::contextMenu(const std::vector<uint8_t>& bytes) {
 }
 
 void HexView::drawInspector(const std::vector<uint8_t>& bytes) {
-    ImGui::BeginChild("##inspector", ImVec2(0, 0), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##inspector", ImVec2(0, 0));
     static const char* const kEndian[] = {"Little endian", "Big endian"};
     int endian = bigEndian_ ? 1 : 0;
     ImGui::PushID("endian");

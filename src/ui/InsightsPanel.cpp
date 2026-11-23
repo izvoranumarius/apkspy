@@ -435,7 +435,7 @@ void InsightsPanel::drawManifest() {
     ImGui::Text("debuggable %s, allowBackup %s, cleartext %s, testOnly %s", a.debuggable ? "yes" : "no", a.allowBackup ? "yes" : "no",
                 a.usesCleartext ? "yes" : "no", a.testOnly ? "yes" : "no");
     if (ui::smallButton("Copy as Markdown")) ImGui::SetClipboardText(manifestaudit::toMarkdown(a).c_str());
-    if (ImGui::CollapsingHeader("Findings", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ui::collapsingHeader("Findings", ImGuiTreeNodeFlags_DefaultOpen)) {
         for (size_t i = 0; i < a.findings.size(); ++i) {
             const auto& f = a.findings[i];
             ImGui::PushID(static_cast<int>(i));
@@ -457,7 +457,7 @@ void InsightsPanel::drawManifest() {
     for (const auto& c : a.components) exported += c.exported ? 1 : 0;
     char header[64];
     std::snprintf(header, sizeof header, "Exported components (%d)###exp", exported);
-    if (ImGui::CollapsingHeader(header)) {
+    if (ui::collapsingHeader(header)) {
         for (const auto& c : a.components) {
             if (!c.exported) continue;
             ImGui::BulletText("%s %s%s%s", manifestaudit::Component::kindName(c.kind), c.name.c_str(),
@@ -467,7 +467,7 @@ void InsightsPanel::drawManifest() {
     {
         // Network security config: trust anchors, cleartext, pins.
         const auto lines = netsec::notes(netsec_, a.targetSdk, a.usesCleartext);
-        if (ImGui::CollapsingHeader("Network security config###netsec")) {
+        if (ui::collapsingHeader("Network security config###netsec")) {
             if (!netsecFile_.empty()) ImGui::TextDisabled("%s", netsecFile_.c_str());
             else if (!a.networkSecurityConfig.empty())
                 ImGui::TextDisabled("referenced as %s (file not found in the APK)", a.networkSecurityConfig.c_str());
@@ -487,7 +487,7 @@ void InsightsPanel::drawManifest() {
     if (!a.deepLinks.empty()) {
         char dl[48];
         std::snprintf(dl, sizeof dl, "Deep links (%zu)###deeplinks", a.deepLinks.size());
-        if (ImGui::CollapsingHeader(dl)) {
+        if (ui::collapsingHeader(dl)) {
             ImGui::TextDisabled("Browsable VIEW entry points. Double-click a row to copy an adb am start command.");
             const auto qualify = [&](const std::string& comp) {
                 if (comp.empty()) return comp;
@@ -512,7 +512,7 @@ void InsightsPanel::drawManifest() {
 
     char perms[64];
     std::snprintf(perms, sizeof perms, "Dangerous permissions (%zu)###perm", a.dangerousPermissions.size());
-    if (ImGui::CollapsingHeader(perms))
+    if (ui::collapsingHeader(perms))
         for (const auto& p : a.dangerousPermissions) ImGui::BulletText("%s", p.c_str());
 
     const auto shortPerm = [](const std::string& p) {
@@ -521,7 +521,7 @@ void InsightsPanel::drawManifest() {
     };
     char usage[64];
     std::snprintf(usage, sizeof usage, "Permission -> API usage (%zu)###permuse", permUse_.size());
-    if (!permUse_.empty() && ImGui::CollapsingHeader(usage)) {
+    if (!permUse_.empty() && ui::collapsingHeader(usage)) {
         ImGui::TextDisabled("Which guarded APIs the app actually calls for each requested permission.");
         for (const auto& u : permUse_) {
             ImGui::PushID(u.permission.c_str());
@@ -544,7 +544,7 @@ void InsightsPanel::drawManifest() {
     if (!permMissing_.empty()) {
         char miss[72];
         std::snprintf(miss, sizeof miss, "Guarded APIs used WITHOUT the permission (%zu)###permmiss", permMissing_.size());
-        if (ImGui::CollapsingHeader(miss)) {
+        if (ui::collapsingHeader(miss)) {
             ImGui::TextColored(theme::vec(Col::Warning), "These calls need a permission the manifest does not request (library code often guards them at run time, so check the callers).");
             for (const auto& u : permMissing_) {
                 ImGui::PushID(u.permission.c_str());
@@ -587,9 +587,9 @@ void InsightsPanel::drawRetrace() {
     }
     ImGui::PushFont(Theme::monoFont());
     const float h = std::max(ui::em(6.f), (ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing()) * 0.5f);
-    if (ImGui::InputTextMultiline("##trace", traceBuf_.data(), traceBuf_.size(), ImVec2(-FLT_MIN, h)))
+    if (ui::codeBox("##trace", traceBuf_.data(), traceBuf_.size(), ImVec2(-FLT_MIN, h)))
         retraced_ = mapping::retrace(mapping_, traceBuf_.data());
-    ImGui::InputTextMultiline("##out", retraced_.data(), retraced_.size() + 1, ImVec2(-FLT_MIN, -FLT_MIN), ImGuiInputTextFlags_ReadOnly);
+    ui::codeBox("##out", retraced_.data(), retraced_.size() + 1, ImVec2(-FLT_MIN, -FLT_MIN), ImGuiInputTextFlags_ReadOnly);
     ImGui::PopFont();
 }
 
@@ -613,7 +613,7 @@ void InsightsPanel::saveExport(const std::string& file) {
 void InsightsPanel::drawContents() {
     const auto apks = workspace_.apkRoots();
     if (apks.empty()) {
-        ImGui::TextDisabled("Open an APK to scan it.");
+        ui::emptyState("No APK open", "Add an APK to see its frameworks, SDKs, URLs and encoded strings.");
         return;
     }
     bool found = false;

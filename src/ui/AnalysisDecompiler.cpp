@@ -16,6 +16,21 @@
 
 namespace {
 
+// "Lcom/a/Foo;->bar(ILjava/lang/String;)V" -> "Foo.bar(...)" for the panel header
+// (the full signature stays in the tooltip). Anything else is shown as is.
+std::string shortMethodTitle(const std::string& sig) {
+    const size_t arrow = sig.find("->");
+    if (sig.empty() || sig[0] != 'L' || arrow == std::string::npos) return sig;
+    std::string cls = sig.substr(1, sig.find(';') - 1);
+    cls = cls.substr(cls.rfind('/') + 1);
+    const size_t paren = sig.find('(', arrow);
+    std::string name = sig.substr(arrow + 2, paren == std::string::npos ? std::string::npos : paren - arrow - 2);
+    if (name == "<init>") name = cls;
+    else if (name == "<clinit>") return cls + " static {}";
+    const bool noArgs = paren != std::string::npos && paren + 1 < sig.size() && sig[paren + 1] == ')';
+    return cls + "." + name + (noArgs ? "()" : "(...)");
+}
+
 std::string addrText(const decompiler::Line& l, bool native) {
     std::string out;
     char b[32];
@@ -128,11 +143,10 @@ void AnalysisPanel::drawDecompiler() {
     }
     const bool following = decompKind_ != 0 && !(kind != decompKind_ || key != decompKey_ || owner != decompOwner_);
 
-    if (decompKind_ == 0) {
-        ImGui::TextDisabled("Select a method in Classes, or a function in Native.");
-    } else {
+    if (decompKind_ != 0) {
         ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(Col::Info));
-        ImGui::TextUnformatted(decompTitle_.c_str());
+        ImGui::TextUnformatted(decompKind_ == 1 ? shortMethodTitle(decompTitle_).c_str() : decompTitle_.c_str());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", decompTitle_.c_str());
         ImGui::PopStyleColor();
         if (!following) {
             ImGui::SameLine();
@@ -203,9 +217,10 @@ void AnalysisPanel::drawDecompiler() {
     };
 
     // Bottom bar, as in Cutter: Auto Refresh, Refresh, shortcuts, engine.
-    const float barH = ImGui::GetFrameHeightWithSpacing();
+    const float barH = ImGui::GetFrameHeightWithSpacing() + ui::em(0.35f);
     ImGui::BeginChild("##decomp", ImVec2(0, -barH), ImGuiChildFlags_None,
                       ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoNavInputs);
+    if (decompKind_ == 0) ui::emptyState("Nothing to decompile", "Select a method in Classes, or a function in Native.");
     if (!decomp_.error.empty()) ImGui::TextColored(theme::vec(Col::Warning), "%s", decomp_.error.c_str());
     ImGui::PushFont(Theme::monoFont());
     const float lh = ImGui::GetTextLineHeightWithSpacing();
@@ -387,6 +402,7 @@ void AnalysisPanel::drawDecompiler() {
     ImGui::PopFont();
     ImGui::EndChild();
 
+    ui::toolbarSeparator();
     ImGui::Checkbox("Auto Refresh", &decompAuto_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Decompile whatever the Function panel shows");
     ImGui::SameLine();

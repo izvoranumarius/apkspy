@@ -141,7 +141,7 @@ void BehaviorPanel::startBuild(Root& apk, const std::shared_ptr<const ApkAnalysi
 void BehaviorPanel::drawContents() {
     std::vector<Root*> apks = workspace_.apkRoots();
     if (apks.empty()) {
-        ImGui::TextDisabled("Open an APK to map its behavior.");
+        ui::emptyState("No APK open", "Add an APK to map what its components can reach: permissions, endpoints, storage and native code.");
         return;
     }
     if (apkIdx_ >= static_cast<int>(apks.size())) apkIdx_ = 0;
@@ -166,12 +166,15 @@ void BehaviorPanel::drawContents() {
     const AnalysisService::Status st = workspace_.analysis().status(apk.title);
     const std::shared_ptr<const ApkAnalysis> analysis = workspace_.analysis().get(apk.title);
     if (!analysis) {
-        if (st.state == AnalysisService::State::Running)
-            ImGui::TextDisabled("Waiting for the bytecode analysis (%s %zu / %zu)...", st.phase.c_str(), st.done, st.total);
-        else if (st.state == AnalysisService::State::Failed)
+        if (st.state == AnalysisService::State::Running) {
+            char progress[96];
+            std::snprintf(progress, sizeof progress, "%s %zu / %zu", st.phase.c_str(), st.done, st.total);
+            ui::emptyState("Waiting for the bytecode analysis", progress);
+        } else if (st.state == AnalysisService::State::Failed) {
             ui::wrappedColored(theme::vec(Col::Warning), "The bytecode analysis failed: " + st.error);
-        else
-            ImGui::TextDisabled("The bytecode analysis is not available.");
+        } else {
+            ui::emptyState("The bytecode analysis is not available");
+        }
         return;
     }
     if (analysis.get() != owner_) {
@@ -207,8 +210,14 @@ void BehaviorPanel::drawContents() {
     const float detailsWidth = std::min(ui::em(24.f), ImGui::GetContentRegionAvail().x * 0.4f);
     ImGui::BeginChild("##graphArea", ImVec2(ImGui::GetContentRegionAvail().x - detailsWidth - ImGui::GetStyle().ItemSpacing.x, 0));
     if (view_.empty()) {
-        ImGui::TextDisabled(graph_.nodes.empty() ? "Nothing to show: no component reaches a permission, endpoint, storage or native code."
-                                                 : "No node matches the current filters.");
+        if (graph_.nodes.empty())
+            ui::emptyState("Nothing to show", "No component reaches a permission, endpoint, storage or native code.");
+        else if (hideIsolated_ && !flaggedOnly_)
+            ui::emptyState("Nothing is connected",
+                           "No component's code was found reaching a permission, endpoint, storage or native code.\n"
+                           "Turn off Hide unconnected to list every node anyway.");
+        else
+            ui::emptyState("No node matches the filters", "Turn on more kinds above, or clear Flagged paths / Hide unconnected.");
     } else {
         const GraphView::Result r = view_.draw("##behavior", Theme::monoFont());
         const int viewSel = view_.selected();
@@ -220,7 +229,15 @@ void BehaviorPanel::drawContents() {
     }
     ImGui::EndChild();
     ImGui::SameLine();
-    ImGui::BeginChild("##details", ImVec2(0, 0), ImGuiChildFlags_Borders);
+    {  // a vertical hairline divides graph and details (no box around either)
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x - ImGui::GetStyle().ItemSpacing.x * 0.5f, p.y),
+                                            ImVec2(p.x - ImGui::GetStyle().ItemSpacing.x * 0.5f, p.y + ImGui::GetContentRegionAvail().y),
+                                            theme::u32(Col::Border));
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ui::em(0.6f), 0.f));
+    ImGui::BeginChild("##details", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding);
+    ImGui::PopStyleVar();
     drawDetails();
     ImGui::EndChild();
 }
@@ -231,13 +248,11 @@ void BehaviorPanel::drawToolbar() {
         if (granularity_ != kClasses && kind == BKind::Class) continue;  // classes only group methods
         if (granularity_ != kMethods && kind == BKind::Method) continue;
         char label[48];
-        std::snprintf(label, sizeof label, "%s (%zu)", kKindLabels[k], graph_.count(kind));
-        ImGui::PushStyleColor(ImGuiCol_CheckMark, theme::u32(kindColor(kind)));
-        if (ui::flowCheckbox(label, &showKind_[k])) dirty_ = true;
-        ImGui::PopStyleColor();
+        std::snprintf(label, sizeof label, "%s  %zu", kKindLabels[k], graph_.count(kind));
+        if (ui::flowToggleChip(label, &showKind_[k], theme::u32(kindColor(kind)))) dirty_ = true;
     }
+    // Second row: how much of the graph, then finding a node in it.
     const char* grains[] = {"Overview", "Classes", "Methods"};
-    ui::sameLineIfFits(ui::em(15.f));
     ImGui::PushID("grain");
     if (ui::segmented(grains, 3, granularity_)) dirty_ = true;
     ImGui::PopID();
@@ -279,6 +294,7 @@ void BehaviorPanel::drawToolbar() {
     }
     ImGui::SameLine();
     if (ui::smallButton(ui::icon(icons::REFRESH, "Rebuild").c_str())) owner_ = nullptr;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Walk the code again");
     if (graph_.truncated) {
         ImGui::SameLine();
         ImGui::TextColored(theme::vec(Col::Warning), "partial");
@@ -290,6 +306,7 @@ void BehaviorPanel::drawToolbar() {
         ImGui::TextColored(theme::vec(Col::Warning), "%zu nodes hidden", hiddenByCap_);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("The view shows at most %zu nodes. Focus on a node or narrow the filters.", kMaxViewNodes);
     }
+    ui::toolbarSeparator();
 }
 
 void BehaviorPanel::project() {
@@ -580,7 +597,7 @@ void BehaviorPanel::drawDetails() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show only this node and its neighbours");
     if (ui::flowSmallButton(ui::icon(icons::COPY, "Copy").c_str())) ImGui::SetClipboardText(n.key.c_str());
 
-    if (!n.evidence.empty() && ImGui::CollapsingHeader(("Evidence (" + std::to_string(n.evidence.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (!n.evidence.empty() && ui::collapsingHeader(("Evidence (" + std::to_string(n.evidence.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
         for (size_t i = 0; i < n.evidence.size(); ++i) {
             ImGui::PushID(static_cast<int>(i));
             ImGui::PushTextWrapPos(0.f);
@@ -596,7 +613,7 @@ void BehaviorPanel::drawDetails() {
     const auto edgeList = [&](const char* title, bool incoming) {
         const std::vector<int> list = neighbours(selected_, incoming);
         if (list.empty()) return;
-        if (!ImGui::CollapsingHeader((std::string(title) + " (" + std::to_string(list.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) return;
+        if (!ui::collapsingHeader((std::string(title) + " (" + std::to_string(list.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) return;
         ImGui::PushID(title);
         int target = -1;
         bool open = false;
@@ -630,7 +647,7 @@ void BehaviorPanel::drawDetails() {
             reach_ = behavior::reachableCapabilities(graph_, static_cast<uint32_t>(selected_));
         }
         if (!reach_.empty() &&
-            ImGui::CollapsingHeader(("Reaches (" + std::to_string(reach_.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            ui::collapsingHeader(("Reaches (" + std::to_string(reach_.size()) + ")").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
             int target = -1;
             for (size_t i = 0; i < reach_.size(); ++i) {
                 const behavior::Node& cap = graph_.nodes[reach_[i].node];

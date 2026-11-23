@@ -348,7 +348,7 @@ void TrafficPanel::drawScripts() {
                         "when saved.");
     ImGui::PopTextWrapPos();
     ImGui::PushFont(Theme::monoFont());
-    ImGui::InputTextMultiline("##scriptpaths", scriptPaths_, sizeof scriptPaths_,
+    ui::codeBox("##scriptpaths", scriptPaths_, sizeof scriptPaths_,
                               ImVec2(-ui::buttonWidth("Browse...") - ImGui::GetStyle().ItemSpacing.x, ImGui::GetTextLineHeight() * 3.6f));
     ImGui::PopFont();
     ImGui::SameLine();
@@ -467,7 +467,8 @@ void TrafficPanel::drawScripts() {
         for (const auto& l : scriptLog_) all += l + "\n";
         ImGui::SetClipboardText(all.c_str());
     }
-    ImGui::BeginChild("##scriptlogbox", ImVec2(0, 0), ImGuiChildFlags_Borders);
+    ui::horizontalDivider();
+    ImGui::BeginChild("##scriptlogbox", ImVec2(0, 0));
     ImGui::PushFont(Theme::monoFont());
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(scriptLog_.size()));

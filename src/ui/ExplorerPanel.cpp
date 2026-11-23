@@ -209,7 +209,7 @@ void ExplorerPanel::drawContents() {
         if (ImGui::BeginTabItem("Files", nullptr, filesFlags)) {
             auto apks = workspace_.apkRoots();
             if (apks.empty()) {
-                ImGui::TextDisabled("No project open - use File > New Project or drop an APK here");
+                ui::emptyState("No project open", "Use File > New Project, or drop an APK here.");
             } else {
                 // One group per APK; the jadx output lives in its own tab.
                 for (Root* apk : apks) drawTree(*apk);

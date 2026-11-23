@@ -1,4 +1,5 @@
 #include "ui/OverviewPanel.hpp"
+#include "ui/UiUtil.hpp"
 #include "ui/TextSelect.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -55,16 +56,32 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
     ui::copyMenu("##labelctx", label, [&] {
         if (ImGui::MenuItem("Copy package name")) ImGui::SetClipboardText(info.packageName.c_str());
     });
-    std::string sub = info.packageName;
-    if (!info.versionName.empty() || !info.versionCode.empty()) {
-        sub += "  |  version " + info.versionName;
-        if (!info.versionCode.empty()) sub += " (" + info.versionCode + ")";
+    // Facts as label / value rows: a single "a | b | c" line wrapped mid-fact
+    // in a narrow sidebar.
+    std::string version = info.versionName;
+    if (!info.versionCode.empty()) version += (version.empty() ? "" : " ") + std::string("(") + info.versionCode + ")";
+    std::string sdk;
+    if (!info.minSdk.empty()) sdk = "min " + info.minSdk;
+    if (!info.targetSdk.empty()) sdk += (sdk.empty() ? "" : ", ") + std::string("target ") + info.targetSdk;
+    const std::string sub = info.packageName + (version.empty() ? "" : "  " + version) + (sdk.empty() ? "" : "  SDK " + sdk);
+    if (ImGui::BeginTable("##facts", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoPadOuterX)) {
+        ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
+        const auto fact = [](const char* k, const std::string& v) {
+            if (v.empty()) return;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", k);
+            ImGui::TableNextColumn();
+            ImGui::PushTextWrapPos(0.f);
+            ImGui::TextUnformatted(v.c_str());
+            ImGui::PopTextWrapPos();
+        };
+        fact("Package", info.packageName);
+        fact("Version", version);
+        fact("SDK", sdk);
+        ImGui::EndTable();
     }
-    if (!info.minSdk.empty()) sub += "  |  minSdk " + info.minSdk;
-    if (!info.targetSdk.empty()) sub += "  |  targetSdk " + info.targetSdk;
-    ImGui::PushTextWrapPos(0.f);
-    ImGui::TextDisabled("%s", sub.c_str());
-    ImGui::PopTextWrapPos();
     ui::copyMenu("##subctx", sub, [&] {
         if (ImGui::MenuItem("Copy package name")) ImGui::SetClipboardText(info.packageName.c_str());
         if (!info.versionName.empty() && ImGui::MenuItem("Copy version")) ImGui::SetClipboardText(info.versionName.c_str());
@@ -85,7 +102,7 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
     // Permissions ----------------------------------------------------------
     char header[128];
     std::snprintf(header, sizeof header, "Permissions (%d)", static_cast<int>(info.permissions.size()));
-    if (ImGui::CollapsingHeader(header)) {
+    if (ui::collapsingHeader(header)) {
         if (info.permissions.empty()) ImGui::TextDisabled("None declared");
         // Runtime ("dangerous") permissions are highlighted: they are what a
         // reviewer looks at first.
@@ -118,12 +135,12 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
     {
         const auto native = workspace_.analysis().nativeInventory(apk.apkPath);
         std::snprintf(header, sizeof header, "Native code (%d)", static_cast<int>(native->libs.size()));
-        if (ImGui::CollapsingHeader(header, native->empty() ? 0 : ImGuiTreeNodeFlags_DefaultOpen)) abiui::drawNativeSummary(*native, workspace_.deviceAbis());
+        if (ui::collapsingHeader(header, native->empty() ? 0 : ImGuiTreeNodeFlags_DefaultOpen)) abiui::drawNativeSummary(*native, workspace_.deviceAbis());
     }
 
     // Components -----------------------------------------------------------
     std::snprintf(header, sizeof header, "Components (%d)", static_cast<int>(info.components.size()));
-    if (ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ui::collapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen)) {
         if (info.components.empty()) ImGui::TextDisabled("None declared");
         // Clicking a row jumps to the class in the decompiled sources (M3
         // symbol index); if that fails the manifest opens instead.
@@ -176,7 +193,7 @@ void OverviewPanel::drawApk(Root& apk, const ApkInfo& info) {
 
     // Signing --------------------------------------------------------------
     std::snprintf(header, sizeof header, "Signing (%d)", static_cast<int>(info.signatures.size()));
-    if (ImGui::CollapsingHeader(header)) {
+    if (ui::collapsingHeader(header)) {
         if (info.signatures.empty()) {
             ImGui::TextDisabled("No signatures found (unsigned or unsupported scheme)");
         }

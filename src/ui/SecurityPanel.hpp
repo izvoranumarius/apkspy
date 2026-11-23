@@ -28,7 +28,10 @@ private:
     void drawToolbar();
     void drawTable();
     void drawDetails(const security::Finding& f);
-    void navigate(const security::Finding& f);
+    // Opens the finding's location in the Editor. `focus` false: the code shows
+    // beside the list (preview tab, Editor brought forward) but the keyboard
+    // stays in the findings, so the arrow keys keep walking them.
+    void navigate(const security::Finding& f, bool focus = true);
     bool visible(const security::Finding& f) const;
     void drawExport();
 

@@ -200,18 +200,27 @@ void ScriptPanel::drawSource() {
     std::snprintf(widest, sizeof widest, "%zu", std::max<size_t>(lineStarts_.size(), 100));
     const float gutter = numbered ? ImGui::CalcTextSize(widest).x + ui::em(1.f) : 0.f;
     if (numbered) {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + gutter, p.y + ImGui::GetContentRegionAvail().y),
+                                                  theme::u32(Col::EditorBackground));
         ImGui::Dummy(ImVec2(gutter, ImGui::GetContentRegionAvail().y));
         ImGui::SameLine(0.f, 0.f);
     }
 
+    // The text box is invisible (the highlighted copy is drawn over it) and on
+    // the editor background, so gutter and code read as one editor surface.
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 0.f));
+    const ImVec4 editorBg = theme::vec(Col::EditorBackground);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, editorBg);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, editorBg);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, editorBg);
     if (ImGui::InputTextMultiline("##source", text_.data(), text_.capacity() + 1, ImVec2(-FLT_MIN, -FLT_MIN),
                                   ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackResize, resizeText, &text_)) {
         dirty_ = true;
         lastEdit_ = ImGui::GetTime();
         linesStale_ = true;
     }
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(4);
 
     const size_t size = std::strlen(text_.c_str());  // the active input can leave the string longer
     const std::string_view all(text_.c_str(), size);
@@ -329,7 +338,7 @@ void ScriptPanel::drawContents() {
 
     const float availableW = ImGui::GetContentRegionAvail().x;
     const bool sideBySide = availableW > ui::em(36.f);
-    ImGui::BeginChild("##scripts", sideBySide ? ImVec2(ui::em(11.f), 0) : ImVec2(0, ui::em(5.f)), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##scripts", sideBySide ? ImVec2(ui::em(11.f), 0) : ImVec2(0, ui::em(5.f)));
     const std::vector<std::string> plugins = pluginNames();
     for (const std::string& name : files_) {
         const std::string label = name + (name == current_ && dirty_ ? " *" : "");
@@ -345,7 +354,12 @@ void ScriptPanel::drawContents() {
         }
     }
     ImGui::EndChild();
-    if (sideBySide) ImGui::SameLine();
+    if (sideBySide) {
+        ImGui::SameLine(0.f, ui::em(1.f));
+        ui::verticalDivider();
+    } else {
+        ui::horizontalDivider();
+    }
 
     drawSource();
 }

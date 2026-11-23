@@ -54,7 +54,7 @@ void OutputPanel::drawContents() {
         std::snprintf(status, sizeof status, "Warnings: %d   Errors: %d", warnings_, errors_);
     }
     ui::flowTextDisabled(status);
-    ImGui::Separator();
+    ui::toolbarSeparator();
 
     const size_t prevCount = lastCount_;
     const bool trimmed = workspace_.logTrims() != lastTrims_;  // workspace dropped old lines

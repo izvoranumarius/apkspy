@@ -71,7 +71,7 @@ void DependenciesPanel::drawContents() {
     pollUpdate();
     std::vector<Root*> apks = workspace_.apkRoots();
     if (apks.empty()) {
-        ImGui::TextDisabled("Open an APK to list its dependencies.");
+        ui::emptyState("No APK open", "Add an APK to list the libraries it bundles and their known vulnerabilities.");
         return;
     }
     if (apkIdx_ >= static_cast<int>(apks.size())) apkIdx_ = 0;
@@ -112,7 +112,8 @@ void DependenciesPanel::drawContents() {
     else drawLicenses();
     ImGui::EndChild();
     if (selected_ >= 0 && selected_ < static_cast<int>(report_.dependencies.size())) {
-        ImGui::BeginChild("##details", ImVec2(0, 0), ImGuiChildFlags_Borders);
+        ui::horizontalDivider();
+        ImGui::BeginChild("##details", ImVec2(0, 0));
         drawDetails(report_.dependencies[static_cast<size_t>(selected_)]);
         ImGui::EndChild();
     }
@@ -158,10 +159,11 @@ void DependenciesPanel::drawToolbar() {
         ImGui::SameLine();
         ImGui::TextDisabled("%s", updateStatus_.c_str());
     }
+    ui::toolbarSeparator();
 }
 
 void DependenciesPanel::drawTable() {
-    if (!ImGui::BeginTable("##deps", 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable))
+    if (!ImGui::BeginTable("##deps", 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable))
         return;
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn("Library", ImGuiTableColumnFlags_WidthStretch, 2.5f);
@@ -191,11 +193,21 @@ void DependenciesPanel::drawTable() {
         ImGui::TextColored(licenseColor(d.licenseKind), "%s", d.license.empty() ? "unknown" : d.license.c_str());
         ImGui::TableNextColumn();
         if (d.classes) {
+            // The count right-aligned in its own slot, a thin bar beside it:
+            // the bar no longer runs under (and through) the digits.
+            char count[24];
+            std::snprintf(count, sizeof count, "%zu", d.classes);
+            const float slot = ImGui::CalcTextSize("000000").x;
             const ImVec2 p = ImGui::GetCursorScreenPos();
-            const float w = ImGui::GetContentRegionAvail().x * static_cast<float>(d.classes) / static_cast<float>(maxClasses);
-            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(p.x, p.y + 3.f), ImVec2(p.x + std::max(w, 2.f), p.y + ImGui::GetTextLineHeight() - 3.f),
-                                                      theme::u32(Col::Info, 0.45f));
-            ImGui::Text("%zu", d.classes);
+            const float textW = ImGui::CalcTextSize(count).x;
+            ImGui::GetWindowDrawList()->AddText(ImVec2(p.x + slot - textW, p.y), theme::u32(Col::TextMuted), count);
+            const float barX = p.x + slot + ui::em(0.6f);
+            const float room = std::max(0.f, ImGui::GetContentRegionAvail().x - slot - ui::em(0.6f));
+            const float w = room * static_cast<float>(d.classes) / static_cast<float>(maxClasses);
+            const float lh = ImGui::GetTextLineHeight(), barH = std::max(3.f, lh * 0.3f);
+            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(barX, p.y + (lh - barH) * 0.5f), ImVec2(barX + std::max(w, 2.f), p.y + (lh + barH) * 0.5f),
+                                                      theme::u32(Col::Info, 0.55f), barH * 0.5f);
+            ImGui::Dummy(ImVec2(slot, lh));
         } else if (!d.nativeLibs.empty()) {
             ImGui::TextDisabled("native");
         }
@@ -287,7 +299,7 @@ void DependenciesPanel::drawLicenses() {
     for (const auto& [license, list] : byLicense) {
         const deps::LicenseKind kind = deps::licenseKind(license == "unknown" ? "" : license);
         ImGui::PushStyleColor(ImGuiCol_Text, licenseColor(kind));
-        const bool open = ImGui::CollapsingHeader((license + "  (" + std::to_string(list.size()) + ", " + deps::licenseKindName(kind) + ")").c_str(),
+        const bool open = ui::collapsingHeader((license + "  (" + std::to_string(list.size()) + ", " + deps::licenseKindName(kind) + ")").c_str(),
                                                   ImGuiTreeNodeFlags_DefaultOpen);
         ImGui::PopStyleColor();
         if (!open) continue;

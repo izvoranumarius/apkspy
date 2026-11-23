@@ -62,6 +62,9 @@ private:
     void selectMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m, const std::string& group, bool openSource,
                       bool keep = false, bool focusFunction = true);
     void drawMethodView(const ApkAnalysis& a, Root& apk);
+    // A selected class in the Function panel: its declaration, fields and
+    // methods (a click on a method goes to its listing).
+    void drawClassView(const ApkAnalysis& a, Root& apk);
     void drawMethodListing(const ApkAnalysis& a, Root& apk);
     void drawQueryResults(const ApkAnalysis& a, Root& apk);
     void showQuery();
@@ -85,6 +88,9 @@ private:
     Annotation nativeLocation(const NativeCode& nc, const NativeCode::Line& line) const;
 
     void openClass(const ApkAnalysis& a, const ApkAnalysis::ClassEntry& c, const std::string& group);
+    // Without jadx output: the class as Java from the built-in decompiler
+    // (declaration, fields, every method), as a generated Editor tab.
+    void openBuiltInJava(const ApkAnalysis& a, const ApkAnalysis::ClassEntry& c, const std::string& group);
     void openMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m, const std::string& group,
                     uint32_t pc = UINT32_MAX);
     void openCodeRef(const ApkAnalysis& a, const ApkAnalysis::CodeRef& r, const std::string& group);
@@ -99,6 +105,13 @@ private:
     void saveExcludes();
 
     std::function<void(const std::string&)> showPanel_;
+    // True while a single click in the Classes tree is being handled: the
+    // panels that follow the selection come to the front, but keyboard focus
+    // stays in the tree so the arrow keys keep browsing.
+    bool browsing_ = false;
+    void present(const std::string& panel) {
+        if (showPanel_) showPanel_(browsing_ ? "reveal:" + panel : panel);
+    }
     int apkIdx_ = 0;
     Nav nav_ = Nav::Classes;
     const ApkAnalysis* cacheOwner_ = nullptr;  // identity only, never dereferenced when stale
@@ -141,6 +154,11 @@ private:
     ApkAnalysis::MethodDef selMethod_{};
     std::vector<ApkAnalysis::XrefHit> selCallers_;
     std::vector<ApkAnalysis::Callee> selCallees_;
+    bool stringsCodeOnly_ = true;  // Strings tab: only constants the code loads
+    bool stringsReadable_ = true;  // ... and no binary blobs
+    // A selected class: the code using the type, and its subclasses / implementers.
+    std::vector<ApkAnalysis::XrefHit> selClassUses_;
+    std::vector<std::string> selClassSubs_;
     int functionMode_ = 0;  // 0 listing, 1 control-flow graph, 2 call graph
     struct ListingLine {
         std::string text;

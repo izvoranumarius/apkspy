@@ -204,7 +204,8 @@ void RepackPanel::drawContents() {
         ImGui::TextColored(bad ? theme::vec(Col::Error) : theme::vec(Col::Success), "%s", status_.c_str());
     }
     if (!log_.empty()) {
-        ImGui::BeginChild("##repacklog", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+        ui::horizontalDivider();
+        ImGui::BeginChild("##repacklog", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
         ImGui::PushFont(Theme::monoFont());
         ImGui::TextUnformatted(log_.c_str());
         ImGui::PopFont();

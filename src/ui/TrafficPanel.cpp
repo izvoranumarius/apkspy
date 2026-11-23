@@ -383,7 +383,7 @@ void TrafficPanel::drawDetailWebSockets(const TrafficProxy::Flow& f) {
             ImGui::TextDisabled("%s", wsStatus_.c_str());
         }
         ImGui::PushFont(Theme::monoFont());
-        ImGui::InputTextMultiline("##wssend", wsSendText_.data(), wsSendText_.capacity() + 1, ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 3.5f),
+        ui::codeBox("##wssend", wsSendText_.data(), wsSendText_.capacity() + 1, ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 3.5f),
                                   ImGuiInputTextFlags_CallbackResize,
                                   [](ImGuiInputTextCallbackData* d) {
                                       if (d->EventFlag == ImGuiInputTextFlags_CallbackResize) {

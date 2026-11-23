@@ -22,12 +22,11 @@ void TrafficPanel::sendToComparer(std::string label, std::string text) {
 
 void TrafficPanel::drawComparer() {
     if (compareItems_.empty()) {
-        ImGui::PushTextWrapPos(0.f);
-        ImGui::TextDisabled("Send two requests or responses here (right-click > Send to Comparer, or To Comparer in the "
-                            "Repeater and the Decoder), or paste text, to see what differs between them.");
-        ImGui::PopTextWrapPos();
         if (ui::smallButton("Paste as item"))
             if (const char* clip = ImGui::GetClipboardText()) sendToComparer("pasted", clip);
+        ui::emptyState("Nothing to compare yet",
+                       "Send two requests or responses here (right-click > Send to Comparer, or To Comparer in the Repeater "
+                       "and the Decoder), or paste text, to see what differs between them.");
         return;
     }
     // Which two items.
@@ -112,7 +111,7 @@ void TrafficPanel::drawComparer() {
     // Side by side: line numbers, then the line; colours by kind, differing words brighter.
     ImGui::PushFont(Theme::monoFont());
     ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::editorBackground());
-    ImGui::BeginChild("##cmpView", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##cmpView", ImVec2(0.f, 0.f));  // the editor background sets it apart
     const float lineH = ImGui::GetTextLineHeightWithSpacing();
     const float textH = ImGui::GetTextLineHeight();
     const float width = ImGui::GetContentRegionAvail().x;

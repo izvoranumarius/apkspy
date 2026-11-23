@@ -82,7 +82,7 @@ std::vector<ProjectApk> collectApks(const Workspace& workspace, const Project& p
 
 namespace {
 // Version of the default dock layout (see Settings::kLayoutVersion).
-constexpr int kLayoutVersion = 19;
+constexpr int kLayoutVersion = 20;
 }  // namespace
 
 Application::Application()
@@ -142,10 +142,19 @@ Application::Application()
     palette_ = std::make_unique<CommandPalette>(workspace_);
     palette_->setCommands([this] { return paletteCommands(); });
     palette_->setShowEditor([this] { showPanel("Editor"); });
-    // The welcome page belongs to an empty window: with a project or an APK open, an
-    // editor without files stays blank.
+    // The welcome page belongs to an empty window. With a project or an APK open,
+    // an editor without files shows a quiet hint instead (an empty dock area
+    // otherwise reads as a broken layout).
     editor_->setWelcome([this] {
-        if (!project_.isOpen() && workspace_.roots().empty()) drawWelcome();
+        if (!project_.isOpen() && workspace_.roots().empty()) {
+            drawWelcome();
+            return;
+        }
+        std::string hint = "Open a file from the Explorer, or a class from Analysis.";
+        const std::string quick = shortcuts_.label("quick-open"), find = shortcuts_.label("find-in-project");
+        if (!quick.empty()) hint += "\n" + quick + "  go to file";
+        if (!find.empty()) hint += "\n" + find + "  find in project";
+        ui::emptyState("No file open", hint.c_str());
     });
     initPerspectives();
     loadSettings();
@@ -583,6 +592,14 @@ void Application::frame() {
         pendingTabs_.clear();
     }
     // Waits for a pending switch: the target window does not exist yet.
+    if (!pendingReveal_.empty() && pendingPerspective_ < 0 && !welcomeOnly_) {
+        for (const std::string& title : pendingReveal_) {
+            if (!perspective.shows(title)) continue;
+            ImGuiWindow* w = ImGui::FindWindowByName(perspective.windowName(title).c_str());
+            if (w && w->DockNode && w->DockNode->TabBar) w->DockNode->TabBar->NextSelectedTabId = w->TabId;
+        }
+        pendingReveal_.clear();
+    }
     if (!pendingFocusPanel_.empty() && pendingPerspective_ < 0 && !welcomeOnly_) {
         ImGui::SetWindowFocus(perspective.windowName(pendingFocusPanel_).c_str());
         pendingFocusPanel_.clear();
@@ -1089,7 +1106,16 @@ void Application::initPerspectives() {
     for (Perspective& p : perspectives_) p.resetVisibility(titles);
 }
 
-bool Application::showPanel(const std::string& title) {
+bool Application::showPanel(const std::string& request) {
+    // "reveal:<title>": select the panel's tab in its dock, leave focus alone
+    // (e.g. the Decompiler beside a listing the user keeps typing in).
+    if (request.rfind("reveal:", 0) == 0) {
+        const std::string title = request.substr(7);
+        const bool exists = std::any_of(panels_.begin(), panels_.end(), [&](const auto& p) { return p->title() == title; });
+        if (exists) pendingReveal_.push_back(title);
+        return exists;
+    }
+    const std::string& title = request;
     const bool known = std::any_of(panels_.begin(), panels_.end(), [&](const auto& p) { return p->title() == title; });
     if (!known) return false;
     const int current = pendingPerspective_ >= 0 ? pendingPerspective_ : activePerspective_;
@@ -1223,7 +1249,9 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
     if (p.name == "Analysis") {
         // As in Cutter: navigator | listing / graph over References | Decompiler (Java source as a tab).
         side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.22f, nullptr, &rest);
-        ImGuiID const right = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.42f, nullptr, &rest);
+        // Listing (centre) and Java / decompiled code (right) share the width:
+        // Java sync reads them side by side, so neither should be a sliver.
+        ImGuiID const right = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.5f, nullptr, &rest);
         bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 0.30f, nullptr, &main);
         dock("Analysis", side);
         dock("Function", main);

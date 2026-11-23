@@ -425,9 +425,14 @@ void Theme::apply() {
     s.ItemSpacing = ImVec2(8.f, 4.f);
     s.ItemInnerSpacing = ImVec2(6.f, 4.f);
     s.FramePadding = ImVec2(8.f, 4.f);
-    s.WindowPadding = ImVec2(10.f, 8.f);
-    s.CellPadding = ImVec2(6.f, 3.f);
-    s.IndentSpacing = 14.f;
+    // Panels get a margin that lets their content breathe; rows (ItemSpacing.y)
+    // stay dense, as trees and listings are what the eye scans.
+    s.WindowPadding = ImVec2(12.f, 10.f);
+    s.CellPadding = ImVec2(8.f, 4.f);
+    s.IndentSpacing = 16.f;
+    s.SeparatorTextBorderSize = 1.f;
+    s.SeparatorTextAlign = ImVec2(0.f, 0.5f);
+    s.SeparatorTextPadding = ImVec2(0.f, 6.f);
     baseStyle_ = s;  // unscaled reference for DPI changes
     resolve();
     applyColors();
@@ -456,10 +461,10 @@ void Theme::applyColors() {
     c[ImGuiCol_TitleBgCollapsed] = bg;
     c[ImGuiCol_MenuBarBg] = bg;
     c[ImGuiCol_ScrollbarBg] = none;
-    c[ImGuiCol_ScrollbarGrab] = vec(Col::TextMuted, 0.35f);
+    c[ImGuiCol_ScrollbarGrab] = vec(Col::TextMuted, 0.28f);
     c[ImGuiCol_ScrollbarGrabHovered] = vec(Col::TextMuted, 0.6f);
     c[ImGuiCol_ScrollbarGrabActive] = vec(Col::TextMuted, 0.8f);
-    c[ImGuiCol_CheckMark] = vec(Col::Text);
+    c[ImGuiCol_CheckMark] = accent;
     c[ImGuiCol_SliderGrab] = accent;
     c[ImGuiCol_SliderGrabActive] = mix(accent, vec(Col::Text), 0.2f);
     c[ImGuiCol_Button] = vec(Col::Control);
@@ -489,11 +494,11 @@ void Theme::applyColors() {
     c[ImGuiCol_PlotLinesHovered] = vec(Col::Orange);
     c[ImGuiCol_PlotHistogram] = vec(Col::Blue);
     c[ImGuiCol_PlotHistogramHovered] = vec(Col::Orange);
-    c[ImGuiCol_TableHeaderBg] = vec(Col::PopupBackground);
+    c[ImGuiCol_TableHeaderBg] = vec(Col::Text, 0.035f);
     c[ImGuiCol_TableBorderStrong] = vec(Col::Border);
-    c[ImGuiCol_TableBorderLight] = vec(Col::Border);
+    c[ImGuiCol_TableBorderLight] = vec(Col::Border, 0.5f);  // column rules: present, not loud
     c[ImGuiCol_TableRowBg] = none;
-    c[ImGuiCol_TableRowBgAlt] = vec(Col::Text, 0.03f);
+    c[ImGuiCol_TableRowBgAlt] = vec(Col::Text, 0.02f);
     c[ImGuiCol_TextLink] = vec(Col::Blue);
     c[ImGuiCol_TextSelectedBg] = vec(Col::TextSelection);
     c[ImGuiCol_DragDropTarget] = accent;
