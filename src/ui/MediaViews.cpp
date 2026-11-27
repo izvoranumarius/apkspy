@@ -282,12 +282,12 @@ void FontView::render(const std::vector<uint8_t>& bytes) {
     const int gridCell = 40, gridCols = width / gridCell;
     const int gridGlyphs = std::min(glyphs_, gridCols * 8);
     int height = 0;
-    for (float s : kSizes) height += static_cast<int>(s * 1.35f);
+    for (float const s : kSizes) height += static_cast<int>(s * 1.35f);
     height += 12 + (gridGlyphs + gridCols - 1) / gridCols * gridCell;
     std::vector<uint8_t> alpha(static_cast<size_t>(width) * static_cast<size_t>(height), 0);
 
     int y = 0;
-    for (float px : kSizes) {
+    for (float const px : kSizes) {
         const float scale = stbtt_ScaleForPixelHeight(&font, px);
         int ascent = 0, descent = 0, gap = 0;
         stbtt_GetFontVMetrics(&font, &ascent, &descent, &gap);

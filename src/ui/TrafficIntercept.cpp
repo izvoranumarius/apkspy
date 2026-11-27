@@ -76,12 +76,13 @@ void TrafficPanel::drawIntercept() {
     for (auto it = heldEdits_.begin(); it != heldEdits_.end();) it = live.count(it->first) ? std::next(it) : heldEdits_.erase(it);
     if (held.empty()) {
         selectedHeld_ = 0;
-        ImGui::PushTextWrapPos(0.f);
-        ImGui::TextDisabled(on ? "Waiting for matching traffic. Decrypted HTTPS is held here like plain HTTP; "
-                                  "un-decrypted tunnels pass through untouched."
-                               : "Turn intercept on to hold requests (and responses) before they go on - plain HTTP and "
-                                 "decrypted HTTPS alike - edit them, then forward or drop them.");
-        ImGui::PopTextWrapPos();
+        if (on)
+            ui::emptyState("Waiting for matching traffic",
+                           "Decrypted HTTPS is held here like plain HTTP; un-decrypted tunnels pass through untouched.");
+        else
+            ui::emptyState("Intercept is off",
+                           "Turn it on to hold requests (and responses) before they go on - plain HTTP and decrypted HTTPS alike - "
+                           "then edit, forward or drop them.");
         return;
     }
     if (!live.count(selectedHeld_)) selectedHeld_ = held.front().id;  // oldest first, as they arrived
@@ -139,7 +140,7 @@ void TrafficPanel::drawIntercept() {
                                           : (sel->response ? "Response from" : "Request to");
         ImGui::TextColored(changed ? kWarn : kDim, "%s %s%s", what, sel->url.c_str(), changed ? " (edited)" : "");
         ImGui::PushFont(Theme::monoFont());
-        ImGui::InputTextMultiline("##held", text.data(), text.capacity() + 1, ImVec2(-FLT_MIN, -FLT_MIN),
+        ui::codeBox("##held", text.data(), text.capacity() + 1, ImVec2(-FLT_MIN, -FLT_MIN),
                                   ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_AllowTabInput, resizeText, &text);
         ImGui::PopFont();
         // Ctrl+F forwards, as in Burp.

@@ -29,7 +29,7 @@ void Texture::update(const uint8_t* rgba) {
 void Texture::setNearest(bool nearest) {
     if (nearest == nearest_) return;
     nearest_ = nearest;
-    GLint filter = nearest ? GL_NEAREST : GL_LINEAR;
+    GLint const filter = nearest ? GL_NEAREST : GL_LINEAR;
     glBindTexture(GL_TEXTURE_2D, id_);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);

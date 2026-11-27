@@ -11,7 +11,7 @@ constexpr uint16_t kStringPool = 0x0001;
 constexpr uint16_t kTable = 0x0002;
 constexpr uint16_t kPackage = 0x0200;
 constexpr uint16_t kType = 0x0201;
-constexpr uint16_t kTypeSpec = 0x0202;
+[[maybe_unused]] constexpr uint16_t kTypeSpec = 0x0202;  // skipped: entries come from kType chunks
 constexpr size_t kMaxStrings = 4u << 20;
 constexpr size_t kMaxBagValues = 1u << 21;  // across the whole table
 
@@ -213,7 +213,6 @@ std::shared_ptr<const ResourceTable> ResourceTable::parse(const std::vector<uint
                         }
                     }
                 }
-                (void)kTypeSpec;
                 c += csize;
             }
         }
@@ -237,7 +236,7 @@ std::string ResourceTable::render(uint8_t type, uint32_t data, int depth) const 
                 const std::string v = render(it->second.dataType, it->second.data, depth + 1);
                 if (!v.empty()) return v;
             }
-        const std::string ref = reference(data);
+        std::string ref = reference(data);
         if (!ref.empty()) return ref;
         std::snprintf(buf, sizeof buf, "@0x%08X", data);
         return buf;

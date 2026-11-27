@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <concepts>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -12,10 +13,11 @@ class WorkerSet {
 public:
     ~WorkerSet() { joinAll(); }
     template <typename F>
+        requires std::invocable<std::decay_t<F>&>
     void spawn(F&& fn) {
         reap();
         auto done = std::make_shared<std::atomic<bool>>(false);
-        std::lock_guard<std::mutex> lock(m_);
+        std::lock_guard<std::mutex> const lock(m_);
         items_.push_back({std::thread([done, f = std::forward<F>(fn)]() mutable {
                               f();
                               *done = true;
@@ -23,7 +25,7 @@ public:
                           done});
     }
     void reap() {
-        std::lock_guard<std::mutex> lock(m_);
+        std::lock_guard<std::mutex> const lock(m_);
         for (auto it = items_.begin(); it != items_.end();) {
             if (it->done->load()) {
                 it->thread.join();
@@ -36,7 +38,7 @@ public:
     void joinAll() {
         std::vector<Item> all;
         {
-            std::lock_guard<std::mutex> lock(m_);
+            std::lock_guard<std::mutex> const lock(m_);
             all.swap(items_);
         }
         for (auto& i : all)

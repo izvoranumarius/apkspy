@@ -184,7 +184,7 @@ void EditsPanel::drawContents() {
     if (reportBrowser_.render(), reportBrowser_.takeAccepted(picked)) saveReport(picked);
 
     if (report_.files.empty()) {
-        ImGui::TextDisabled("No edits yet. Use Edit on a decompiled file or a smali listing.");
+        ui::emptyState("No edits yet", "Use Edit on a decompiled file or a smali listing; changes are tracked here.");
         return;
     }
     ImGui::Text("%d changed file(s), +%d -%d, ", report_.changedFiles, report_.added, report_.removed);
@@ -245,7 +245,8 @@ void EditsPanel::drawContents() {
         return;
     }
     const auto& f = report_.files[static_cast<size_t>(selected_)];
-    ImGui::BeginChild("##detail", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+    ui::horizontalDivider();
+    ImGui::BeginChild("##detail", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
     const auto diag = [&](const smali::Diagnostic& d, bool error, int k) {
         ImGui::PushID(k);
         char label[64];

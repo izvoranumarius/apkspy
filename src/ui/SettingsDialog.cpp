@@ -176,13 +176,14 @@ bool SettingsDialog::render() {
     const float footer = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y * 2.f;
 
     // Page list ----------------------------------------------------------------
-    ImGui::BeginChild("##pages", ImVec2(ui::em(11.5f), -footer), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##pages", ImVec2(ui::em(11.5f), -footer));
     for (const PageInfo& p : kPages) {
         const std::string label = ui::icon(p.icon, p.title);
         if (ImGui::Selectable(label.c_str(), page_ == p.page)) page_ = p.page;
     }
     ImGui::EndChild();
-    ImGui::SameLine();
+    ImGui::SameLine(0.f, ui::em(1.2f));
+    ui::verticalDivider(-footer);
 
     // Page ---------------------------------------------------------------------
     ImGui::BeginChild("##page", ImVec2(0, -footer), ImGuiChildFlags_None);
@@ -433,7 +434,7 @@ void SettingsDialog::drawAndroidPage() {
     if (ImGui::Button("Test adb")) {
         const std::string path = adbPath_;
         adbTest_ = std::async(std::launch::async, [path] {
-            adb::Adb probe(path.empty() ? "adb" : path);
+            adb::Adb const probe(path.empty() ? "adb" : path);
             std::string error;
             const std::string version = probe.version(error);
             return version.empty() ? (error.empty() ? std::string("adb did not answer") : error) : "OK - " + version;

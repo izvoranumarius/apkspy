@@ -196,14 +196,14 @@ Annotation AnalysisPanel::nativeLocation(const NativeCode& nc, const NativeCode:
     a.path = nc.elf().name();
     a.addr = line.insn.addr;
     a.context = line.insn.mnemonic + " " + line.insn.operands;
-    if (std::string where = nc.symbolize(line.insn.addr); !where.empty()) a.context = where + ":  " + a.context;
+    if (std::string const where = nc.symbolize(line.insn.addr); !where.empty()) a.context = where + ":  " + a.context;
     return a;
 }
 
 void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
     const NativeCode::Function* f = funcAddr_ != UINT64_MAX ? nc.functionAt(funcAddr_) : nullptr;
     if (!f) {
-        ImGui::TextDisabled("Select a function. Double-click a call or jump to follow it; Backspace goes back.");
+        ui::emptyState("No function selected", "Select a function in the list.\nDouble-click a call or jump to follow it; Backspace goes back.");
         return;
     }
     ImGui::BeginDisabled(nativeBack_.empty());

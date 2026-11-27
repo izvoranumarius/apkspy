@@ -186,7 +186,7 @@ bool rebuild(const std::string& sourceApk, const std::vector<Replacement>& repla
                 break;
             }
         if (present) continue;
-        if (!mz_zip_writer_add_mem(&out, path.c_str(), bytes.data(), bytes.size(), MZ_DEFAULT_COMPRESSION)) {
+        if (!mz_zip_writer_add_mem(&out, path.c_str(), bytes.data(), bytes.size(), static_cast<mz_uint>(MZ_DEFAULT_COMPRESSION))) {
             log("failed to add " + path);
             ok = false;
             break;

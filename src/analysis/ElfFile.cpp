@@ -57,7 +57,8 @@ std::shared_ptr<ElfFile> ElfFile::parse(std::shared_ptr<const std::vector<uint8_
         error = "not an ELF file";
         return nullptr;
     }
-    std::shared_ptr<ElfFile> e(new ElfFile());
+    struct Made : ElfFile {};  // reaches the private constructor for make_shared
+    std::shared_ptr<ElfFile> e = std::make_shared<Made>();
     e->data_ = std::move(bytes);
     e->name_ = std::move(name);
     const uint8_t* d = e->data_->data();
@@ -239,7 +240,7 @@ void ElfFile::readDynamic() {
     uint64_t strOff = 0;
     if (!strtabAddr || !vaddrToOffset(strtabAddr, strOff)) return;
     const uint64_t end = strsz ? strOff + strsz : data_->size();
-    for (uint64_t off : neededOffs)
+    for (uint64_t const off : neededOffs)
         if (strOff + off < end) needed_.push_back(cstr(strOff + off, end));
     if (sonameOff != UINT64_MAX && strOff + sonameOff < end) soname_ = cstr(strOff + sonameOff, end);
 }

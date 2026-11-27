@@ -103,13 +103,13 @@ void TrafficPanel::drawRouting() {
     const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
     ImGui::BeginGroup();
     ImGui::TextUnformatted("Ignore");
-    ImGui::InputTextMultiline("##ignore", ignoreHosts_, sizeof ignoreHosts_, ImVec2(half, ImGui::GetTextLineHeight() * 5.f));
+    ui::codeBox("##ignore", ignoreHosts_, sizeof ignoreHosts_, ImVec2(half, ImGui::GetTextLineHeight() * 5.f));
     changed |= ImGui::IsItemDeactivatedAfterEdit();
     ImGui::EndGroup();
     ImGui::SameLine();
     ImGui::BeginGroup();
     ImGui::TextUnformatted("Allow only (empty = all)");
-    ImGui::InputTextMultiline("##allow", allowHosts_, sizeof allowHosts_, ImVec2(half, ImGui::GetTextLineHeight() * 5.f));
+    ui::codeBox("##allow", allowHosts_, sizeof allowHosts_, ImVec2(half, ImGui::GetTextLineHeight() * 5.f));
     changed |= ImGui::IsItemDeactivatedAfterEdit();
     ImGui::EndGroup();
     if (ui::smallButton("Ignore common Google / analytics hosts")) {

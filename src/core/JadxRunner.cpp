@@ -65,7 +65,7 @@ bool JadxRunner::start(const std::string& jadxPath, const std::string& apkPath, 
 bool JadxRunner::cancel() {
     if (state_.load() != State::Running) return false;
     cancelRequested_ = true;
-    std::lock_guard<std::mutex> lock(handleMutex_);
+    std::lock_guard<std::mutex> const lock(handleMutex_);
 #ifdef _WIN32
     if (childProcess_) TerminateJobObject(childProcess_, 1);
 #else
@@ -81,14 +81,14 @@ int JadxRunner::elapsedSeconds() const {
 }
 
 std::vector<std::string> JadxRunner::drainLog() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     std::vector<std::string> out;
     out.swap(pending_);
     return out;
 }
 
 void JadxRunner::pushLine(std::string line) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     pending_.push_back(std::move(line));
 }
 
@@ -115,14 +115,14 @@ void JadxRunner::countLine(const std::string& line) {
     if (at != std::string::npos) failedClasses_ = std::atoi(line.c_str() + at + 29);
 }
 
-void JadxRunner::runDecompile(std::vector<std::string> argv) {
+void JadxRunner::runDecompile(const std::vector<std::string>& argv) {
     ChildProcess proc = ChildProcess::spawn(argv);
     if (!proc.valid()) {
         state_ = State::Failed;
         return;
     }
     {
-        std::lock_guard<std::mutex> lock(handleMutex_);
+        std::lock_guard<std::mutex> const lock(handleMutex_);
 #ifdef _WIN32
         childProcess_ = proc.killHandle();  // job object: kills the tree
 #else
@@ -141,9 +141,9 @@ void JadxRunner::runDecompile(std::vector<std::string> argv) {
         }
         pushLine(std::move(line));
     });
-    int code = proc.waitForExit();
+    int const code = proc.waitForExit();
     {
-        std::lock_guard<std::mutex> lock(handleMutex_);
+        std::lock_guard<std::mutex> const lock(handleMutex_);
 #ifdef _WIN32
         childProcess_ = nullptr;
 #else
@@ -156,7 +156,7 @@ void JadxRunner::runDecompile(std::vector<std::string> argv) {
         return;
     }
     std::error_code ec;
-    bool hasSources = std::filesystem::is_directory(
+    bool const hasSources = std::filesystem::is_directory(
         std::filesystem::path(pathutil::fromUtf8(outDir_)) / "sources", ec);
     // jadx exits with 1 as soon as ANY class fails ("finished with errors,
     // count: N") - routine for real-world apps. The output is still
@@ -170,7 +170,7 @@ void JadxRunner::testInstall(const std::string& jadxPath) {
     if (testRunning_.load()) return;  // never join a live test on the UI thread
     if (testWorker_.joinable()) testWorker_.join();
     {
-        std::lock_guard<std::mutex> lock(testMutex_);
+        std::lock_guard<std::mutex> const lock(testMutex_);
         testResult_.clear();
     }
     testRunning_ = true;
@@ -184,10 +184,10 @@ void JadxRunner::testInstall(const std::string& jadxPath) {
             });
             code = proc.waitForExit();
         }
-        bool ok = code == 0 && !first.empty();
+        bool const ok = code == 0 && !first.empty();
         std::string result = first;
         if (result.empty()) result = ok ? "jadx is installed" : "jadx could not be executed";
-        std::lock_guard<std::mutex> lock(testMutex_);
+        std::lock_guard<std::mutex> const lock(testMutex_);
         testResult_ = std::move(result);
         testOk_ = ok;
         testRunning_ = false;
@@ -195,7 +195,7 @@ void JadxRunner::testInstall(const std::string& jadxPath) {
 }
 
 std::string JadxRunner::takeTestResult(bool& ok) {
-    std::lock_guard<std::mutex> lock(testMutex_);
+    std::lock_guard<std::mutex> const lock(testMutex_);
     if (testResult_.empty()) return {};
     std::string out = testResult_;
     ok = testOk_.load();

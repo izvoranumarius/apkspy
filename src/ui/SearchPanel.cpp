@@ -1,21 +1,23 @@
 #include "ui/SearchPanel.hpp"
 #include <cstdio>
 #include <string>
+#include <algorithm>
 #include <vector>
 #include "app/Theme.hpp"
+#include "core/TextUtils.hpp"
 #include "ui/TextSelect.hpp"
 #include "ui/UiUtil.hpp"
 
 void SearchPanel::drawContents() {
     auto roots = workspace_.decompiledRoots();
-    bool running = workspace_.jadx().state() == JadxRunner::State::Running;
+    bool const running = workspace_.jadx().state() == JadxRunner::State::Running;
     if (roots.empty()) {
         ImGui::TextWrapped("%s", running ? "Decompilation is starting - search will cover the results once it finishes"
                                          : "Search becomes available once an APK has been decompiled");
         return;
     }
     if (rootIdx_ >= static_cast<int>(roots.size())) rootIdx_ = 0;
-    Root* root = roots[static_cast<size_t>(rootIdx_)];
+    Root const* root = roots[static_cast<size_t>(rootIdx_)];
 
     // The tree of a root that is currently being decompiled is mutated on
     // the UI thread while results stream in; searching it concurrently is a
@@ -46,19 +48,20 @@ void SearchPanel::drawContents() {
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("APK to search");
     }
-    const char* modes[] = {"Full text", "Filenames", "Classes", "Methods", "Fields"};
+    const char* const modes[] = {"Full text", "Filenames", "Classes", "Methods", "Fields"};
     ImGui::SetNextItemWidth(-(button + ImGui::GetStyle().ItemSpacing.x));
     ImGui::Combo("##mode", &mode_, modes, 5);
     ImGui::SameLine();
     if (decompiling) ImGui::BeginDisabled();
     if (ImGui::Button("Search")) submit = true;
     if (decompiling) ImGui::EndDisabled();
-    if (submit && query_[0] && !decompiling)
+    if (submit && query_[0] && !decompiling) {
         workspace_.search().start(root->tree.get(), root->source.get(), query_, static_cast<SearchService::Mode>(mode_), root->title);
+        searched_ = query_;
+    }
 
     const SearchService& search = workspace_.search();
     if (decompiling) ImGui::TextDisabled("results still streaming in...");
-    else if (search.running()) ImGui::TextDisabled("searching...");
     if (search.truncated()) ImGui::TextWrapped("Result list truncated at 3000 hits - refine the query");
     if (search.skippedFiles() > 0) ImGui::TextDisabled("%d oversized file(s) skipped (limit 4 MB)", search.skippedFiles());
 
@@ -81,7 +84,10 @@ void SearchPanel::drawContents() {
             if (i == 0 || hits[i].node != hits[i - 1].node) rows.push_back({-1, i}), ++files;
             rows.push_back({static_cast<int>(i), i});
         }
-        ImGui::TextDisabled("%zu result%s in %zu file%s", hits.size(), hits.size() == 1 ? "" : "s", files, files == 1 ? "" : "s");
+        if (search.running())  // a running count, not a final "0 results"
+            ImGui::TextDisabled("searching... %zu found so far", hits.size());
+        else
+            ImGui::TextDisabled("%zu result%s in %zu file%s", hits.size(), hits.size() == 1 ? "" : "s", files, files == 1 ? "" : "s");
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(rows.size()));
         while (clipper.Step()) {
@@ -120,10 +126,30 @@ void SearchPanel::drawContents() {
                 std::snprintf(line, sizeof line, "%5d ", h.line + 1);
                 ImGui::TextDisabled("%s", line);
                 ImGui::SameLine(0.f, 0.f);
-                // Leading indentation of the code says nothing here.
+                // Leading indentation of the code says nothing here. A match far
+                // into the line is brought into view ("...") and highlighted.
                 size_t start = h.text.find_first_not_of(" \t");
+                if (start == std::string::npos) start = h.text.size();
+                const bool literal = search.mode() != SearchService::Mode::Filenames && !searched_.empty();
+                const size_t match = literal ? tex::ciFind(h.text, searched_) : std::string::npos;
+                std::string shown;
+                if (match != std::string::npos && match > start + 16) {
+                    start = match - 10;
+                    while (start > 0 && (static_cast<unsigned char>(h.text[start]) & 0xC0) == 0x80) --start;  // not mid UTF-8
+                    shown = "...";
+                }
+                shown += h.text.substr(start);
                 ImGui::PushFont(Theme::monoFont());
-                ImGui::TextUnformatted(start == std::string::npos ? "" : h.text.c_str() + start);
+                if (match != std::string::npos && match >= start) {
+                    const size_t at = (shown.size() - (h.text.size() - start)) + (match - start);
+                    const size_t end = std::min(shown.size(), at + searched_.size());
+                    const ImVec2 p = ImGui::GetCursorScreenPos();
+                    const float x0 = p.x + ImGui::CalcTextSize(shown.c_str(), shown.c_str() + at).x;
+                    const float x1 = x0 + ImGui::CalcTextSize(shown.c_str() + at, shown.c_str() + end).x;
+                    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x0, p.y), ImVec2(x1, p.y + ImGui::GetTextLineHeight()),
+                                                              theme::u32(Col::FindMatch), 2.f);
+                }
+                ImGui::TextUnformatted(shown.c_str());
                 ImGui::PopFont();
                 ImGui::Unindent(ui::em(0.8f));
                 if (clicked) {
@@ -131,8 +157,8 @@ void SearchPanel::drawContents() {
                     // Back/Forward history (the current position is the
                     // origin, so Alt+Left returns to it).
                     NavLocation origin;
-                    NavLocation* originPtr = nullptr;
-                    if (Document* active = workspace_.activeDocument()) {
+                    NavLocation const* originPtr = nullptr;
+                    if (Document const* active = workspace_.activeDocument()) {
                         origin = workspace_.locationOf(*active);
                         originPtr = &origin;
                     }

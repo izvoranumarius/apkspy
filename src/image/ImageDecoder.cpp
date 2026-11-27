@@ -31,7 +31,7 @@ bool ImageDecoder::decode(const std::vector<uint8_t>& bytes, DecodedImage& out, 
         return false;
     }
     out.format = sniffFormat(bytes);
-    bool ok = out.format == "WEBP" ? decodeWebp(bytes, out, error) : decodeStb(bytes, out, error);
+    bool const ok = out.format == "WEBP" ? decodeWebp(bytes, out, error) : decodeStb(bytes, out, error);
     if (ok && out.format.empty()) out.format = "Image";
     return ok;
 }

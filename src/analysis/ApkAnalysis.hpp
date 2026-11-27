@@ -162,7 +162,14 @@ public:
     // API paths, key/token-like values, e-mail addresses). For Url the hits
     // are the URL tokens themselves (a log message containing a link yields
     // just the link); dex/index still name the containing string.
-    std::vector<StringHit> strings(std::string_view needle, StringCategory category, size_t limit) const;
+    // `codeOnly`: only strings some code loads (const-string), not the type /
+    // member names and data blobs that share the dex string table.
+    // `readableOnly`: no control characters (drops binary blobs such as
+    // protobuf-lite schemas, which are loaded with const-string too).
+    std::vector<StringHit> strings(std::string_view needle, StringCategory category, size_t limit, bool codeOnly = false,
+                                   bool readableOnly = false) const;
+    // True when some instruction references string `index` of dex `dex`.
+    bool stringUsedInCode(uint16_t dex, uint32_t index) const;
     static StringCategory classify(std::string_view s);
     // URL tokens ("scheme://...") inside a string.
     static std::vector<std::string> extractUrls(std::string_view s);

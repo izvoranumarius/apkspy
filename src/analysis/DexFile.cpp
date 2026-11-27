@@ -186,7 +186,8 @@ std::shared_ptr<DexFile> DexFile::parseAt(std::shared_ptr<const std::vector<uint
         error = "unsupported DEX endianness";
         return nullptr;
     }
-    std::shared_ptr<DexFile> dex(new DexFile());
+    struct Made : DexFile {};  // reaches the private constructor for make_shared
+    std::shared_ptr<DexFile> dex = std::make_shared<Made>();
     dex->data_ = std::move(bytes);
     dex->name_ = std::move(name);
     dex->version_ = static_cast<uint32_t>((d[4] - '0') * 100 + (d[5] - '0') * 10 + (d[6] - '0'));

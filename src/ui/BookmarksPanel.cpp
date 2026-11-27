@@ -67,7 +67,7 @@ void BookmarksPanel::go(const Annotation& a) {
     }
     NavLocation origin;
     const NavLocation* originPtr = nullptr;
-    if (Document* d = workspace_.activeDocument()) {
+    if (Document const* d = workspace_.activeDocument()) {
         origin = workspace_.locationOf(*d);
         originPtr = &origin;
     }
@@ -133,7 +133,7 @@ void BookmarksPanel::drawContents() {
     }
     rebuildRows();
     if (notes.all().empty()) {
-        ImGui::TextDisabled("Nothing yet. In the editor or a native listing press Ctrl+B for a bookmark or ; for a comment.");
+        ui::emptyState("No bookmarks or comments yet", "In the editor or a native listing, press Ctrl+B for a bookmark or ; for a comment.");
         popup_.draw(notes);
         return;
     }

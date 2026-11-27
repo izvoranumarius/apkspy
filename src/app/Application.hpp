@@ -113,6 +113,9 @@ private:
     int settleFrames_ = 0;  // frames still to draw after input, see run()
     void rebuildFonts();
     std::string pendingFocusPanel_;  // MCP show_panel, applied inside the next frame
+    // Panels whose dock tab should come to the front without taking keyboard
+    // focus ("reveal:<title>" through showPanel), applied inside the next frame.
+    std::vector<std::string> pendingReveal_;
     Workspace workspace_;
     Project project_;
     Settings settings_;

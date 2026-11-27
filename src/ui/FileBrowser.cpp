@@ -19,8 +19,8 @@ std::string homeDir() {
 }
 
 bool hasExtension(const std::string& name, const char* ext) {
-    std::string n = tex::asciiLower(name);
-    std::string e = tex::asciiLower(ext);
+    std::string const n = tex::asciiLower(name);
+    std::string const e = tex::asciiLower(ext);
     return n.size() >= e.size() && n.compare(n.size() - e.size(), e.size(), e) == 0;
 }
 }  // namespace
@@ -51,7 +51,7 @@ void FileBrowser::setDefaultName(const std::string& name) {
 
 void FileBrowser::goTo(const std::string& dir) {
     std::error_code ec;
-    fs::path p = fs::absolute(pathutil::fromUtf8(dir)).lexically_normal();
+    fs::path const p = fs::absolute(pathutil::fromUtf8(dir)).lexically_normal();
     if (!fs::is_directory(p, ec)) return;
     currentDir_ = pathutil::toUtf8(p);
     std::snprintf(pathBuffer_, sizeof pathBuffer_, "%s", currentDir_.c_str());
@@ -143,7 +143,7 @@ void FileBrowser::render() {
     ImGui::SetNextItemWidth(-(ui::buttonWidth("Up") + ui::buttonWidth("Refresh") + ImGui::GetStyle().ItemSpacing.x * 2.f));
     if (ImGui::InputText("##path", pathBuffer_, sizeof pathBuffer_, ImGuiInputTextFlags_EnterReturnsTrue)) {
         std::error_code ec;
-        fs::path p = pathutil::fromUtf8(pathBuffer_).lexically_normal();
+        fs::path const p = pathutil::fromUtf8(pathBuffer_).lexically_normal();
         if (fs::is_directory(p, ec)) {
             currentDir_ = pathutil::toUtf8(p);
             refresh();
@@ -154,8 +154,8 @@ void FileBrowser::render() {
         fs::path parent = pathutil::fromUtf8(currentDir_).parent_path();
         if (!parent.empty()) goTo(pathutil::toUtf8(parent));
         else {
-            std::error_code ec;
-            fs::path cur = pathutil::fromUtf8(currentDir_);
+            std::error_code const ec;
+            fs::path const cur = pathutil::fromUtf8(currentDir_);
             if (!cur.has_root_path() || pathutil::toUtf8(cur.root_path()) != currentDir_) goTo("/");
         }
     }
@@ -268,7 +268,7 @@ void FileBrowser::render() {
         } else if (mode_ == Mode::SelectFolder) {
             // The highlighted folder wins; otherwise the current directory.
             std::error_code ec;
-            fs::path chosen = selectedFile_.empty()
+            fs::path const chosen = selectedFile_.empty()
                                   ? fs::path(pathutil::fromUtf8(currentDir_))
                                   : pathutil::fromUtf8(currentDir_) / selectedFile_;
             if (fs::is_directory(chosen, ec)) {
@@ -281,7 +281,7 @@ void FileBrowser::render() {
             std::string name = nameBuffer_;
             if (mode_ == Mode::SaveProject) name = projectFileName(name);
             std::error_code ec;
-            fs::path candidate = pathutil::fromUtf8(currentDir_) / name;
+            fs::path const candidate = pathutil::fromUtf8(currentDir_) / name;
             if (mode_ != Mode::SaveProject && mode_ != Mode::SaveFile && fs::is_directory(candidate, ec)) {
                 goTo(pathutil::toUtf8(candidate));
             } else {

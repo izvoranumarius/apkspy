@@ -7,6 +7,8 @@
 #include "analysis/AnalysisService.hpp"
 #include "analysis/Dalvik.hpp"
 #include "analysis/Mapping.hpp"
+#include "analysis/ApkDiff.hpp"
+#include "analysis/SecurityScanner.hpp"
 #include "core/Annotations.hpp"
 #include "core/ApkArchive.hpp"
 #include "core/ResourceTable.hpp"
@@ -186,6 +188,12 @@ public:
     // resources.arsc of the APK group (parsed once, UI thread); nullptr when
     // the APK has none or it is malformed.
     std::shared_ptr<const ResourceTable> resources(const std::string& group);
+    // Everything ApkDiff::compare needs from one APK group, read here on the
+    // owning thread (archive listing, manifest, resources, analysis if ready).
+    // False when the group is not an APK archive.
+    bool diffSide(const std::string& group, ApkDiff::Side& out);
+    // Same for the security scanner (adds the decoded network security config).
+    bool securityInput(const std::string& group, security::Input& out);
     // Generated documents (M6): shows `text` as a read-only tab of the
     // group's virtual root (created on demand) at `path` ("smali/Lfoo;.smali"),
     // replacing the content when the path is reopened, and jumps to `line`
@@ -316,6 +324,34 @@ public:
         methodViewPending_ = false;
         return true;
     }
+    // The line last clicked in the editor (plain UI state, owner thread):
+    // the Analysis workspace maps it to bytecode. `serial` changes per click.
+    struct EditorCursor {
+        const Document* doc = nullptr;
+        int line = -1;
+        uint64_t serial = 0;
+    };
+    void setEditorCursor(const Document* doc, int line) {
+        cursor_.doc = doc;
+        cursor_.line = line;
+        ++cursor_.serial;
+    }
+    const EditorCursor& editorCursor() const { return cursor_; }
+
+    // Same for the Diff panel: compare two APK groups, optionally showing one changed method side by side.
+    struct DiffViewRequest {
+        std::string groupA, groupB, method;
+    };
+    void requestDiffView(DiffViewRequest r) {
+        diffView_ = std::move(r);
+        diffViewPending_ = true;
+    }
+    bool takeDiffView(DiffViewRequest& out) {
+        if (!diffViewPending_) return false;
+        out = std::move(diffView_);
+        diffViewPending_ = false;
+        return true;
+    }
     bool takeNativeView(NativeViewRequest& out) {
         if (!nativeViewPending_) return false;
         out = std::move(nativeView_);
@@ -375,6 +411,9 @@ private:
     NativeViewRequest nativeView_;
     MethodViewRequest methodView_;
     bool methodViewPending_ = false;
+    DiffViewRequest diffView_;
+    bool diffViewPending_ = false;
+    EditorCursor cursor_;
     bool nativeViewPending_ = false;
     Document* activeDocument_ = nullptr;  // visible tab, set by the editor panel
     bool decompileSwitch_ = false;

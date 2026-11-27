@@ -5,6 +5,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
+#include <concepts>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -31,6 +32,15 @@ std::string toText(const Output& out) {
 }
 
 namespace {
+
+// Graph walks take the edges as callables. A successor function maps a block
+// to its successor list; a predecessor visitor calls a sink for each one.
+template <class F>
+concept SuccessorFn = std::invocable<F&, int> &&
+                      std::convertible_to<std::invoke_result_t<F&, int>, const std::vector<int>&>;
+
+template <class F>
+concept PredecessorVisitor = std::invocable<F&, int, void (*)(int)>;
 
 // ===========================================================================
 // Expressions: text with register placeholders
@@ -103,7 +113,7 @@ int countUses(std::string_view s, int id) {
     return n;
 }
 
-template <class F>
+template <std::invocable<int> F>
 void forEachUse(std::string_view s, F f) {
     PhRef r;
     for (size_t at = 0; nextPh(s, at, r); at = r.end) f(r.id);
@@ -435,7 +445,7 @@ Liveness liveness(const Fn& fn) {
             if (s.removed) continue;
             forEachUse(s.rhs, use);
             if (s.def >= 0) kill[b].set(s.def);
-            for (int k : s.kills) kill[b].set(k);
+            for (int const k : s.kills) kill[b].set(k);
         }
         forEachUse(blk.term.text, use);
     }
@@ -447,8 +457,8 @@ Liveness liveness(const Fn& fn) {
         changed = false;
         for (size_t i = n; i-- > 0;) {
             const Block& blk = fn.blocks[i];
-            for (int s : blk.succ) lv.out[i].orWith(lv.in[static_cast<size_t>(s)]);
-            for (int h : blk.exc) {
+            for (int const s : blk.succ) lv.out[i].orWith(lv.in[static_cast<size_t>(s)]);
+            for (int const h : blk.exc) {
                 lv.out[i].orWith(lv.in[static_cast<size_t>(h)]);
                 lv.always[i].orWith(lv.in[static_cast<size_t>(h)]);
             }
@@ -480,7 +490,7 @@ void removeDead(Fn& fn, const Liveness& lv) {
                 s.def = -1;
             }
             if (s.def >= 0) live.reset(s.def);
-            for (int k : s.kills) live.reset(k);
+            for (int const k : s.kills) live.reset(k);
             forEachUse(s.rhs, [&](int r) { live.set(r); });
             live.orWith(lv.always[b]);
         }
@@ -572,7 +582,7 @@ void foldTemporaries(Fn& fn, const Liveness& lv) {
 void mergeConditions(Fn& fn) {
     const int n = static_cast<int>(fn.blocks.size());
     std::vector<char> isRoot(static_cast<size_t>(n), 0);
-    for (int r : fn.roots) isRoot[static_cast<size_t>(r)] = 1;
+    for (int const r : fn.roots) isRoot[static_cast<size_t>(r)] = 1;
     const auto bare = [&](int b, const std::vector<int>& preds) {
         const Block& blk = fn.blocks[static_cast<size_t>(b)];
         if (blk.term.kind != TermKind::Cond || blk.succ.size() != 2 || !blk.notes.empty() || isRoot[static_cast<size_t>(b)]) return false;
@@ -583,7 +593,7 @@ void mergeConditions(Fn& fn) {
         changed = false;
         std::vector<int> preds(static_cast<size_t>(n), 0);
         for (const Block& blk : fn.blocks)
-            for (int s : blk.succ) ++preds[static_cast<size_t>(s)];
+            for (int const s : blk.succ) ++preds[static_cast<size_t>(s)];
         for (int a = 0; a < n && !changed; ++a) {
             Block& A = fn.blocks[static_cast<size_t>(a)];
             if (A.term.kind != TermKind::Cond || A.succ.size() != 2) continue;
@@ -1086,7 +1096,7 @@ private:
         const size_t n = static_cast<size_t>(n_);
         preds_.assign(n, {});
         for (int b = 0; b < n_; ++b)
-            for (int s : blk(b).succ) preds_[static_cast<size_t>(s)].push_back(b);
+            for (int const s : blk(b).succ) preds_[static_cast<size_t>(s)].push_back(b);
 
         // Dominators (Cooper, Harvey, Kennedy) from a virtual root above all roots.
         const int root = n_;
@@ -1096,10 +1106,10 @@ private:
         rpoIdx_[n] = 0;
         for (size_t i = 0; i < order.size(); ++i) rpoIdx_[static_cast<size_t>(order[i])] = static_cast<int>(i) + 1;
         std::vector<char> isRoot(n, 0);
-        for (int r : fn_.roots) isRoot[static_cast<size_t>(r)] = 1;
+        for (int const r : fn_.roots) isRoot[static_cast<size_t>(r)] = 1;
         idom_ = dominators(order, root, rpoIdx_, [&](int b, const auto& f) {
             if (isRoot[static_cast<size_t>(b)]) f(root);
-            for (int p : preds_[static_cast<size_t>(b)]) f(p);
+            for (int const p : preds_[static_cast<size_t>(b)]) f(p);
         });
 
         // Post-dominators over the reversed graph, from a virtual exit.
@@ -1115,7 +1125,7 @@ private:
         for (size_t i = 0; i < rorder.size(); ++i) prpoIdx_[static_cast<size_t>(rorder[i])] = static_cast<int>(i) + 1;
         ipdom_ = dominators(rorder, exitNode, prpoIdx_, [&](int b, const auto& f) {
             if (isExit[static_cast<size_t>(b)]) f(exitNode);
-            for (int s : blk(b).succ) f(s);
+            for (int const s : blk(b).succ) f(s);
         });
 
         // Natural loops.
@@ -1123,7 +1133,7 @@ private:
         loopFollow_.assign(n, -1);
         for (int b = 0; b < n_; ++b) {
             if (rpoIdx_[static_cast<size_t>(b)] < 0) continue;
-            for (int h : blk(b).succ) {
+            for (int const h : blk(b).succ) {
                 if (!dominates(h, b)) continue;
                 header_[static_cast<size_t>(h)] = 1;
                 auto& body = bodies_[h];
@@ -1135,7 +1145,7 @@ private:
                     work.pop_back();
                     if (body[static_cast<size_t>(x)]) continue;
                     body[static_cast<size_t>(x)] = 1;
-                    for (int p : preds_[static_cast<size_t>(x)])
+                    for (int const p : preds_[static_cast<size_t>(x)])
                         if (rpoIdx_[static_cast<size_t>(p)] >= 0) work.push_back(p);
                 }
             }
@@ -1145,14 +1155,14 @@ private:
             const Block& hb = blk(h);
             if (hb.term.kind == TermKind::Cond) {
                 int outside = 0, cand = -1;
-                for (int s : hb.succ)
+                for (int const s : hb.succ)
                     if (!body[static_cast<size_t>(s)]) ++outside, cand = s;
                 if (outside == 1) best = cand;
             }
             if (best < 0)
                 for (int b = 0; b < n_; ++b) {
                     if (!body[static_cast<size_t>(b)]) continue;
-                    for (int s : blk(b).succ)
+                    for (int const s : blk(b).succ)
                         if (!body[static_cast<size_t>(s)] && (best < 0 || rpoIdx_[static_cast<size_t>(s)] < rpoIdx_[static_cast<size_t>(best)]))
                             best = s;
                 }
@@ -1160,12 +1170,12 @@ private:
         }
     }
 
-    template <class Next>
+    template <SuccessorFn Next>
     std::vector<int> postorder(const std::vector<int>& starts, Next next) const {
         std::vector<int> order;
         std::vector<char> seen(static_cast<size_t>(n_), 0);
         std::vector<std::pair<int, size_t>> stack;
-        for (int s0 : starts) {
+        for (int const s0 : starts) {
             if (seen[static_cast<size_t>(s0)]) continue;
             seen[static_cast<size_t>(s0)] = 1;
             stack.push_back({s0, 0});
@@ -1187,7 +1197,7 @@ private:
         return order;
     }
 
-    template <class Preds>
+    template <PredecessorVisitor Preds>
     std::vector<int> dominators(const std::vector<int>& rpo, int root, const std::vector<int>& idx, Preds preds) const {
         std::vector<int> dom(static_cast<size_t>(n_) + 1, -1);
         dom[static_cast<size_t>(root)] = root;
@@ -1200,7 +1210,7 @@ private:
         };
         for (bool changed = true; changed;) {
             changed = false;
-            for (int b : rpo) {
+            for (int const b : rpo) {
                 int nd = -1;
                 preds(b, [&](int p) {
                     if (idx[static_cast<size_t>(p)] < 0 || dom[static_cast<size_t>(p)] < 0) return;
@@ -1425,12 +1435,11 @@ private:
         emit("}", indent, {});
     }
 
-    void emitLoop(int h, const Ctx& outer, int indent, int depth) {
+    void emitLoop(int h, const Ctx& /*outer*/, int indent, int depth) {
         Ctx c;
         c.header = h;
         c.follow = loopFollow_[static_cast<size_t>(h)];
         c.body = &bodies_.at(h);
-        (void)outer;
         const Block& hb = blk(h);
         bool bare = true;
         for (const Stmt& s : hb.stmts) bare = bare && s.removed;
@@ -1458,7 +1467,7 @@ private:
     void insertLabels(size_t bodyStart) {
         if (labels_.empty()) return;
         std::multimap<int, int> at;  // line index -> block
-        for (int b : labels_)
+        for (int const b : labels_)
             if (start_[static_cast<size_t>(b)] >= 0) at.insert({start_[static_cast<size_t>(b)], b});
         std::vector<Line> merged;
         merged.reserve(out_.size() + at.size());
@@ -1627,7 +1636,7 @@ std::string javaType(std::string_view d) {
     case 'F': base = "float"; break;
     case 'D': base = "double"; break;
     case 'L': {
-        std::string_view n = d.substr(1, d.size() >= 2 ? d.size() - 2 : 0);
+        std::string_view const n = d.substr(1, d.size() >= 2 ? d.size() - 2 : 0);
         const size_t slash = n.rfind('/');
         base = std::string(slash == std::string_view::npos ? n : n.substr(slash + 1));
         break;
@@ -1980,7 +1989,7 @@ private:
     void translateBlock(const ApkAnalysis::BasicBlock& cb, Block& blk, const std::map<uint32_t, int>& blockAt) {
         std::vector<dalvik::Insn> insns;
         for (uint32_t pc = cb.startPc; pc < cb.endPc && pc < code_.insnsSize;) {
-            dalvik::Insn in = dalvik::decode(code_, pc);
+            dalvik::Insn const in = dalvik::decode(code_, pc);
             pc += std::max<uint32_t>(in.size, 1);
             if (in.payload) continue;
             insns.push_back(in);
@@ -2068,7 +2077,7 @@ private:
                 if (!byTarget.count(it->second)) order.push_back(it->second);
                 byTarget[it->second].push_back(key);
             }
-            for (int target : order) t.cases.push_back({byTarget[target], target});
+            for (int const target : order) t.cases.push_back({byTarget[target], target});
             break;
         }
         default: break;
@@ -2380,7 +2389,7 @@ private:
         const bool isDirect = op == 0x70 || op == 0x76;
         uint32_t pos = isStaticCall ? 0 : 1;
         std::string args;
-        for (uint32_t p : dex_.protoParameters(proto)) {
+        for (uint32_t const p : dex_.protoParameters(proto)) {
             if (pos >= in.regCount) break;
             const std::string_view pd = dex_.typeDescriptor(p);
             args += (args.empty() ? "" : ", ") + R(regAt(pos), hintOf(pd));
@@ -2544,18 +2553,12 @@ bool parseImm(std::string_view t, int64_t& v) {
         }
     } else {
         if (t.empty()) return false;
-        for (char c : t) {
+        for (char const c : t) {
             if (c < '0' || c > '9') return false;
             x = x * 10 + static_cast<uint64_t>(c - '0');
         }
     }
     v = neg ? -static_cast<int64_t>(x) : static_cast<int64_t>(x);
-    return true;
-}
-
-bool parseHex(std::string_view t, uint64_t& v) {
-    if (t.size() < 3 || t[0] != '0' || t[1] != 'x') return false;
-    v = std::strtoull(std::string(t.substr(2)).c_str(), nullptr, 16);
     return true;
 }
 
@@ -2976,7 +2979,7 @@ public:
             work.pop_back();
             if (b < 0 || static_cast<size_t>(b) >= reach.size() || reach[static_cast<size_t>(b)]) continue;
             reach[static_cast<size_t>(b)] = 1;
-            for (int s : cfg_.blocks[static_cast<size_t>(b)].successors) work.push_back(s);
+            for (int const s : cfg_.blocks[static_cast<size_t>(b)].successors) work.push_back(s);
         }
         for (size_t i = 0; i < cfg_.blocks.size(); ++i) {
             if (reach[i]) {
@@ -3122,7 +3125,7 @@ private:
             auto c = st.addrs.find(m.base.id);
             if (c != st.addrs.end()) {
                 const uint64_t addr = c->second + static_cast<uint64_t>(off);
-                const std::string sym = nc_.symbolize(addr);
+                std::string sym = nc_.symbolize(addr);
                 if (!sym.empty() && sym.find_first_of("+@") == std::string::npos) return sym;
                 return "*(" + type + " *)" + hex(addr);
             }
@@ -3274,7 +3277,7 @@ private:
     }
 
     std::string flagCond(const Flags& f, std::string_view cc) const {
-        const std::string c = baseCond(f, cc);
+        std::string c = baseCond(f, cc);
         if (f.guard.empty()) return c;
         const std::string e = condExpr(c);
         if (evalCond(cc, f.nzcv)) return cond("!" + wrap(f.guard) + " || " + wrap(e), "?", "");
@@ -3314,7 +3317,7 @@ private:
         return args;
     }
 
-    void call(Block& blk, State& st, std::string callee, uint64_t addr) {
+    void call(Block& blk, State& st, const std::string& callee, uint64_t addr) {
         Stmt s;
         s.addrs = {addr};
         s.def = 0;
@@ -3370,7 +3373,7 @@ private:
         const NativeCode::BasicBlock& cb = cfg_.blocks[bi];
         Block& blk = fn_.blocks[bi];
         blk.addr = cb.lineCount ? cfg_.lines[cb.firstLine].insn.addr : 0;
-        for (int s : cb.successors) blk.succ.push_back(s);
+        for (int const s : cb.successors) blk.succ.push_back(s);
         State st;
         // A block starts with the flags its predecessors leave, when they all leave the same: "cmp; b.gt ...; b.ne ..."
         // compares once.
@@ -3568,7 +3571,7 @@ private:
             std::string e;
             const std::string& c = l.comment;
             if (c.size() > 2 && c.front() == '[' && c.back() == ']') {
-                std::string sym = c.substr(1, c.size() - 2);
+                std::string const sym = c.substr(1, c.size() - 2);
                 const size_t got = sym.find("@got");
                 if (got != std::string::npos) e = "&" + sym.substr(0, got);
                 else if (sym.find('+') == std::string::npos && sym.rfind("0x", 0) != 0) e = sym;
@@ -6382,7 +6385,7 @@ bool identStart(char c) { return std::isalpha(static_cast<unsigned char>(c)) || 
 bool identChar(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$'; }
 
 // Calls f(begin, length, afterDot) for each identifier outside string / char literals and // comments.
-template <class F>
+template <std::invocable<size_t, size_t, bool> F>
 void forEachIdent(std::string_view s, F f) {
     for (size_t i = 0; i < s.size();) {
         const char c = s[i];
@@ -6691,13 +6694,21 @@ std::vector<size_t> findIdentifier(std::string_view text, std::string_view ident
     return out;
 }
 
+namespace {
+Output failed(std::string message) {
+    Output out;
+    out.error = std::move(message);
+    return out;
+}
+}  // namespace
+
 // A decompiler bug must not take the UI frame or an MCP call down with it.
 Output decompileMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m, const Naming& naming) {
-    if (m.dex >= a.dexes().size()) return {{}, "bad method"};
+    if (m.dex >= a.dexes().size()) return failed("bad method");
     try {
         return DalvikDecompiler(a, m, naming).run();
     } catch (const std::exception& e) {
-        return {{}, std::string("decompiler error: ") + e.what()};
+        return failed(std::string("decompiler error: ") + e.what());
     }
 }
 
@@ -6706,7 +6717,7 @@ Output decompileNative(const NativeCode& nc, const NativeCode::Function& f) {
         if (nc.isa() != NativeCode::Isa::Arm64) return OtherDecompiler(nc, f).run();
         return NativeDecompiler(nc, f).run();
     } catch (const std::exception& e) {
-        return {{}, std::string("decompiler error: ") + e.what()};
+        return failed(std::string("decompiler error: ") + e.what());
     }
 }
 

@@ -38,7 +38,7 @@ uint8_t JdwpClient::Reader::u8() {
 }
 uint32_t JdwpClient::Reader::u32() {
     if (p + 4 > d.size()) return ok = false, 0;
-    uint32_t v = static_cast<uint32_t>(d[p]) << 24 | static_cast<uint32_t>(d[p + 1]) << 16 | static_cast<uint32_t>(d[p + 2]) << 8 | d[p + 3];
+    uint32_t const v = static_cast<uint32_t>(d[p]) << 24 | static_cast<uint32_t>(d[p + 1]) << 16 | static_cast<uint32_t>(d[p + 2]) << 8 | d[p + 3];
     p += 4;
     return v;
 }
@@ -126,22 +126,21 @@ bool JdwpClient::connect(int port, std::string& error) {
 }
 
 void JdwpClient::disconnect() {
-    const bool was = connected_.exchange(false);
+    connected_.store(false);
     socket_.shutdownBoth();
     if (reader_.joinable()) reader_.join();
     socket_.close();
     {
-        std::lock_guard<std::mutex> lock(replyMutex_);
+        std::lock_guard<std::mutex> const lock(replyMutex_);
         replies_.clear();
     }
     replyCv_.notify_all();
     {
-        std::lock_guard<std::mutex> lock(cacheMutex_);
+        std::lock_guard<std::mutex> const lock(cacheMutex_);
         sigCache_.clear();
         methodCache_.clear();
         fieldCache_.clear();
     }
-    (void)was;
 }
 
 void JdwpClient::readerLoop() {
@@ -157,7 +156,7 @@ void JdwpClient::readerLoop() {
         if (!packet.empty() && !socket_.recvAll(packet.data(), packet.size())) break;
         if (flags & kReplyFlag) {
             const uint16_t err = static_cast<uint16_t>(header[9] << 8 | header[10]);
-            std::lock_guard<std::mutex> lock(replyMutex_);
+            std::lock_guard<std::mutex> const lock(replyMutex_);
             auto it = replies_.find(id);
             if (it != replies_.end()) {  // late replies to timed-out commands are dropped
                 it->second.done = true;
@@ -190,13 +189,13 @@ bool JdwpClient::command(uint8_t set, uint8_t cmd, const std::vector<uint8_t>& p
     pkt.push_back(cmd);
     pkt.insert(pkt.end(), payload.begin(), payload.end());
     {
-        std::lock_guard<std::mutex> lock(replyMutex_);
+        std::lock_guard<std::mutex> const lock(replyMutex_);
         replies_[id] = Reply{};
     }
     {
-        std::lock_guard<std::mutex> lock(sendMutex_);
+        std::lock_guard<std::mutex> const lock(sendMutex_);
         if (!socket_.sendAll(pkt.data(), pkt.size())) {
-            std::lock_guard<std::mutex> rl(replyMutex_);
+            std::lock_guard<std::mutex> const rl(replyMutex_);
             replies_.erase(id);
             error = "send failed";
             return false;
@@ -376,7 +375,7 @@ bool JdwpClient::classesBySignature(const std::string& sig, std::vector<std::pai
 
 bool JdwpClient::signature(Id refType, std::string& out, std::string& error) {
     {
-        std::lock_guard<std::mutex> lock(cacheMutex_);
+        std::lock_guard<std::mutex> const lock(cacheMutex_);
         auto it = sigCache_.find(refType);
         if (it != sigCache_.end()) {
             out = it->second;
@@ -389,14 +388,14 @@ bool JdwpClient::signature(Id refType, std::string& out, std::string& error) {
     Reader rd{r};
     out = rd.str();
     if (!rd.ok) return false;
-    std::lock_guard<std::mutex> lock(cacheMutex_);
+    std::lock_guard<std::mutex> const lock(cacheMutex_);
     sigCache_[refType] = out;
     return true;
 }
 
 bool JdwpClient::methods(Id refType, std::vector<MethodInfo>& out, std::string& error) {
     {
-        std::lock_guard<std::mutex> lock(cacheMutex_);
+        std::lock_guard<std::mutex> const lock(cacheMutex_);
         auto it = methodCache_.find(refType);
         if (it != methodCache_.end()) {
             out = it->second;
@@ -418,7 +417,7 @@ bool JdwpClient::methods(Id refType, std::vector<MethodInfo>& out, std::string& 
         out.push_back(std::move(m));
     }
     if (!rd.ok) return false;
-    std::lock_guard<std::mutex> lock(cacheMutex_);
+    std::lock_guard<std::mutex> const lock(cacheMutex_);
     methodCache_[refType] = out;
     return true;
 }
@@ -548,7 +547,7 @@ JdwpClient::Value JdwpClient::readValue(uint8_t tag, Reader& r) {
                     v.text = elem + "[" + (arrayLength(v.raw, len, err) ? std::to_string(len) : std::string()) + "]@" +
                              std::to_string(v.raw);
                 } else {
-                    std::string name = sig.size() > 2 ? sig.substr(1, sig.size() - 2) : sig;
+                    std::string const name = sig.size() > 2 ? sig.substr(1, sig.size() - 2) : sig;
                     v.text = name.substr(name.find_last_of('/') + 1) + "@" + std::to_string(v.raw);
                 }
             } else {
@@ -586,7 +585,7 @@ bool JdwpClient::superclass(Id classId, Id& out, std::string& error) {
 
 bool JdwpClient::fields(Id refType, std::vector<FieldInfo>& out, std::string& error) {
     {
-        std::lock_guard<std::mutex> lock(cacheMutex_);
+        std::lock_guard<std::mutex> const lock(cacheMutex_);
         auto it = fieldCache_.find(refType);
         if (it != fieldCache_.end()) {
             out = it->second;
@@ -608,7 +607,7 @@ bool JdwpClient::fields(Id refType, std::vector<FieldInfo>& out, std::string& er
         out.push_back(std::move(f));
     }
     if (!rd.ok) return false;
-    std::lock_guard<std::mutex> lock(cacheMutex_);
+    std::lock_guard<std::mutex> const lock(cacheMutex_);
     fieldCache_[refType] = out;
     return true;
 }
@@ -617,7 +616,7 @@ bool JdwpClient::objectValues(Id object, const std::vector<Id>& fieldIds, std::v
     std::vector<uint8_t> p, r;
     putId(p, object, objectIdSize_);
     putU32(p, static_cast<uint32_t>(fieldIds.size()));
-    for (Id f : fieldIds) putId(p, f, fieldIdSize_);
+    for (Id const f : fieldIds) putId(p, f, fieldIdSize_);
     if (!command(9, 2, p, r, error)) return false;
     Reader rd{r};
     const uint32_t n = rd.u32();

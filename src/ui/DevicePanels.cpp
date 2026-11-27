@@ -111,7 +111,7 @@ void DevicesPanel::drawEmulators() {
     }
     if (!avdsLoaded_ && !avdJob_.valid()) refreshAvds();
 
-    if (!ImGui::CollapsingHeader("Emulators")) return;
+    if (!ui::collapsingHeader("Emulators")) return;
     const bool busy = avdJob_.valid();
     ImGui::BeginDisabled(busy);
     if (ui::smallButton(busy ? "Loading..." : "Refresh AVDs")) refreshAvds();
@@ -219,7 +219,7 @@ void DevicesPanel::drawContents() {
         if (d.serial == selected && !d.model.empty()) current = d.model + "  [" + d.serial + "]";
     if (ImGui::BeginCombo("##device", current.c_str())) {
         for (const auto& d : devices) {
-            std::string label = (d.model.empty() ? d.serial : d.model + "  [" + d.serial + "]") + "  - " + d.state;
+            std::string const label = (d.model.empty() ? d.serial : d.model + "  [" + d.serial + "]") + "  - " + d.state;
             if (ImGui::Selectable(label.c_str(), d.serial == selected, d.state == "device" ? 0 : ImGuiSelectableFlags_Disabled)) {
                 devices_.select(d.serial);
                 devices_.refreshProcesses();
@@ -345,7 +345,7 @@ void DevicesPanel::drawDeviceAbis(const std::string& serial) {
                           info.abis.secondary.empty() ? "-" : info.abis.secondary.c_str(), abi::join(info.abis.list64).c_str(), abi::join(info.abis.list32).c_str());
     const auto apks = workspace_.apkRoots();
     if (apks.empty()) return;
-    if (ImGui::CollapsingHeader("APK compatibility")) {
+    if (ui::collapsingHeader("APK compatibility")) {
         for (const Root* apk : apks) {
             const auto native = workspace_.analysis().nativeInventory(apk->apkPath);
             const abi::Compatibility c = abi::check(*native, info.abis);
@@ -400,7 +400,7 @@ void DevicesPanel::drawMonitor() {
 void DebuggerPanel::followFrame(const DebugSession::FrameRow& frame) {
     std::string cls, name, proto;
     if (!ApkAnalysis::splitMethodRef(frame.method, cls, name, proto)) return;
-    for (Root* r : workspace_.apkRoots())
+    for (Root const* r : workspace_.apkRoots())
         if (auto analysis = workspace_.analysis().get(r->title)) {
             const auto defs = analysis->findMethodDefs(cls, name, proto);
             if (!defs.empty()) {
@@ -408,7 +408,7 @@ void DebuggerPanel::followFrame(const DebugSession::FrameRow& frame) {
                 return;
             }
         }
-    for (Root* r : workspace_.decompiledRoots())
+    for (Root const* r : workspace_.decompiledRoots())
         if (workspace_.openSymbol(r->title, javaClassOf(frame.method), {}, nullptr)) {
             if (frame.line > 0)
                 if (Document* doc = workspace_.activeDocument()) doc->goTo(frame.line - 1);
@@ -478,9 +478,11 @@ void DebuggerPanel::drawContents() {
         ImGui::TextColored(stateCol, "%s", DebugSession::stateName(s.state));
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("pid %d on %s\n%s", s.pid, s.serial.c_str(), s.vm.c_str());
     } else {
+        ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("Not attached. Double-click a green process in Devices.");
     }
     if (!s.error.empty()) ui::wrappedColored(kError(), s.error);
+    ui::toolbarSeparator();
 
     // Threads, stack and locals in three columns with room to spare (the Debug
     // workspace), side by side when wide, stacked when narrow.
@@ -501,9 +503,12 @@ void DebuggerPanel::drawContents() {
             }
         }
         const float upperH = wide ? -bottomH : std::max(ui::em(8.f), (ImGui::GetContentRegionAvail().y - bottomH) * 0.3f);
-        ImGui::BeginChild("##dbgThreads", ImVec2(threeColumns ? availW * 0.30f : wide ? availW * 0.38f : 0.f, upperH),
-                          ImGuiChildFlags_Borders);
-        ImGui::TextColored(kAccent(), "Threads (%zu)", s.threads.size());
+        ImGui::BeginChild("##dbgThreads", ImVec2(threeColumns ? availW * 0.30f : wide ? availW * 0.38f : 0.f, upperH));
+        {
+            char heading[48];
+            std::snprintf(heading, sizeof heading, "Threads  %zu", s.threads.size());
+            ui::sectionHeader(heading);
+        }
         if (ImGui::BeginTable("##thr", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable)) {
             ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, ui::em(4.f));
@@ -521,10 +526,14 @@ void DebuggerPanel::drawContents() {
             ImGui::EndTable();
         }
         ImGui::EndChild();
-        if (wide) ImGui::SameLine();
-        ImGui::BeginChild("##dbgStack", ImVec2(threeColumns ? availW * 0.32f : 0.f, wide ? -bottomH : upperH * 2.f),
-                          ImGuiChildFlags_Borders);
-        ImGui::TextColored(kAccent(), "Call stack");
+        if (wide) {
+            ImGui::SameLine(0.f, ui::em(1.f));
+            ui::verticalDivider(-bottomH);
+        } else {
+            ui::horizontalDivider();
+        }
+        ImGui::BeginChild("##dbgStack", ImVec2(threeColumns ? availW * 0.32f : 0.f, wide ? -bottomH : upperH * 2.f));
+        ui::sectionHeader("Call stack");
         ImGui::BeginChild("##stack", ImVec2(0, threeColumns ? 0.f : ImGui::GetContentRegionAvail().y * 0.5f), ImGuiChildFlags_None,
                           ImGuiWindowFlags_HorizontalScrollbar);
         for (int i = 0; i < static_cast<int>(s.frames.size()); ++i) {
@@ -543,7 +552,7 @@ void DebuggerPanel::drawContents() {
                 if (ImGui::MenuItem("Open decompiled source")) {
                     const std::string cls = javaClassOf(f.method);
                     bool opened = false;
-                    for (Root* r : workspace_.decompiledRoots())
+                    for (Root const* r : workspace_.decompiledRoots())
                         if (workspace_.openSymbol(r->title, cls, {}, nullptr)) {
                             opened = true;
                             if (f.line > 0)
@@ -562,12 +571,13 @@ void DebuggerPanel::drawContents() {
         ImGui::EndChild();
         if (threeColumns) {
             ImGui::EndChild();
-            ImGui::SameLine();
-            ImGui::BeginChild("##dbgLocals", ImVec2(0, -bottomH), ImGuiChildFlags_Borders);
+            ImGui::SameLine(0.f, ui::em(1.f));
+            ui::verticalDivider(-bottomH);
+            ImGui::BeginChild("##dbgLocals", ImVec2(0, -bottomH));
         } else {
-            ImGui::Separator();
+            ui::horizontalDivider();
         }
-        ImGui::TextColored(kAccent(), "Locals");
+        ui::sectionHeader("Locals");
         if (!s.exception.empty()) {
             const std::string type = s.exceptionType.substr(s.exceptionType.find_last_of('.') + 1);
             ui::wrappedColored(kWarn(), type + " in " + shortMethod(s.exceptionAt) +
@@ -629,9 +639,10 @@ void DebuggerPanel::drawContents() {
     }
 
     // Breakpoints + events.
-    ImGui::BeginChild("##bps", ImVec2(wide ? ImGui::GetContentRegionAvail().x * 0.55f : 0.f, wide ? 0.f : bottomH),
-                      ImGuiChildFlags_Borders);
-    ImGui::TextColored(kAccent(), "Breakpoints");
+    if (attached) ui::horizontalDivider();
+    ImGui::BeginChild("##bps", ImVec2(wide ? ImGui::GetContentRegionAvail().x * 0.55f : 0.f, wide ? 0.f : bottomH));
+    ImGui::AlignTextToFramePadding();
+    ui::sectionHeader("Breakpoints");
     ImGui::SameLine();
     if (ui::smallButton("Add...")) ImGui::OpenPopup("##addbp");
     if (ImGui::BeginPopup("##addbp")) {
@@ -674,10 +685,18 @@ void DebuggerPanel::drawContents() {
         ui::wrappedColored(b.resolved ? kGood() : kDim(), where + "   hits " + std::to_string(b.hits) + " - " + b.status);
         ImGui::PopID();
     }
+    if (s.breakpoints.empty()) ImGui::TextDisabled("None yet. Add one here, or from a frame in the call stack.");
     ImGui::EndChild();
-    if (wide) ImGui::SameLine();
-    ImGui::BeginChild("##events", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    ImGui::TextColored(kAccent(), "Events");
+    if (wide) {
+        ImGui::SameLine(0.f, ui::em(1.f));
+        ui::verticalDivider();
+    } else {
+        ui::horizontalDivider();
+    }
+    ImGui::BeginChild("##events", ImVec2(0, 0));
+    ImGui::AlignTextToFramePadding();
+    ui::sectionHeader("Events");
+    if (s.events.empty()) ImGui::TextDisabled("Breakpoint hits, steps and class loads appear here.");
     for (const auto& e : s.events) ImGui::TextWrapped("%s", e.c_str());
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.f) ImGui::SetScrollHereY(1.f);
     ImGui::EndChild();
@@ -710,7 +729,7 @@ void LogcatPanel::drawContents() {
         selection_.reset();
     }
     if (ui::flowButton(paused_ ? "Continue" : "Pause")) paused_ = !paused_;
-    const char* levels[] = {"V", "D", "I", "W", "E", "F"};
+    const char* const levels[] = {"V", "D", "I", "W", "E", "F"};
     ui::sameLineIfFits(ui::em(3.5f));
     ImGui::SetNextItemWidth(ui::em(3.5f));
     ImGui::Combo("##lvl", &level_, levels, 6);
@@ -732,11 +751,8 @@ void LogcatPanel::drawContents() {
         }
         std::snprintf(text_, sizeof text_, "%s", words.c_str());
     }
-    if (serial.empty()) {
-        ImGui::TextDisabled("No device selected.");
-    } else if (!error_.empty()) {
-        ui::wrappedColored(kWarn(), error_);
-    }
+    if (!serial.empty() && !error_.empty()) ui::wrappedColored(kWarn(), error_);
+    ui::toolbarSeparator();
 
     // Rebuild the filtered view when the filter changed; otherwise append
     // only what arrived since the last frame (no per-frame full copy).
@@ -762,7 +778,11 @@ void LogcatPanel::drawContents() {
         }
     }
 
-    ImGui::BeginChild("##log", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::BeginChild("##log", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+    if (view_.empty()) {
+        if (serial.empty()) ui::emptyState("No device selected", "Pick a device in the Devices panel, then press Start.");
+        else if (!running) ui::emptyState("Logcat is stopped", "Press Start to stream the device log.");
+    }
     ImGui::PushFont(Theme::monoFont());
     const float rowH = ImGui::GetTextLineHeight();
     const auto rowText = [&](int i) {

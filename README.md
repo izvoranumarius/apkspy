@@ -39,7 +39,8 @@ To build from source:
 
 - [Getting started](docs/getting-started.md): setup, projects, workspaces, shortcuts
 - [Browsing code](docs/browsing-code.md): Explorer, editor, search, bookmarks, hex viewer
-- [Analysis](docs/analysis.md): bytecode, native code, graphs, resources, comparing APKs
+- [Analysis](docs/analysis.md): bytecode, native code, graphs, behavior graph, Java / smali sync, resources, comparing APKs
+- [Security](docs/security.md): security scanner, dependencies, licenses and known vulnerabilities
 - [Debugging and network](docs/debugging.md): devices, Logcat, debugger, traffic
 - [Scripting](docs/scripting.md): the `apkspy` Python module
 - [MCP server](docs/mcp.md): connect AI assistants

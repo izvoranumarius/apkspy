@@ -166,7 +166,7 @@ WindowFrame::WindowFrame(GLFWwindow* window) : window_(window) {
     SetPropW(hwnd, kProp, impl.get());
     impl->original = reinterpret_cast<WNDPROC>(
         SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&Impl::proc)));
-    MARGINS margins = {1, 1, 1, 1};
+    MARGINS const margins = {1, 1, 1, 1};
     DwmExtendFrameIntoClientArea(hwnd, &margins);
     SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                  SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -201,11 +201,9 @@ void WindowFrame::toggleMaximize() {
 
 void WindowFrame::close() { glfwSetWindowShouldClose(window_, GLFW_TRUE); }
 
-void WindowFrame::updateLayout(const FrameLayout& layout) {
+void WindowFrame::updateLayout([[maybe_unused]] const FrameLayout& layout) {
 #ifdef _WIN32
     if (impl_) impl_->layout = layout;
-#else
-    (void)layout;
 #endif
 }
 

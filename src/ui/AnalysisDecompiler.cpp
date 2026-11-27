@@ -16,6 +16,21 @@
 
 namespace {
 
+// "Lcom/a/Foo;->bar(ILjava/lang/String;)V" -> "Foo.bar(...)" for the panel header
+// (the full signature stays in the tooltip). Anything else is shown as is.
+std::string shortMethodTitle(const std::string& sig) {
+    const size_t arrow = sig.find("->");
+    if (sig.empty() || sig[0] != 'L' || arrow == std::string::npos) return sig;
+    std::string cls = sig.substr(1, sig.find(';') - 1);
+    cls = cls.substr(cls.rfind('/') + 1);
+    const size_t paren = sig.find('(', arrow);
+    std::string name = sig.substr(arrow + 2, paren == std::string::npos ? std::string::npos : paren - arrow - 2);
+    if (name == "<init>") name = cls;
+    else if (name == "<clinit>") return cls + " static {}";
+    const bool noArgs = paren != std::string::npos && paren + 1 < sig.size() && sig[paren + 1] == ')';
+    return cls + "." + name + (noArgs ? "()" : "(...)");
+}
+
 std::string addrText(const decompiler::Line& l, bool native) {
     std::string out;
     char b[32];
@@ -131,11 +146,10 @@ void AnalysisPanel::drawDecompiler() {
     }
     const bool following = decompKind_ != 0 && !(kind != decompKind_ || key != decompKey_ || owner != decompOwner_);
 
-    if (decompKind_ == 0) {
-        ImGui::TextDisabled("Select a method in Classes, or a function in Native.");
-    } else {
+    if (decompKind_ != 0) {
         ImGui::PushStyleColor(ImGuiCol_Text, theme::vec(Col::Info));
-        ImGui::TextUnformatted(decompTitle_.c_str());
+        ImGui::TextUnformatted(decompKind_ == 1 ? shortMethodTitle(decompTitle_).c_str() : decompTitle_.c_str());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", decompTitle_.c_str());
         ImGui::PopStyleColor();
         if (!following) {
             ImGui::SameLine();
@@ -206,9 +220,10 @@ void AnalysisPanel::drawDecompiler() {
     };
 
     // Bottom bar, as in Cutter: Auto Refresh, Refresh, shortcuts, engine.
-    const float barH = ImGui::GetFrameHeightWithSpacing();
+    const float barH = ImGui::GetFrameHeightWithSpacing() + ui::em(0.35f);
     ImGui::BeginChild("##decomp", ImVec2(0, -barH), ImGuiChildFlags_None,
                       ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoNavInputs);
+    if (decompKind_ == 0) ui::emptyState("Nothing to decompile", "Select a method in Classes, or a function in Native.");
     if (!decomp_.error.empty()) ImGui::TextColored(theme::vec(Col::Warning), "%s", decomp_.error.c_str());
     ImGui::PushFont(Theme::monoFont());
     const float lh = ImGui::GetTextLineHeightWithSpacing();
@@ -218,7 +233,7 @@ void AnalysisPanel::drawDecompiler() {
     // The code view owns these keys: ImGui's keyboard navigation must not move to the bar's buttons.
     if (focused && !ImGui::GetIO().WantTextInput) {
         const ImGuiID keyOwner = ImGui::GetID("##decompKeys");
-        for (ImGuiKey k : {ImGuiKey_UpArrow, ImGuiKey_DownArrow, ImGuiKey_LeftArrow, ImGuiKey_RightArrow, ImGuiKey_PageUp,
+        for (ImGuiKey const k : {ImGuiKey_UpArrow, ImGuiKey_DownArrow, ImGuiKey_LeftArrow, ImGuiKey_RightArrow, ImGuiKey_PageUp,
                            ImGuiKey_PageDown, ImGuiKey_Home, ImGuiKey_End, ImGuiKey_Enter, ImGuiKey_KeypadEnter, ImGuiKey_Space})
             ImGui::SetKeyOwner(k, keyOwner);
     }
@@ -282,7 +297,7 @@ void AnalysisPanel::drawDecompiler() {
             // Positions are measured on the text: the code font is not strictly monospaced ($, some symbols).
             const auto xOf = [&](size_t c) { return pos.x + ImGui::CalcTextSize(shown.data(), shown.data() + std::min(c, shown.size())).x; };
             if (!decompToken_.empty())
-                for (size_t at : decompiler::findIdentifier(shown, decompToken_))
+                for (size_t const at : decompiler::findIdentifier(shown, decompToken_))
                     dl->AddRectFilled(ImVec2(xOf(at), pos.y), ImVec2(xOf(at + decompToken_.size()), pos.y + ImGui::GetTextLineHeight()),
                                       theme::u32(Col::TextSelection));
             // The column under the mouse (for the cursor, highlighting and renaming): the nearest character boundary.
@@ -390,6 +405,7 @@ void AnalysisPanel::drawDecompiler() {
     ImGui::PopFont();
     ImGui::EndChild();
 
+    ui::toolbarSeparator();
     ImGui::Checkbox("Auto Refresh", &decompAuto_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Decompile whatever the Function panel shows");
     ImGui::SameLine();
@@ -402,7 +418,7 @@ void AnalysisPanel::drawDecompiler() {
     const float right = ImGui::GetWindowContentRegionMax().x;
     // The hint gets the room left of the engine label (which goes first when space runs out).
     const bool tokenSymbol = tokenKey.empty() && !decompToken_.empty() && !decompiler::symbolOfShown(decomp_, decompToken_, native).empty();
-    std::string hint = !decompStatus_.empty() ? decompStatus_
+    std::string const hint = !decompStatus_.empty() ? decompStatus_
                        : !tokenKey.empty()    ? decompToken_ + ": N rename, Y set type"
                        : tokenSymbol          ? decompToken_ + ": N rename everywhere"
                                               : "arrows / click: cursor, N rename, Y set type";
@@ -492,7 +508,7 @@ void AnalysisPanel::decompilerRenamePopup() {
 // Enter / double-click: a line holding a call goes to the called method / function.
 void AnalysisPanel::decompilerFollowCall(const decompiler::Line& line) {
     if (decompKind_ == 2 && native_) {
-        for (uint64_t a : line.addrs)
+        for (uint64_t const a : line.addrs)
             for (const NativeCode::Line& l : listing_)
                 if (l.insn.addr == a && l.insn.flow == arm64::Flow::Call && l.insn.hasTarget && native_->functionAt(l.insn.target)) {
                     gotoNative(l.insn.target);
@@ -506,7 +522,7 @@ void AnalysisPanel::decompilerFollowCall(const decompiler::Line& line) {
     const DexFile& dex = *a.dexes()[selMethod_.dex];
     DexFile::CodeItem code;
     if (!selMethod_.method.codeOff || !dex.codeItem(selMethod_.method.codeOff, code)) return;
-    for (uint64_t pc : line.addrs) {
+    for (uint64_t const pc : line.addrs) {
         if (pc >= code.insnsSize) continue;
         const dalvik::Insn in = dalvik::decode(code, static_cast<uint32_t>(pc));
         const auto& info = dalvik::opInfo(in.opcode);

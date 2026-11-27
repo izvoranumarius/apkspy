@@ -197,12 +197,10 @@ void TrafficPanel::drawRequests() {
     shownIds_.clear();
     for (const auto* f : shown) shownIds_.push_back(f->id);
     if (rows_.empty()) {
-        ImGui::PushTextWrapPos(0.f);
-        ImGui::TextDisabled(
-            "Press Start capture, then use the app. HTTP and (intercepted) HTTPS requests appear with headers and "
-            "bodies; HTTPS connections the proxy could not decrypt appear as tunnels with their host and size. "
-            "For HTTPS, install ApkSpy's CA on the device (HTTPS & certificates).");
-        ImGui::PopTextWrapPos();
+        ui::emptyState("No requests captured",
+                       "Start the proxy, then use the app. HTTP and decrypted HTTPS requests appear here with headers and bodies; "
+                       "connections the proxy cannot decrypt show as tunnels.\n"
+                       "For HTTPS, install ApkSpy's CA on the device (HTTPS & certificates).");
         return;
     }
 
@@ -234,7 +232,15 @@ void TrafficPanel::drawRequests() {
     }
 
     const bool hasDetail = selected_ != 0;
-    const float tableH = hasDetail ? ImGui::GetContentRegionAvail().y * 0.5f : 0.f;
+    // With a request open, the list takes what its rows need (at least six,
+    // at most half the height): a few requests no longer leave the headers
+    // and body of the open one below the fold.
+    float tableH = 0.f;
+    if (hasDetail) {
+        const float rowH = ImGui::GetTextLineHeight() + ImGui::GetStyle().CellPadding.y * 2.f;
+        const float rows = static_cast<float>(std::max<size_t>(shown.size(), 6)) + 1.f;  // + the header row
+        tableH = std::min(ImGui::GetContentRegionAvail().y * 0.5f, rows * rowH + ImGui::GetStyle().ItemSpacing.y);
+    }
     // The URL is what matters: secondary columns only when there is room for them next to a readable URL.
     const bool wide = ImGui::GetContentRegionAvail().x > ui::em(60.f);
     enum ColumnId { kTime, kMethod, kProto, kUrl, kStatus, kType, kSize, kMs, kNote };

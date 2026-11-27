@@ -12,6 +12,10 @@
 #include "backends/imgui_impl_opengl3.h"
 #include "imgui_internal.h"
 #include "ui/AnalysisPanel.hpp"
+#include "ui/BehaviorPanel.hpp"
+#include "ui/DiffPanel.hpp"
+#include "ui/SecurityPanel.hpp"
+#include "ui/DependenciesPanel.hpp"
 #include "ui/DevicePanels.hpp"
 #include "ui/FridaPanel.hpp"
 #include "ui/EditorPanel.hpp"
@@ -78,7 +82,7 @@ std::vector<ProjectApk> collectApks(const Workspace& workspace, const Project& p
 
 namespace {
 // Version of the default dock layout (see Settings::kLayoutVersion).
-constexpr int kLayoutVersion = 16;
+constexpr int kLayoutVersion = 20;
 }  // namespace
 
 Application::Application()
@@ -106,6 +110,10 @@ Application::Application()
     panels_.push_back(std::make_unique<FunctionPanel>(workspace_, *analysisPanel_));
     panels_.push_back(std::make_unique<ReferencesPanel>(workspace_, *analysisPanel_));
     panels_.push_back(std::make_unique<DecompilerPanel>(workspace_, *analysisPanel_));
+    panels_.push_back(std::make_unique<BehaviorPanel>(workspace_, show));
+    panels_.push_back(std::make_unique<DiffPanel>(workspace_, show));
+    panels_.push_back(std::make_unique<SecurityPanel>(workspace_, show));
+    panels_.push_back(std::make_unique<DependenciesPanel>(workspace_, settings_));
     panels_.push_back(std::make_unique<DevicesPanel>(workspace_, devices_, settings_, show));
     auto debugger = std::make_unique<DebuggerPanel>(workspace_, devices_);
     debuggerPanel_ = debugger.get();
@@ -134,10 +142,19 @@ Application::Application()
     palette_ = std::make_unique<CommandPalette>(workspace_);
     palette_->setCommands([this] { return paletteCommands(); });
     palette_->setShowEditor([this] { showPanel("Editor"); });
-    // The welcome page belongs to an empty window: with a project or an APK open, an
-    // editor without files stays blank.
+    // The welcome page belongs to an empty window. With a project or an APK open,
+    // an editor without files shows a quiet hint instead (an empty dock area
+    // otherwise reads as a broken layout).
     editor_->setWelcome([this] {
-        if (!project_.isOpen() && workspace_.roots().empty()) drawWelcome();
+        if (!project_.isOpen() && workspace_.roots().empty()) {
+            drawWelcome();
+            return;
+        }
+        std::string hint = "Open a file from the Explorer, or a class from Analysis.";
+        const std::string quick = shortcuts_.label("quick-open"), find = shortcuts_.label("find-in-project");
+        if (!quick.empty()) hint += "\n" + quick + "  go to file";
+        if (!find.empty()) hint += "\n" + find + "  find in project";
+        ui::emptyState("No file open", hint.c_str());
     });
     initPerspectives();
     loadSettings();
@@ -290,7 +307,7 @@ void Application::loadSettings() {
         resetAllLayouts_ = true;  // new panels: dock them into the default layouts once
         settings_.set(Settings::kLayoutVersion, kLayoutVersion);
     }
-    int count = settings_.getInt(Settings::kRecentCount, 0);
+    int const count = settings_.getInt(Settings::kRecentCount, 0);
     recents_.clear();
     for (int i = 0; i < count; ++i) {
         std::string path = settings_.getString(Settings::recentKey(i));
@@ -301,7 +318,7 @@ void Application::loadSettings() {
 
 void Application::restoreSession() {
     if (!settings_.getBool(Settings::kRestoreSession, true)) return;
-    std::string last = settings_.getString(Settings::kLastProject, "");
+    std::string const last = settings_.getString(Settings::kLastProject, "");
     if (last.empty()) return;
     std::error_code ec;
     if (!fs::exists(pathutil::fromUtf8(last), ec)) {
@@ -569,12 +586,20 @@ void Application::frame() {
     }
     if (!pendingTabs_.empty() && --pendingTabsDelay_ <= 0) {
         for (const std::string& name : pendingTabs_)
-            if (ImGuiWindow* window = ImGui::FindWindowByName(name.c_str()))
+            if (ImGuiWindow const* window = ImGui::FindWindowByName(name.c_str()))
                 if (window->DockNode && window->DockNode->TabBar) window->DockNode->TabBar->NextSelectedTabId = window->TabId;
         ImGui::SetWindowFocus(pendingTabs_.back().c_str());  // listed last: the workspace's main tool
         pendingTabs_.clear();
     }
     // Waits for a pending switch: the target window does not exist yet.
+    if (!pendingReveal_.empty() && pendingPerspective_ < 0 && !welcomeOnly_) {
+        for (const std::string& title : pendingReveal_) {
+            if (!perspective.shows(title)) continue;
+            ImGuiWindow* w = ImGui::FindWindowByName(perspective.windowName(title).c_str());
+            if (w && w->DockNode && w->DockNode->TabBar) w->DockNode->TabBar->NextSelectedTabId = w->TabId;
+        }
+        pendingReveal_.clear();
+    }
     if (!pendingFocusPanel_.empty() && pendingPerspective_ < 0 && !welcomeOnly_) {
         ImGui::SetWindowFocus(perspective.windowName(pendingFocusPanel_).c_str());
         pendingFocusPanel_.clear();
@@ -597,7 +622,7 @@ void Application::frame() {
         openProject(picked);
     if (projSaveBrowser_.render(), projSaveBrowser_.takeAccepted(picked)) {
         if (saveProjectAs(picked) && pendingAction_ != PendingAction::None) {
-            PendingAction action = pendingAction_;
+            PendingAction const action = pendingAction_;
             pendingAction_ = PendingAction::None;
             performAction(action, pendingOpenPath_);
         }
@@ -661,7 +686,7 @@ bool Application::projectHasUnsavedChanges() const {
     // missing from disk are unresolved: they stay in the project (and in
     // the saved file) and are excluded here, so a missing APK neither
     // flags the project as dirty forever nor gets dropped by a save.
-    std::vector<Root*> apks = workspace_.apkRoots();
+    std::vector<Root*> const apks = workspace_.apkRoots();
     size_t resolved = 0;
     std::error_code ec;
     for (const ProjectApk& apk : project_.apks()) {
@@ -734,7 +759,7 @@ void Application::drawProjectConfirm() {
         ImGui::CloseCurrentPopup();
         if (project_.hasPath()) {
             if (saveProject()) {
-                PendingAction action = pendingAction_;
+                PendingAction const action = pendingAction_;
                 pendingAction_ = PendingAction::None;
                 performAction(action, pendingOpenPath_);
             }
@@ -748,7 +773,7 @@ void Application::drawProjectConfirm() {
     ImGui::SameLine();
     if (ui::dialogButton("Don't Save")) {
         ImGui::CloseCurrentPopup();
-        PendingAction action = pendingAction_;
+        PendingAction const action = pendingAction_;
         pendingAction_ = PendingAction::None;
         performAction(action, pendingOpenPath_);
     }
@@ -865,7 +890,7 @@ void Application::addApkPaths(const std::vector<std::string>& requested) {
                        std::to_string(r.skipped) + " resource-only split(s) skipped");
     }
     for (const std::string& path : paths) {
-        std::string group = project_.uniqueGroupName(
+        std::string const group = project_.uniqueGroupName(
             pathutil::toUtf8(fs::path(pathutil::fromUtf8(path)).stem()));
         if (!workspace_.addApk(path, group)) continue;
         project_.addApk(pathutil::normalize(path), group);
@@ -910,7 +935,7 @@ void Application::drawRecentProjects() {
         } else {
             for (const std::string& path : recents_) {
                 std::error_code ec;
-                bool exists = fs::exists(pathutil::fromUtf8(path), ec);
+                bool const exists = fs::exists(pathutil::fromUtf8(path), ec);
                 const std::string label = pathutil::toUtf8(fs::path(pathutil::fromUtf8(path)).filename());
                 if (ImGui::MenuItem(label.c_str(), nullptr, false, exists))
                     requestAction(PendingAction::OpenProject, path);
@@ -1003,13 +1028,13 @@ void Application::updateTitle() {
 
 void Application::drawWindowBorder() {
     if (!titleBar_ || windowFrame_->maximized()) return;
-    ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImVec2 max(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y);
+    ImGuiViewport const* vp = ImGui::GetMainViewport();
+    ImVec2 const max(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y);
     ImGui::GetForegroundDrawList()->AddRect(vp->Pos, max, theme::u32(Col::Border));
 }
 
 void Application::drawDockHost() {
-    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGuiViewport const* vp = ImGui::GetMainViewport();
     ImVec2 hostPos = vp->WorkPos;
     ImVec2 hostSize = vp->WorkSize;
     if (titleBar_) {
@@ -1025,7 +1050,7 @@ void Application::drawDockHost() {
     ImGui::SetNextWindowPos(hostPos);
     ImGui::SetNextWindowSize(hostSize);
     ImGui::SetNextWindowViewport(vp->ID);
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+    ImGuiWindowFlags const flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
                              ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBackground |
                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
@@ -1069,17 +1094,28 @@ void Application::drawDockHost() {
 void Application::initPerspectives() {
     perspectives_ = {
         {"Code", "Browse the APK, read and search the sources", "Editor", {"Explorer", "Overview", "Editor", "Search", "Bookmarks", "Edits", "Output", "Terminal", "Decoder"}, {}},
-        {"Analysis", "Classes, native code, graphs, strings and resources", "Analysis", {"Analysis", "Function", "Decompiler", "Editor", "References", "Bookmarks", "Edits", "Insights", "Repack", "Decoder"}, {}},
+        {"Analysis", "Classes, native code, graphs, strings and resources", "Analysis", {"Analysis", "Function", "Behavior", "Diff", "Decompiler", "Editor", "References", "Bookmarks", "Edits", "Insights", "Repack", "Decoder"}, {}},
         {"Debug", "Attach to a process: threads, stack, locals and logs", "Debugger", {"Devices", "Debugger", "Editor", "Logcat", "Frida", "Terminal"}, {}},
         {"Network", "Capture the app's traffic and map its API", "Traffic", {"Traffic", "Logcat", "Terminal", "Decoder"}, {}},
         {"Scripts", "Automate ApkSpy with Python", "Script", {"Script", "Output", "Terminal"}, {}},
+        // Last, so the Ctrl+1.. shortcuts of the existing workspaces stay where they were.
+        {"Security", "Find vulnerabilities, secrets and risky dependencies", "Security", {"Security", "Dependencies", "Editor", "Output"}, {}},
     };
     std::vector<std::string> titles;
     for (const auto& panel : panels_) titles.push_back(panel->title());
     for (Perspective& p : perspectives_) p.resetVisibility(titles);
 }
 
-bool Application::showPanel(const std::string& title) {
+bool Application::showPanel(const std::string& request) {
+    // "reveal:<title>": select the panel's tab in its dock, leave focus alone
+    // (e.g. the Decompiler beside a listing the user keeps typing in).
+    if (request.rfind("reveal:", 0) == 0) {
+        const std::string title = request.substr(7);
+        const bool exists = std::any_of(panels_.begin(), panels_.end(), [&](const auto& p) { return p->title() == title; });
+        if (exists) pendingReveal_.push_back(title);
+        return exists;
+    }
+    const std::string& title = request;
     const bool known = std::any_of(panels_.begin(), panels_.end(), [&](const auto& p) { return p->title() == title; });
     if (!known) return false;
     const int current = pendingPerspective_ >= 0 ? pendingPerspective_ : activePerspective_;
@@ -1123,7 +1159,7 @@ void Application::drawStatusBar() {
     if (jadx.state() == JadxRunner::State::Running)
         activity = jadx.totalCount() > 0 ? "Decompiling " + std::to_string(jadx.processedCount()) + " / " + std::to_string(jadx.totalCount())
                                          : "Decompiling...";
-    for (Root* r : workspace_.apkRoots()) {
+    for (Root const* r : workspace_.apkRoots()) {
         const AnalysisService::Status st = workspace_.analysis().status(r->title);
         if (st.state != AnalysisService::State::Running) continue;
         activity += (activity.empty() ? "" : "   ") + std::string("Analyzing ") + std::to_string(st.done) + " / " + std::to_string(st.total);
@@ -1189,7 +1225,7 @@ void Application::drawStatusBar() {
     }
     if (clicked) {
         Perspective& p = perspectives_[static_cast<size_t>(activePerspective_)];
-        ImGuiWindow* output = ImGui::FindWindowByName(p.windowName("Output").c_str());
+        ImGuiWindow const* output = ImGui::FindWindowByName(p.windowName("Output").c_str());
         if (p.shows("Output") && output && GImGui->NavWindow == output) {
             p.visible["Output"] = false;
         } else {
@@ -1213,10 +1249,14 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
     if (p.name == "Analysis") {
         // As in Cutter: navigator | listing / graph over References | Decompiler (Java source as a tab).
         side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.22f, nullptr, &rest);
-        ImGuiID right = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.42f, nullptr, &rest);
+        // Listing (centre) and Java / decompiled code (right) share the width:
+        // Java sync reads them side by side, so neither should be a sliver.
+        ImGuiID const right = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.5f, nullptr, &rest);
         bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 0.30f, nullptr, &main);
         dock("Analysis", side);
         dock("Function", main);
+        dock("Behavior", main);
+        dock("Diff", main);
         dock("Decompiler", right);
         dock("Editor", right);
         dock("References", bottom);
@@ -1226,9 +1266,18 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
         dock("Repack", bottom);
         dock("Decoder", bottom);
         select("Function"), select("Decompiler"), select("References");
+    } else if (p.name == "Security") {
+        // Findings in the centre, the code they point to on the right.
+        ImGuiID const right = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Right, 0.40f, nullptr, &rest);
+        bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 0.22f, nullptr, &main);
+        dock("Security", main);
+        dock("Dependencies", main);
+        dock("Editor", right);
+        dock("Output", bottom);
+        select("Security");
     } else if (p.name == "Debug") {
         side = ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.17f, nullptr, &rest);
-        ImGuiID editor = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.30f, nullptr, &rest);
+        ImGuiID const editor = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Right, 0.30f, nullptr, &rest);
         bottom = ImGui::DockBuilderSplitNode(rest, ImGuiDir_Down, 0.24f, nullptr, &main);
         dock("Devices", side);
         dock("Debugger", main);
@@ -1273,14 +1322,14 @@ void Application::buildLayout(const Perspective& p, unsigned int dockId, ImVec2 
 std::string Application::projectFolder() const {
     if (project_.isOpen() && !project_.path().empty())
         return pathutil::toUtf8(pathutil::fromUtf8(project_.path()).parent_path());
-    for (Root* r : workspace_.apkRoots())
+    for (Root const* r : workspace_.apkRoots())
         if (!r->apkPath.empty()) return pathutil::toUtf8(pathutil::fromUtf8(r->apkPath).parent_path());
     return {};
 }
 
 void Application::toggleTerminal() {
     Perspective& p = perspectives_[static_cast<size_t>(activePerspective_)];
-    ImGuiWindow* window = ImGui::FindWindowByName(p.windowName("Terminal").c_str());
+    ImGuiWindow const* window = ImGui::FindWindowByName(p.windowName("Terminal").c_str());
     // Focused terminal: hide it (as Ctrl+` does in VS Code); otherwise show and focus it.
     const bool focused = window && GImGui->NavWindow && GImGui->NavWindow->RootWindow == window;
     if (p.shows("Terminal") && focused) {

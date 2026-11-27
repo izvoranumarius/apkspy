@@ -34,9 +34,9 @@ int resizeText(ImGuiInputTextCallbackData* data) {
 }
 
 // A plain file name: script names can never leave the scripts folder.
-std::string cleanName(std::string name) {
+std::string cleanName(const std::string& name) {
     std::string out;
-    for (char c : name)
+    for (char const c : name)
         if (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-') out.push_back(c);
         else if (c == '.' && out.find('.') == std::string::npos) break;
     return out.empty() ? out : out + ".py";
@@ -56,7 +56,7 @@ void ScriptPanel::refreshFiles() {
 }
 
 void ScriptPanel::openFile(const std::string& name) {
-    std::ifstream in(scriptsDir() / pathutil::fromUtf8(name), std::ios::binary);
+    std::ifstream const in(scriptsDir() / pathutil::fromUtf8(name), std::ios::binary);
     if (!in) {
         report("Error: cannot open " + name);
         return;
@@ -200,18 +200,27 @@ void ScriptPanel::drawSource() {
     std::snprintf(widest, sizeof widest, "%zu", std::max<size_t>(lineStarts_.size(), 100));
     const float gutter = numbered ? ImGui::CalcTextSize(widest).x + ui::em(1.f) : 0.f;
     if (numbered) {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + gutter, p.y + ImGui::GetContentRegionAvail().y),
+                                                  theme::u32(Col::EditorBackground));
         ImGui::Dummy(ImVec2(gutter, ImGui::GetContentRegionAvail().y));
         ImGui::SameLine(0.f, 0.f);
     }
 
+    // The text box is invisible (the highlighted copy is drawn over it) and on
+    // the editor background, so gutter and code read as one editor surface.
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 0.f));
+    const ImVec4 editorBg = theme::vec(Col::EditorBackground);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, editorBg);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, editorBg);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, editorBg);
     if (ImGui::InputTextMultiline("##source", text_.data(), text_.capacity() + 1, ImVec2(-FLT_MIN, -FLT_MIN),
                                   ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackResize, resizeText, &text_)) {
         dirty_ = true;
         lastEdit_ = ImGui::GetTime();
         linesStale_ = true;
     }
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(4);
 
     const size_t size = std::strlen(text_.c_str());  // the active input can leave the string longer
     const std::string_view all(text_.c_str(), size);
@@ -233,7 +242,7 @@ void ScriptPanel::drawSource() {
     // The input's inner child window, named by BeginChildEx: see EditorPanel::drawEditable.
     char childName[256];
     std::snprintf(childName, sizeof childName, "%s/##source_%08X", ImGui::GetCurrentWindow()->Name, id);
-    ImGuiWindow* input = ImGui::FindWindowByName(childName);
+    ImGuiWindow const* input = ImGui::FindWindowByName(childName);
     if (input) {
         const ImVec2 frameMin = ImGui::GetItemRectMin(), frameMax = ImGui::GetItemRectMax();
         const ImGuiStyle& style = ImGui::GetStyle();
@@ -329,7 +338,7 @@ void ScriptPanel::drawContents() {
 
     const float availableW = ImGui::GetContentRegionAvail().x;
     const bool sideBySide = availableW > ui::em(36.f);
-    ImGui::BeginChild("##scripts", sideBySide ? ImVec2(ui::em(11.f), 0) : ImVec2(0, ui::em(5.f)), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##scripts", sideBySide ? ImVec2(ui::em(11.f), 0) : ImVec2(0, ui::em(5.f)));
     const std::vector<std::string> plugins = pluginNames();
     for (const std::string& name : files_) {
         const std::string label = name + (name == current_ && dirty_ ? " *" : "");
@@ -345,7 +354,12 @@ void ScriptPanel::drawContents() {
         }
     }
     ImGui::EndChild();
-    if (sideBySide) ImGui::SameLine();
+    if (sideBySide) {
+        ImGui::SameLine(0.f, ui::em(1.f));
+        ui::verticalDivider();
+    } else {
+        ui::horizontalDivider();
+    }
 
     drawSource();
 }

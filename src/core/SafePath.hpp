@@ -41,15 +41,15 @@ inline bool isReservedDevice(std::string_view stem) {
 inline bool segment(std::string_view name, std::string& out) {
     out.clear();
     if (name.empty()) return false;
-    for (char c : name) {
-        unsigned char u = static_cast<unsigned char>(c);
+    for (char const c : name) {
+        unsigned char const u = static_cast<unsigned char>(c);
         if (u < 0x20 || u == 0x7F || c == '\\' || c == ':') out += '_';
         else out += c;
     }
     // Dots-only segments ("." / ".." / "...") must never survive: they are
     // the zip-slip vehicle.
     bool onlyDots = true;
-    for (char c : out)
+    for (char const c : out)
         if (c != '.') { onlyDots = false; break; }
     if (onlyDots) {
         out.assign(out.size(), '_');
@@ -76,7 +76,7 @@ inline bool relativePath(std::string_view archivePath, std::string& out) {
     size_t start = 0;
     std::string seg;
     while (start <= archivePath.size()) {
-        size_t slash = archivePath.find('/', start);
+        size_t const slash = archivePath.find('/', start);
         const bool last = slash == std::string_view::npos;
         const std::string_view part = archivePath.substr(start, last ? std::string_view::npos : slash - start);
         start = last ? archivePath.size() + 1 : slash + 1;

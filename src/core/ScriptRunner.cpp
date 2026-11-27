@@ -27,7 +27,7 @@ bool ScriptRunner::start(const std::vector<std::string>& argv, std::string& erro
         return false;
     }
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> const lock(mutex_);
         kill_ = child.killHandle();
         killable_ = true;
         dropped_ = 0;
@@ -36,7 +36,7 @@ bool ScriptRunner::start(const std::vector<std::string>& argv, std::string& erro
     running_ = true;
     worker_ = std::thread([this, child = std::move(child)]() mutable {
         child.readAll([this](std::string line) {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             if (output_.size() >= kMaxQueuedLines) {
                 output_.pop_front();
                 ++dropped_;
@@ -46,7 +46,7 @@ bool ScriptRunner::start(const std::vector<std::string>& argv, std::string& erro
         const int code = child.waitForExit();
         {
             // After this nobody uses the handle: the process object may go away.
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> const lock(mutex_);
             killable_ = false;
         }
         exitCode_ = code;
@@ -56,12 +56,12 @@ bool ScriptRunner::start(const std::vector<std::string>& argv, std::string& erro
 }
 
 void ScriptRunner::stop() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     if (killable_) ChildProcess::killByHandle(kill_);
 }
 
 std::vector<std::string> ScriptRunner::takeOutput() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> const lock(mutex_);
     std::vector<std::string> lines;
     if (dropped_) {
         lines.push_back("... " + std::to_string(dropped_) + " lines dropped ...");
@@ -199,7 +199,7 @@ bool writeFile(const fs::path& path, const std::string& text, std::string& error
 
 std::string jsonString(const std::string& s) {
     std::string out = "\"";
-    for (char c : s) {
+    for (char const c : s) {
         if (c == '"' || c == '\\') out.push_back('\\');
         out.push_back(c);
     }

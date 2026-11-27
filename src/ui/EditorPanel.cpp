@@ -78,13 +78,20 @@ void EditorPanel::drawContents() {
     auto& docs = workspace_.documents();
     if (docs.empty()) {
         if (welcome_) welcome_();
-        else ImGui::TextDisabled("Open a file from the Explorer, or a class from Analysis.");
+        else ui::emptyState("No file open", "Open a file from the Explorer, or a class from Analysis.");
         return;
     }
     Document* focus = workspace_.takeFocusRequest();
     ImGuiTabBarFlags barFlags = ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_AutoSelectNewTabs |
                                 ImGuiTabBarFlags_FittingPolicyScroll;
     Document* promoted = nullptr;
+    const ImVec4 docBg = Theme::editorBackground();
+    ImGui::PushStyleColor(ImGuiCol_Tab, docBg);
+    ImGui::PushStyleColor(ImGuiCol_TabDimmed, docBg);
+    ImGui::PushStyleColor(ImGuiCol_TabHovered, theme::vec(Col::RowHover));
+    ImGui::PushStyleColor(ImGuiCol_TabSelected, theme::vec(Col::RowHover));
+    ImGui::PushStyleColor(ImGuiCol_TabDimmedSelected, theme::vec(Col::RowHover));
+    // Tab colours are read as each tab is drawn: they stay pushed until the bar ends.
     if (ImGui::BeginTabBar("##documents", barFlags)) {
         for (auto& doc : docs) {
             ImGuiTabItemFlags flags = doc.get() == focus ? ImGuiTabItemFlags_SetSelected : 0;
@@ -139,6 +146,7 @@ void EditorPanel::drawContents() {
         }
         ImGui::EndTabBar();
     }
+    ImGui::PopStyleColor(5);
     if (promoted) workspace_.promoteDocument(promoted);
 
     // Menu-triggered find / go-to-line (View > Find..., Ctrl+G from the menu
@@ -445,6 +453,7 @@ void EditorPanel::drawCode(Document& doc) {
                 if (right || (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyCtrl)) {
                     lineDoc_ = &doc;
                     line_ = i;
+                    workspace_.setEditorCursor(&doc, i);  // Java <-> smali sync follows it
                 }
                 if (right) ImGui::OpenPopup("##lineMenu");
             }
@@ -746,8 +755,7 @@ void EditorPanel::processShortcuts(Document& doc) {
     }
 }
 
-void EditorPanel::openFind(Document& doc, FindState& f) {
-    (void)doc;
+void EditorPanel::openFind(Document& /*doc*/, FindState& f) {
     f.open = true;
     f.focusInput = true;
     // Prefill with the editor selection (single line, captured while it was

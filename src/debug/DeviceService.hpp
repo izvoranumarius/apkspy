@@ -127,7 +127,7 @@ public:
     bool waitIdle(int timeoutMs);
 
 private:
-    void doAttach(std::string serial, int pid);
+    void doAttach(const std::string& serial, int pid);
     void doDetach(bool keepError);
     void loadThreads();
     void loadFrames(Id thread);

@@ -9,7 +9,7 @@
 
 namespace fs = std::filesystem;
 
-void ExportJob::start(std::string destDir, std::vector<Item> items, bool decoded) {
+void ExportJob::start(const std::string& destDir, std::vector<Item> items, bool decoded) {
     items_ = std::move(items);
     next_ = 0;
     done_ = 0;

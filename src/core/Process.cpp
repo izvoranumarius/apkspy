@@ -15,6 +15,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "core/UniqueHandle.hpp"
 #else
 #include <cerrno>
 #include <fcntl.h>
@@ -83,10 +84,11 @@ ChildProcess ChildProcess::spawn(const std::vector<std::string>& argv) {
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof sa;
     sa.bInheritHandle = TRUE;
-    HANDLE readEnd = nullptr, writeEnd = nullptr;
-    if (!CreatePipe(&readEnd, &writeEnd, &sa, 0)) return proc;
+    HANDLE rawRead = nullptr, rawWrite = nullptr;
+    if (!CreatePipe(&rawRead, &rawWrite, &sa, 0)) return proc;
+    UniqueHandle readEnd(rawRead), writeEnd(rawWrite);
     // The parent's read end must not leak into the child.
-    SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(readEnd.get(), HANDLE_FLAG_INHERIT, 0);
 
     std::wstring cmdline;
     if (isBatchFile(argv[0])) {
@@ -106,26 +108,23 @@ ChildProcess ChildProcess::spawn(const std::vector<std::string>& argv) {
 
     // stdin is the null device: a child waiting for input must never hang
     // on a pipe nobody writes to.
-    HANDLE nul = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0,
-                             nullptr);
+    UniqueHandle nul = adoptFileHandle(CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                                                   OPEN_EXISTING, 0, nullptr));
     STARTUPINFOW si{};
     si.cb = sizeof si;
     si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdOutput = writeEnd;
-    si.hStdError = writeEnd;
-    si.hStdInput = nul != INVALID_HANDLE_VALUE ? nul : nullptr;
+    si.hStdOutput = writeEnd.get();
+    si.hStdError = writeEnd.get();
+    si.hStdInput = nul.get();
     PROCESS_INFORMATION pi{};
     std::vector<wchar_t> buf(cmdline.begin(), cmdline.end());
     buf.push_back(0);
     // Created suspended so it is inside the job before it can spawn children.
     BOOL ok = CreateProcessW(nullptr, buf.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
                              nullptr, nullptr, &si, &pi);
-    CloseHandle(writeEnd);  // the child holds its own copy now
-    if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
-    if (!ok) {
-        CloseHandle(readEnd);
-        return proc;
-    }
+    writeEnd.reset();  // the child holds its own copy now
+    nul.reset();
+    if (!ok) return proc;
     // Put the child into a job object so cancellation takes down the whole
     // tree (jadx.bat runs cmd.exe -> java), and so closing the job (our
     // destructor, or a crash of ApkSpy) never leaves orphans behind.
@@ -138,7 +137,7 @@ ChildProcess ChildProcess::spawn(const std::vector<std::string>& argv) {
     }
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
-    proc.readPipe_ = readEnd;
+    proc.readPipe_ = readEnd.release();
     proc.process_ = pi.hProcess;
     proc.job_ = job;
     proc.valid_ = true;
