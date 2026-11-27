@@ -347,6 +347,8 @@
     <ClCompile Include="..\src\analysis\Abi.cpp" />
     <ClCompile Include="..\src\analysis\Interpreter.cpp" />
     <ClCompile Include="..\src\analysis\EmuCrypto.cpp" />
+    <ClCompile Include="..\src\analysis\Mapping.cpp" />
+    <ClCompile Include="..\src\analysis\Insights.cpp" />
     <ClCompile Include="..\src\analysis\X86.cpp" />
     <ClCompile Include="..\src\analysis\KotlinMetadata.cpp" />
     <ClCompile Include="..\src\debug\FridaBridge.cpp" />

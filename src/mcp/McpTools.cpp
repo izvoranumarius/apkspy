@@ -513,7 +513,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             std::snprintf(id, sizeof id, "0x%08X", it.id);
                             Json j = Json::obj({{"id", id}, {"type", it.type}, {"name", it.name}});
                             if (it.complex) j.set("complex", true);
-                            else j.set("value", json::sanitizeUtf8(it.value));
+                            j.set("value", json::sanitizeUtf8(it.value));
                             if (it.configs > 1) j.set("configs", it.configs);
                             list.push(std::move(j));
                         }
@@ -981,7 +981,9 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             if (a.kind == Annotation::Kind::Symbol) symbols.emplace_back(a.context, a.text);
                             else (a.kind == Annotation::Kind::Rename ? renames : retypes)[a.path].emplace_back(a.context, a.text);
                         }
-                        return McpToolOutcome::later([analysis, args, renames, retypes, symbols](McpToolContext&) {
+                        const auto mappingNames = ws.mappingShared();
+                        const auto resources = ws.resources(apk->title);
+                        return McpToolOutcome::later([analysis, args, renames, retypes, symbols, mappingNames, resources](McpToolContext&) {
                             const ApkAnalysis& a = *analysis;
                             std::vector<ApkAnalysis::MethodDef> defs;
                             std::string cls, name, proto, e;
@@ -989,7 +991,7 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             const bool withPcs = argBool(args, "with_pcs", false);
                             Json list = Json::array();
                             for (const auto& m : defs) {
-                                decompiler::Output out = decompiler::decompileMethod(a, m);
+                                decompiler::Output out = decompiler::decompileMethod(a, m, {mappingNames.get(), resources.get()});
                                 const std::string sig = a.methodSignature(m);
                                 const auto it = renames.find(sig);
                                 const auto ty = retypes.find(sig);
@@ -1528,9 +1530,10 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                });
 
     server.addTool({"decompile_native", "Decompile native code (built-in)",
-                    "C-like pseudo-code of an arm64-v8a function (AArch64 only; other ABIs report so) from ApkSpy's built-in decompiler (the Decompiler panel's "
+                    "C-like pseudo-code of a native function (arm64-v8a, armeabi-v7a, x86 or x86_64) from ApkSpy's built-in decompiler (the Decompiler panel's "
                     "output, with the user's variable names - see rename_variable): calls named, adrp pairs resolved "
-                    "to strings / symbols, frame setup hidden, control flow structured into if / while / switch.",
+                    "to strings / symbols, frame setup hidden, control flow structured into if / while / switch. Instructions without a "
+                    "translation appear as __mnemonic(...).",
                     schema::object({{"apk", apkArg()},
                                     {"path", str("Library entry, e.g. lib/arm64-v8a/libfoo.so (see list_native_libs)")},
                                     {"function", str("Function name or 0x address inside it")}},
@@ -1834,7 +1837,8 @@ void registerApkSpyTools(McpServer& server, const McpToolEnv& env) {
                             if (defs.size() != 1) return McpToolResult::error("several overloads: give the full signature with its proto");
                             r.target = Annotation::Target::Method;
                             r.path = analysis->methodSignature(defs.front());
-                            current = decompiler::decompileMethod(*analysis, defs.front());
+                            const auto resources = ws.resources(apk->title);
+                            current = decompiler::decompileMethod(*analysis, defs.front(), {ws.mapping(), resources.get()});
                             decompiled = true;
                             bool present = false;
                             for (const auto& l : current.lines) present = present || !decompiler::findIdentifier(l.text, variable).empty();

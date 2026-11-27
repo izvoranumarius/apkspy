@@ -1,5 +1,6 @@
 #include "analysis/NativeCode.hpp"
 #include <algorithm>
+#include <map>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -417,60 +418,60 @@ void NativeCode::sweep(const std::atomic<bool>* cancel) {
     refs_.shrink_to_fit();
 }
 
-// PLT stubs named after the import their GOT slot is relocated for ("strlen@plt").
-void NativeCode::discoverPlt(std::vector<Function>& fns) const {
-    const auto gotName = [&](uint64_t got, std::string& name) {
-        auto it = std::lower_bound(gotNames_.begin(), gotNames_.end(), std::make_pair(got, std::string()));
-        if (it == gotNames_.end() || it->first != got) return false;
-        name = it->second;
-        return true;
-    };
-    for (const auto& sec : elf_->sections()) {
-        if (sec.name != ".plt" && sec.name != ".plt.sec" && sec.name != ".plt.got") continue;
-        std::string name;
-        if (isa_ == Isa::Arm64) {  // adrp x16, page ; ldr x17, [x16, #off]
-            for (uint64_t a = sec.addr; a + 8 <= sec.addr + sec.size; a += 4) {
-                uint32_t w1 = 0, w2 = 0;
-                if (!readWord(a, w1) || !readWord(a + 4, w2)) break;
-                if ((w1 & 0x9f00001f) != 0x90000010 || (w2 & 0xffc003ff) != 0xf9400211) continue;
-                const arm64::Insn page = arm64::decode(w1, a);
-                const uint64_t got = page.target + (((w2 >> 10) & 0xfff) << 3);
-                if (!gotName(got, name)) continue;
-                Function f;
-                f.addr = a;
-                f.size = 16;
-                f.name = name + "@plt";
-                f.kind = FunctionKind::Plt;
-                fns.push_back(std::move(f));
-                a += 12;
-            }
-        } else if (isa_ == Isa::Arm32) {  // add ip, pc, #a ; add ip, ip, #b ; ldr pc, [ip, #c]!
-            const auto imm = [](uint32_t w) {
-                const uint32_t v = w & 0xff, rot = ((w >> 8) & 0xf) * 2;
-                return rot ? (v >> rot) | (v << (32 - rot)) : v;
-            };
-            for (uint64_t a = sec.addr; a + 12 <= sec.addr + sec.size; a += 4) {
-                uint32_t w1 = 0, w2 = 0, w3 = 0;
-                if (!readWord(a, w1) || !readWord(a + 4, w2) || !readWord(a + 8, w3)) break;
-                if ((w1 & 0xfffff000) != 0xe28fc000 || (w2 & 0xfffff000) != 0xe28cc000 || (w3 & 0xfffff000) != 0xe5bcf000) continue;
-                const uint64_t got = (a + 8 + imm(w1) + imm(w2) + (w3 & 0xfff)) & 0xffffffffull;
-                if (!gotName(got, name)) continue;
-                Function f;
-                f.addr = a;
-                f.size = 12;
-                f.name = name + "@plt";
-                f.kind = FunctionKind::Plt;
-                fns.push_back(std::move(f));
-                a += 8;
-            }
+// PLT stubs named after the import their GOT slot is relocated for ("strlen@plt").
+void NativeCode::discoverPlt(std::vector<Function>& fns) const {
+    const auto gotName = [&](uint64_t got, std::string& name) {
+        auto it = std::lower_bound(gotNames_.begin(), gotNames_.end(), std::make_pair(got, std::string()));
+        if (it == gotNames_.end() || it->first != got) return false;
+        name = it->second;
+        return true;
+    };
+    for (const auto& sec : elf_->sections()) {
+        if (sec.name != ".plt" && sec.name != ".plt.sec" && sec.name != ".plt.got") continue;
+        std::string name;
+        if (isa_ == Isa::Arm64) {  // adrp x16, page ; ldr x17, [x16, #off]
+            for (uint64_t a = sec.addr; a + 8 <= sec.addr + sec.size; a += 4) {
+                uint32_t w1 = 0, w2 = 0;
+                if (!readWord(a, w1) || !readWord(a + 4, w2)) break;
+                if ((w1 & 0x9f00001f) != 0x90000010 || (w2 & 0xffc003ff) != 0xf9400211) continue;
+                const arm64::Insn page = arm64::decode(w1, a);
+                const uint64_t got = page.target + (((w2 >> 10) & 0xfff) << 3);
+                if (!gotName(got, name)) continue;
+                Function f;
+                f.addr = a;
+                f.size = 16;
+                f.name = name + "@plt";
+                f.kind = FunctionKind::Plt;
+                fns.push_back(std::move(f));
+                a += 12;
+            }
+        } else if (isa_ == Isa::Arm32) {  // add ip, pc, #a ; add ip, ip, #b ; ldr pc, [ip, #c]!
+            const auto imm = [](uint32_t w) {
+                const uint32_t v = w & 0xff, rot = ((w >> 8) & 0xf) * 2;
+                return rot ? (v >> rot) | (v << (32 - rot)) : v;
+            };
+            for (uint64_t a = sec.addr; a + 12 <= sec.addr + sec.size; a += 4) {
+                uint32_t w1 = 0, w2 = 0, w3 = 0;
+                if (!readWord(a, w1) || !readWord(a + 4, w2) || !readWord(a + 8, w3)) break;
+                if ((w1 & 0xfffff000) != 0xe28fc000 || (w2 & 0xfffff000) != 0xe28cc000 || (w3 & 0xfffff000) != 0xe5bcf000) continue;
+                const uint64_t got = (a + 8 + imm(w1) + imm(w2) + (w3 & 0xfff)) & 0xffffffffull;
+                if (!gotName(got, name)) continue;
+                Function f;
+                f.addr = a;
+                f.size = 12;
+                f.name = name + "@plt";
+                f.kind = FunctionKind::Plt;
+                fns.push_back(std::move(f));
+                a += 8;
+            }
             // Thumb PLT (lld): movw r12, #lo ; movt r12, #hi ; add r12, pc ; ldr.w pc, [r12]
             for (uint64_t a = sec.addr; a + 12 <= sec.addr + sec.size; a += 2) {
                 native::Insn i1 = decodeAt(a, true);
                 if (i1.size != 4 || i1.mnemonic != "movw" || i1.operands.compare(0, 4, "r12,") != 0) continue;
                 native::Insn i2 = decodeAt(a + 4, true), i3 = decodeAt(a + 8, true);
                 if (i2.size != 4 || i2.mnemonic != "movt" || i3.mnemonic != "add" || i3.operands != "r12, pc") continue;
-                const auto imm = [](const native::Insn& i) { return static_cast<uint32_t>(std::strtoul(i.operands.c_str() + i.operands.find('#') + 1, nullptr, 0)); };
-                const uint64_t got = (static_cast<uint64_t>(imm(i1) | (imm(i2) << 16)) + a + 8 + 4) & 0xffffffffull;
+                const auto immOf = [](const native::Insn& i) { return static_cast<uint32_t>(std::strtoul(i.operands.c_str() + i.operands.find('#') + 1, nullptr, 0)); };
+                const uint64_t got = (static_cast<uint64_t>(immOf(i1) | (immOf(i2) << 16)) + a + 8 + 4) & 0xffffffffull;
                 if (!gotName(got, name)) continue;
                 Function f;
                 f.addr = a;
@@ -481,31 +482,31 @@ void NativeCode::discoverPlt(std::vector<Function>& fns) const {
                 fns.push_back(std::move(f));
                 a += 14;
             }
-        } else {  // x86 / x86-64: an indirect jump through the GOT slot, in a 16-byte entry (8 in .plt.got)
-            const uint64_t entry = sec.name == ".plt.got" ? 8 : 16;
-            for (uint64_t a = sec.addr; a < sec.addr + sec.size;) {
-                const native::Insn in = decodeAt(a, false);
-                if (in.size == 0) break;
-                uint64_t got = 0;
-                bool ok = false;
-                if (in.flow == native::Flow::IndirectJump) {
-                    if (isa_ == Isa::X86_64 && in.memTarget) got = in.target, ok = true;
-                    else if (isa_ == Isa::X86 && in.baseReg == 3 && gotBase_) got = (gotBase_ + static_cast<uint64_t>(in.offset)) & 0xffffffffull, ok = true;
-                }
-                if (ok && gotName(got, name)) {
-                    Function f;
-                    f.addr = a - (a - sec.addr) % entry;
-                    f.size = entry;
-                    f.name = name + "@plt";
-                    f.kind = FunctionKind::Plt;
-                    fns.push_back(std::move(f));
-                }
-                a += in.size;
-            }
-        }
-    }
-}
-
+        } else {  // x86 / x86-64: an indirect jump through the GOT slot, in a 16-byte entry (8 in .plt.got)
+            const uint64_t entry = sec.name == ".plt.got" ? 8 : 16;
+            for (uint64_t a = sec.addr; a < sec.addr + sec.size;) {
+                const native::Insn in = decodeAt(a, false);
+                if (in.size == 0) break;
+                uint64_t got = 0;
+                bool ok = false;
+                if (in.flow == native::Flow::IndirectJump) {
+                    if (isa_ == Isa::X86_64 && in.memTarget) got = in.target, ok = true;
+                    else if (isa_ == Isa::X86 && in.baseReg == 3 && gotBase_) got = (gotBase_ + static_cast<uint64_t>(in.offset)) & 0xffffffffull, ok = true;
+                }
+                if (ok && gotName(got, name)) {
+                    Function f;
+                    f.addr = a - (a - sec.addr) % entry;
+                    f.size = entry;
+                    f.name = name + "@plt";
+                    f.kind = FunctionKind::Plt;
+                    fns.push_back(std::move(f));
+                }
+                a += in.size;
+            }
+        }
+    }
+}
+
 void NativeCode::discoverFunctions() {
     const auto inCode = [this](uint64_t a) {
         for (const Range& r : code_)
@@ -716,12 +717,20 @@ std::vector<NativeCode::Line> NativeCode::disassemble(uint64_t start, uint64_t e
     return isa_ == Isa::Arm64 ? disassembleArm64(start, end, maxInsns) : disassembleGeneric(start, end, maxInsns);
 }
 
+namespace {
+size_t boundBefore(const std::vector<NativeCode::Line>& lines, size_t at, std::string* compared = nullptr);
+}  // namespace
+
 std::vector<NativeCode::Line> NativeCode::disassembleGeneric(uint64_t start, uint64_t end, size_t maxInsns) const {
     std::vector<Line> out;
     DataState st;
     uint64_t a = isa_ == Isa::Arm32 ? start & ~1ull : start;
+    // Words that pc-relative loads read: literal pools, data even where no $d mapping symbol says so (decoding them
+    // would knock the Thumb stream out of step).
+    std::unordered_set<uint64_t> literals;
     while (a < end && out.size() < maxInsns) {
-        const char mode = isa_ == Isa::Arm32 ? modeAtAddr(a) : 't';
+        char mode = isa_ == Isa::Arm32 ? modeAtAddr(a) : 't';
+        if (isa_ == Isa::Arm32 && literals.count(a)) mode = 'd';
         Line l;
         if (mode == 'd') {  // literal pool data between ARM / Thumb code
             uint32_t w = 0;
@@ -752,15 +761,42 @@ std::vector<NativeCode::Line> NativeCode::disassembleGeneric(uint64_t start, uin
                 l.dataAddr = in.target;
                 l.dataRead = true;
                 l.comment = "=" + hex(literal);
+                if (in.target > a && in.target < end) {
+                    literals.insert(in.target);
+                    if (in.mnemonic.rfind("ldrd", 0) == 0) literals.insert(in.target + 4);
+                }
             } else {
+                if (isa_ == Isa::Arm32 && in.mnemonic.rfind("vldr", 0) == 0 && in.target > a && in.target < end) {  // a double constant
+                    literals.insert(in.target);
+                    if (in.operands.rfind("d", 0) == 0) literals.insert(in.target + 4);
+                }
                 annotate(l, in.target, !in.isAddImm);
             }
         }
         l.dataRead = l.dataAddr != 0 && (in.isLoad || in.memTarget) && !in.isAddImm;
         if (in.memTarget) l.insn.hasTarget = false;  // a memory operand, not somewhere to jump
         const uint64_t step = in.size;
+        const bool dispatch = isa_ == Isa::Arm32 && (in.mnemonic == "tbb" || in.mnemonic == "tbh") && in.operands.find("[pc") == 0;
+        const unsigned entry = in.mnemonic == "tbh" ? 2 : 1;
         out.push_back(std::move(l));
         a += step;
+        // The table follows the instruction: show it as data instead of decoding it.
+        if (dispatch) {
+            const size_t bytes = (boundBefore(out, out.size() - 1) * entry + 1) & ~size_t(1);
+            for (size_t at = 0; at < bytes && a < end && out.size() < maxInsns; at += 2, a += 2) {
+                uint32_t w = 0;
+                if (!readData32(a, w)) break;
+                Line entryLine;
+                entryLine.insn.addr = a;
+                entryLine.insn.raw = w & 0xFFFF;
+                entryLine.insn.size = 2;
+                entryLine.insn.mnemonic = ".short";
+                entryLine.insn.operands = hex(w & 0xFFFF);
+                entryLine.insn.known = false;
+                entryLine.insn.thumb = true;
+                out.push_back(std::move(entryLine));
+            }
+        }
     }
     std::unordered_set<uint64_t> targets;
     for (const Line& l : out)
@@ -823,6 +859,265 @@ std::vector<NativeCode::Line> NativeCode::disassembleFunction(const Function& f,
     return disassemble(f.addr, f.addr + std::max<uint64_t>(f.size, 4), maxInsns);
 }
 
+namespace {
+
+// "[x9, x8, lsl #2]" / "[pc, r6]" / "[ebx+esi*4-0x19484]": the pieces between the brackets.
+std::string bracketed(const std::string& operands) {
+    const size_t open = operands.find('['), close = operands.rfind(']');
+    return open == std::string::npos || close == std::string::npos || close < open ? std::string() : operands.substr(open + 1, close - open - 1);
+}
+
+std::vector<std::string> operandList(const std::string& s) {
+    std::vector<std::string> out;
+    std::string cur;
+    int depth = 0;
+    for (char c : s) {
+        if (c == '[') ++depth;
+        if (c == ']') --depth;
+        if (c == ',' && depth == 0) {
+            out.push_back(cur);
+            cur.clear();
+        } else if (c != ' ' || !cur.empty()) {
+            cur += c;
+        }
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
+// "x8" and "w8" are one register, as are "rax" and "eax".
+std::string regKey(const std::string& r) {
+    if (r.size() > 1 && (r[0] == 'x' || r[0] == 'w') && std::isdigit(static_cast<unsigned char>(r[1]))) return "x" + r.substr(1);
+    if (r.size() == 3 && (r[0] == 'e' || r[0] == 'r') && std::isalpha(static_cast<unsigned char>(r[1]))) return r.substr(1);
+    return r;
+}
+
+// The number of entries the bounds check before line `at` allows ("cmp i, #N; b.hi default"): 0 when there is none.
+// `compared` receives the register that was checked.
+size_t boundBefore(const std::vector<NativeCode::Line>& lines, size_t at, std::string* compared) {
+    for (size_t i = at, steps = 0; i-- > 0 && steps < 40; ++steps) {
+        if (lines[i].insn.mnemonic != "cmp" && lines[i].insn.mnemonic != "cmp.w") continue;
+        const std::vector<std::string> ops = operandList(lines[i].insn.operands);
+        if (ops.size() != 2) return 0;
+        std::string imm = ops[1];
+        if (!imm.empty() && imm[0] == '#') imm.erase(0, 1);
+        if (imm.empty() || !std::isdigit(static_cast<unsigned char>(imm[0]))) return 0;
+        const unsigned long long n = std::strtoull(imm.c_str(), nullptr, 0);
+        if (n > 1023) return 0;
+        if (compared) *compared = ops[0];
+        for (size_t k = i + 1; k < at && k < i + 6; ++k) {
+            std::string m = lines[k].insn.mnemonic;
+            if (m.size() > 2 && m.compare(m.size() - 2, 2, ".w") == 0) m.erase(m.size() - 2);
+            if (m == "b.hi" || m == "bhi" || m == "ja") return static_cast<size_t>(n) + 1;
+            if (m == "b.hs" || m == "b.cs" || m == "bhs" || m == "bcs" || m == "jae") return static_cast<size_t>(n);
+        }
+        // A32: the dispatch itself is conditional ("cmp r0, #N; ldrls pc, [pc, r0, lsl #2]").
+        const std::string& own = lines[at].insn.mnemonic;
+        if (own.size() > 2 && own.compare(own.size() - 2, 2, "ls") == 0) return static_cast<size_t>(n) + 1;
+        if (own.size() > 2 && (own.compare(own.size() - 2, 2, "lo") == 0 || own.compare(own.size() - 2, 2, "cc") == 0)) return static_cast<size_t>(n);
+        return 0;
+    }
+    return 0;
+}
+
+// The nearest earlier instruction whose first operand is register `reg` (and that is not a compare or a store).
+const NativeCode::Line* writerOf(const std::vector<NativeCode::Line>& lines, size_t before, const std::string& reg, size_t& index,
+                                 size_t window = 80) {
+    const std::string key = regKey(reg);
+    for (size_t i = before, steps = 0; i-- > 0 && steps < window; ++steps) {
+        const std::string& m = lines[i].insn.mnemonic;
+        if (m == "cmp" || m == "test" || m.rfind("st", 0) == 0 || m == "push") continue;
+        const std::vector<std::string> ops = operandList(lines[i].insn.operands);
+        if (!ops.empty() && regKey(ops[0]) == key) {
+            index = i;
+            return &lines[i];
+        }
+    }
+    return nullptr;
+}
+
+}  // namespace
+
+bool NativeCode::tailJump(const std::vector<Line>& lines, size_t at) const {
+    if (at >= lines.size() || lines[at].insn.flow != native::Flow::IndirectJump) return false;
+    const native::Insn& jump = lines[at].insn;
+    const std::vector<std::string> ops = operandList(jump.operands);
+    if (ops.size() != 1) return false;
+    if (jump.mnemonic == "bx") return true;  // ARM switches use tbb / ldr pc / mov pc, never bx
+    if (jump.mnemonic != "br" && jump.mnemonic != "jmp") return false;
+    if (ops[0].find('[') != std::string::npos) return ops[0].find("*4") == std::string::npos && ops[0].find("*8") == std::string::npos;
+    // A register that was simply loaded (a vtable slot, a callback) or came in as a parameter; a switch computes it.
+    size_t i = 0;
+    const Line* writer = writerOf(lines, at, ops[0], i);
+    if (!writer) return true;
+    const std::string& m = writer->insn.mnemonic;
+    const bool load = m == "ldr" || m == "ldur" || m == "ldp" || (m == "mov" && writer->insn.operands.find("*4") == std::string::npos);
+    return load;
+}
+
+bool NativeCode::jumpTable(const std::vector<Line>& lines, size_t at, std::vector<uint64_t>& targets, std::string& index) const {
+    targets.clear();
+    if (at >= lines.size()) return false;
+    const native::Insn& jump = lines[at].insn;
+    const std::vector<std::string> ops = operandList(jump.operands);
+    std::string compared;
+    size_t count = boundBefore(lines, at, &compared);
+    if (ops.empty()) return false;
+    // No bounds check (an index from a bit scan, or compared with a register): read entries until one does not land
+    // on an instruction of this function.
+    const bool probe = count < 2;
+    if (probe) count = 64;
+    // Every entry must land on an instruction of this listing; when probing, the first that does not ends the table.
+    const auto onInstruction = [&](uint64_t target) {
+        const auto found = std::lower_bound(lines.begin(), lines.end(), target, [](const Line& l, uint64_t v) { return l.insn.addr < v; });
+        return found != lines.end() && found->insn.addr == target;
+    };
+
+    uint64_t table = 0, base = 0;
+    unsigned size = 4, scale = 1;
+    bool sign = false;
+    // The value of the register that holds the table's address.
+    const auto addressIn = [&](const std::string& reg, size_t before, uint64_t& value) {
+        size_t i = 0;
+        const Line* l = writerOf(lines, before, reg, i, 3000);  // a table address kept in a register through a loop
+        if (!l) return false;
+        const std::string& m = l->insn.mnemonic;
+        if ((m == "add" || m == "adr" || m == "lea") && l->dataAddr) value = l->dataAddr;
+        else if (m == "adr" && l->insn.target) value = l->insn.target;
+        else return false;
+        return true;
+    };
+
+    if (isa_ == Isa::Arm32 && jump.mnemonic == "mov" && ops.size() == 2 && ops[0] == "pc") {
+        size_t addAt = 0, adrAt = 0;
+        const Line* add = writerOf(lines, at, ops[1], addAt);
+        if (!add || add->insn.mnemonic.rfind("add", 0) != 0) return false;
+        const std::vector<std::string> a = operandList(add->insn.operands);
+        if (a.size() != 4 || a[3] != "lsl #2") return false;
+        const Line* adr = writerOf(lines, addAt, a[1], adrAt);
+        if (!adr || adr->insn.mnemonic.rfind("adr", 0) != 0) return false;
+        const uint64_t start = adr->dataAddr ? adr->dataAddr : adr->insn.target;
+        if (probe) return false;  // a branch table of b instructions: only with its bounds check
+        index = compared;
+        for (size_t i = 0; i < count; ++i) {
+            const uint64_t target = start + 4 * i;
+            if (!onInstruction(target)) return false;
+            targets.push_back(target);
+        }
+        return true;
+    }
+    // ldr pc, [pc, rN, lsl #2]: a table of absolute addresses right after the instruction (A32 pc + 8, Thumb aligned + 4).
+    if (isa_ == Isa::Arm32 && jump.mnemonic.rfind("ldr", 0) == 0 && ops.size() == 2 && ops[0] == "pc" && !probe) {
+        const std::vector<std::string> inner = operandList(bracketed(jump.operands));
+        if (inner.size() != 3 || inner[0] != "pc" || inner[2] != "lsl #2") return false;
+        const uint64_t start = jump.thumb ? ((jump.addr + 4) & ~uint64_t(3)) : jump.addr + 8;
+        for (size_t i = 0; i < count; ++i) {
+            uint32_t word = 0;
+            if (!readData32(start + 4 * i, word)) return false;
+            const uint64_t target = word & ~1u;
+            if (!onInstruction(target)) return false;
+            targets.push_back(target);
+        }
+        index = compared.empty() ? inner[1] : compared;
+        return true;
+    }
+    if (isa_ == Isa::Arm32) {
+        if (jump.mnemonic != "tbb" && jump.mnemonic != "tbh") return false;
+        const std::vector<std::string> inner = operandList(bracketed(jump.operands));
+        if (inner.size() < 2 || inner[0] != "pc") return false;
+        index = inner[1];
+        table = base = jump.addr + 4;
+        size = jump.mnemonic == "tbh" ? 2 : 1;
+        scale = 2;
+    } else {
+        if (jump.mnemonic != (isa_ == Isa::Arm64 ? "br" : "jmp") || ops.size() != 1 || ops[0].find('[') != std::string::npos) return false;
+        size_t addAt = 0;
+        const Line* add = writerOf(lines, at, ops[0], addAt);
+        if (!add) return false;
+        std::vector<std::string> a = operandList(add->insn.operands);
+        // lea rcx, [r11+rcx] adds as well.
+        if (add->insn.mnemonic == "lea" && isa_ != Isa::Arm64 && a.size() == 2) {
+            const std::string sum = bracketed(a[1]);
+            const size_t plus = sum.find('+');
+            if (plus == std::string::npos || sum.find_first_of("*-", plus) != std::string::npos) return false;
+            a = {sum.substr(0, plus), sum.substr(plus + 1)};
+            if (regKey(a[0]) == regKey(ops[0])) std::swap(a[0], a[1]);  // the loaded offset first
+            if (regKey(a[0]) != regKey(ops[0])) {
+                // lea rcx, [r11+rax]: neither is the destination; the loaded one is whichever a movsxd wrote.
+                size_t k = 0;
+                const Line* w = writerOf(lines, addAt, a[1], k);
+                if (w && w->insn.mnemonic.rfind("mov", 0) == 0) std::swap(a[0], a[1]);
+            }
+        } else if (add->insn.mnemonic != "add") {
+            return false;
+        }
+        if (isa_ == Isa::Arm64) {
+            if (a.size() < 3) return false;
+            // add x, loaded, base  |  add x, base, loaded, sxtb #2
+            const bool shifted = a.size() == 4;
+            const std::string loaded = shifted ? a[2] : a[1], baseReg = shifted ? a[1] : a[2];
+            size_t loadAt = 0;
+            const Line* load = writerOf(lines, addAt, loaded, loadAt);
+            if (!load || load->insn.mnemonic.rfind("ldr", 0) != 0) return false;
+            const std::vector<std::string> inner = operandList(bracketed(load->insn.operands));
+            if (inner.size() < 2) return false;
+            const std::string& m = load->insn.mnemonic;
+            size = m == "ldrsw" || m == "ldr" ? 4 : m == "ldrh" || m == "ldrsh" ? 2 : 1;
+            sign = m == "ldrsw" || m == "ldrsb" || m == "ldrsh" || (shifted && a[3].rfind("sxt", 0) == 0);
+            if (shifted) scale = 4;
+            index = inner[1];
+            if (!addressIn(inner[0], loadAt, table) || !addressIn(baseReg, addAt, base)) return false;
+            if (inner[0] == loaded && !addressIn(baseReg, addAt, table)) return false;
+        } else {
+            if (a.size() != 2) return false;
+            size_t loadAt = 0;
+            const Line* load = writerOf(lines, addAt, a[0], loadAt);
+            if (!load || load->insn.mnemonic.rfind("mov", 0) != 0) return false;
+            const std::string address = bracketed(load->insn.operands);
+            const size_t star = address.find("*4");
+            if (star == std::string::npos) return false;
+            const size_t first = address.find('+');
+            if (first == std::string::npos || first >= star) return false;
+            const std::string baseReg = address.substr(0, first);
+            index = address.substr(first + 1, star - first - 1);
+            const std::string rest = address.substr(star + 2);
+            const long long disp = rest.empty() ? 0 : std::strtoll(rest.c_str(), nullptr, 0);
+            sign = true;
+            if (isa_ == Isa::X86_64) {
+                if (regKey(a[1]) != regKey(baseReg) || !addressIn(baseReg, loadAt, table)) return false;
+                table += static_cast<uint64_t>(disp);
+                base = table;
+            } else {  // position-independent i386: the table and its entries are relative to the GOT base
+                if (regKey(a[1]) != regKey(baseReg) || !gotBase_) return false;
+                table = (gotBase_ + static_cast<uint64_t>(disp)) & 0xFFFFFFFFull;
+                base = gotBase_;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < count; ++i) {
+        const uint64_t entry = table + i * size;
+        uint32_t word = 0;
+        if (!readData32(entry & ~uint64_t(3), word)) return false;
+        uint32_t high = 0;
+        if ((entry & 3) + size > 4 && !readData32((entry & ~uint64_t(3)) + 4, high)) return false;
+        const uint64_t both = static_cast<uint64_t>(high) << 32 | word;
+        uint64_t value = both >> ((entry & 3) * 8);
+        value &= size == 4 ? 0xFFFFFFFFull : (1ull << (size * 8)) - 1;
+        if (sign && (value >> (size * 8 - 1)) & 1) value |= ~0ull << (size * 8);
+        uint64_t target = base + value * scale;
+        if (isa_ == Isa::X86 || isa_ == Isa::Arm32) target &= 0xFFFFFFFFull;
+        if (!onInstruction(target)) {
+            if (probe && targets.size() >= 2) break;
+            return false;
+        }
+        targets.push_back(target);
+    }
+    if (probe && targets.size() < 2) return false;
+    if (!compared.empty()) index = compared;
+    return true;
+}
+
 NativeCode::ControlFlow NativeCode::controlFlow(const Function& f, size_t maxInsns) const {
     using arm64::Flow;
     ControlFlow cfg;
@@ -836,9 +1131,17 @@ NativeCode::ControlFlow NativeCode::controlFlow(const Function& f, size_t maxIns
     const auto ends = [](Flow flow) { return flow != Flow::Normal && flow != Flow::Call && flow != Flow::IndirectCall; };
     std::vector<char> leader(n, 0);
     leader[0] = 1;
+    std::map<size_t, std::vector<uint64_t>> tables;  // line of the dispatching jump -> targets
     for (size_t i = 0; i < n; ++i) {
         const arm64::Insn& in = cfg.lines[i].insn;
         if (!ends(in.flow)) continue;
+        std::vector<uint64_t> targets;
+        std::string index;
+        if (in.flow == Flow::IndirectJump && jumpTable(cfg.lines, i, targets, index)) {
+            for (uint64_t t : targets)
+                if (const int line = lineOf(t); line >= 0) leader[static_cast<size_t>(line)] = 1;
+            tables[i] = std::move(targets);
+        }
         if (i + 1 < n) leader[i + 1] = 1;
         if (in.hasTarget)
             if (const int t = lineOf(in.target); t >= 0) leader[static_cast<size_t>(t)] = 1;
@@ -869,9 +1172,21 @@ NativeCode::ControlFlow NativeCode::controlFlow(const Function& f, size_t maxIns
             if (next >= 0) block.successors.push_back(next);
             block.conditional = block.successors.size() == 2;
             break;
+        case Flow::IndirectJump:
+            if (const auto table = tables.find(last); table != tables.end()) {
+                for (size_t k = 0; k < table->second.size(); ++k) {
+                    const int line = lineOf(table->second[k]);
+                    if (line < 0) continue;
+                    const int to = blockOf[static_cast<size_t>(line)];
+                    block.cases.push_back({static_cast<int64_t>(k), to});
+                    if (std::find(block.successors.begin(), block.successors.end(), to) == block.successors.end()) block.successors.push_back(to);
+                }
+                break;
+            }
+            block.exit = true;
+            break;
         case Flow::Return:
-        case Flow::Trap:
-        case Flow::IndirectJump: block.exit = true; break;
+        case Flow::Trap: block.exit = true; break;
         default:
             if (next >= 0) block.successors.push_back(next);
             else block.exit = true;

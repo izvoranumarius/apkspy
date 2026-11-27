@@ -1,4 +1,5 @@
 #include "ui/BookmarksPanel.hpp"
+#include "analysis/ApkAnalysis.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
@@ -86,6 +87,26 @@ void BookmarksPanel::drawContents() {
         exportBrowser_.setDefaultName("notes.md");
     }
     ImGui::EndDisabled();
+    // Symbol renames of one APK as a ProGuard mapping.txt (the first APK that has any).
+    std::string symbolGroup;
+    for (const Annotation& a : notes.all())
+        if (a.kind == Annotation::Kind::Symbol && a.target == Annotation::Target::Method) {
+            symbolGroup = a.group;
+            break;
+        }
+    ui::sameLineIfFits(ui::buttonWidth("Export mapping..."));
+    const auto symbolAnalysis = symbolGroup.empty() ? nullptr : workspace_.analysis().get(symbolGroup);
+    ImGui::BeginDisabled(!symbolAnalysis);
+    if (ui::smallButton("Export mapping...")) {
+        mappingGroup_ = symbolGroup;
+        mappingBrowser_.open(FileBrowser::Mode::SaveFile);
+        mappingBrowser_.setDefaultName("mapping.txt");
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", symbolAnalysis ? "Your class, method and field renames as a ProGuard mapping.txt"
+                                : symbolGroup.empty() ? "Rename a class, method or field in the decompiler first (N)"
+                                                      : "Analyze the APK first");
     ui::sameLineIfFits(ui::em(10.f));
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##flt", "Filter text or file...", filter_, sizeof filter_);
@@ -95,6 +116,20 @@ void BookmarksPanel::drawContents() {
         std::ofstream out(pathutil::fromUtf8(picked), std::ios::binary);
         out.write(md.data(), static_cast<std::streamsize>(md.size()));
         workspace_.log(out ? "Exported notes to " + picked : "Could not write " + picked);
+    }
+    if (mappingBrowser_.render(), mappingBrowser_.takeAccepted(picked)) {
+        if (const auto analysis = workspace_.analysis().get(mappingGroup_)) {
+            std::vector<std::pair<std::string, std::string>> symbols;
+            for (const Annotation& a : notes.all())
+                if (a.kind == Annotation::Kind::Symbol && a.target == Annotation::Target::Method && a.group == mappingGroup_)
+                    symbols.emplace_back(a.context, a.text);
+            size_t matched = 0;
+            const std::string text = analysis->renamesAsMapping(symbols, &matched, workspace_.mapping());
+            std::ofstream out(pathutil::fromUtf8(picked), std::ios::binary);
+            out.write(text.data(), static_cast<std::streamsize>(text.size()));
+            workspace_.log(out ? "Exported " + std::to_string(matched) + " of " + std::to_string(symbols.size()) + " renames to " + picked
+                               : "Could not write " + picked);
+        }
     }
     rebuildRows();
     if (notes.all().empty()) {

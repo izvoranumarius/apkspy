@@ -574,6 +574,44 @@ Insn loadStore(Insn& i) {
         i.operands = list + ", " + addr;
         return i;
     }
+    // Advanced SIMD load/store single structure: one lane (ld1 {v3.s}[1]), or ld1r..ld4r replicating to every lane.
+    if (!bit(w, 31) && bits(w, 29, 24) == 0x0d) {
+        const bool l = bit(w, 22), q = bit(w, 30), post = bit(w, 23), r = bit(w, 21), s = bit(w, 12);
+        const unsigned opcode = bits(w, 15, 13), size = bits(w, 11, 10), rm = bits(w, 20, 16);
+        if (!post && rm != 0) return unknown(i);
+        const unsigned selem = (((opcode & 1) << 1) | (r ? 1u : 0u)) + 1;
+        static const char* const kArr[4][2] = {{"8b", "16b"}, {"4h", "8h"}, {"2s", "4s"}, {"1d", "2d"}};
+        std::string list = "{", lane;
+        unsigned bytes = 0;
+        if (opcode >= 6) {  // replicate
+            if (!l || s) return unknown(i);
+            for (unsigned k = 0; k < selem; ++k) list += (k ? ", v" : "v") + std::to_string((rt + k) % 32) + "." + kArr[size][q];
+            bytes = selem << size;
+            i.mnemonic = "ld" + std::to_string(selem) + "r";
+        } else {
+            char e = 'b';
+            unsigned index = 0;
+            switch (opcode >> 1) {
+            case 0: e = 'b', index = (q << 3) | (s << 2) | size; break;
+            case 1:
+                if (size & 1) return unknown(i);
+                e = 'h', index = (q << 2) | (s << 1) | (size >> 1);
+                break;
+            default:
+                if (size == 0) e = 's', index = (q << 1) | (s ? 1u : 0u);
+                else if (size == 1 && !s) e = 'd', index = q;
+                else return unknown(i);
+            }
+            for (unsigned k = 0; k < selem; ++k) list += (k ? ", v" : "v") + std::to_string((rt + k) % 32) + "." + e;
+            lane = "[" + std::to_string(index) + "]";
+            bytes = selem * (e == 'b' ? 1u : e == 'h' ? 2u : e == 's' ? 4u : 8u);
+            i.mnemonic = std::string(l ? "ld" : "st") + std::to_string(selem);
+        }
+        std::string addr = "[" + reg(rn, true, true) + "]";
+        if (post) addr += rm == 31 ? ", " + uimm(bytes) : ", " + reg(rm, true);
+        i.operands = list + "}" + lane + ", " + addr;
+        return i;
+    }
     return unknown(i);
 }
 
@@ -713,6 +751,93 @@ Insn fp(Insn& i) {
     const char sz = ftype == 0 ? 's' : ftype == 1 ? 'd' : ftype == 3 ? 'h' : '?';
 
     const auto v = [](unsigned n, const char* arr) { return "v" + std::to_string(n) + "." + arr; };
+    static const char* const kArrangement[4][2] = {{"8b", "16b"}, {"4h", "8h"}, {"2s", "4s"}, {"1d", "2d"}};
+
+    // Advanced SIMD three different: widening, wide and narrowing arithmetic (uaddw2, umull, addhn).
+    if ((w & 0x9f200c00) == 0x0e200000) {
+        const bool q = bit(w, 30), u = bit(w, 29);
+        const unsigned size = bits(w, 23, 22), opcode = bits(w, 15, 12);
+        static const char* const kOps[2][15] = {
+            {"saddl", "saddw", "ssubl", "ssubw", "addhn", "sabal", "subhn", "sabdl", "smlal", "sqdmlal", "smlsl", "sqdmlsl", "smull", "sqdmull", "pmull"},
+            {"uaddl", "uaddw", "usubl", "usubw", "raddhn", "uabal", "rsubhn", "uabdl", "umlal", nullptr, "umlsl", nullptr, "umull", nullptr, nullptr}};
+        if (opcode > 14 || size == 3 || !kOps[u][opcode]) return unknown(i);
+        if ((opcode == 9 || opcode == 11 || opcode == 13) && size == 0) return unknown(i);  // sqdmlal / sqdmlsl / sqdmull: 16 and 32 bits
+        if (opcode == 14 && size != 0) return unknown(i);                                    // pmull: bytes (the 64-bit form needs crypto)
+        const char* wide = kArrangement[size + 1][1];
+        const char* narrow = kArrangement[size][q];
+        std::string ops;
+        if (opcode == 1 || opcode == 3) ops = v(rd, wide) + ", " + v(rn, wide) + ", " + v(rm, narrow);
+        else if (opcode == 4 || opcode == 6) ops = v(rd, narrow) + ", " + v(rn, wide) + ", " + v(rm, wide);
+        else ops = v(rd, wide) + ", " + v(rn, narrow) + ", " + v(rm, narrow);
+        i.mnemonic = std::string(kOps[u][opcode]) + (q ? "2" : "");
+        i.operands = ops;
+        return i;
+    }
+    // Advanced SIMD permute: uzp1 / trn1 / zip1 / uzp2 / trn2 / zip2.
+    if ((w & 0xbf208c00) == 0x0e000800) {
+        const bool q = bit(w, 30);
+        const unsigned size = bits(w, 23, 22), opcode = bits(w, 14, 12);
+        static const char* const kOps[8] = {nullptr, "uzp1", "trn1", "zip1", nullptr, "uzp2", "trn2", "zip2"};
+        if (!kOps[opcode] || (size == 3 && !q)) return unknown(i);
+        const char* arr = kArrangement[size][q];
+        return make(i, kOps[opcode], v(rd, arr) + ", " + v(rn, arr) + ", " + v(rm, arr));
+    }
+    // Advanced SIMD shift by immediate (immh != 0; immh == 0 is the modified-immediate group).
+    if ((w & 0x9f800400) == 0x0f000400 && bits(w, 22, 19) != 0) {
+        const bool q = bit(w, 30), u = bit(w, 29);
+        const unsigned immh = bits(w, 22, 19), immhb = bits(w, 22, 16), opcode = bits(w, 15, 11);
+        const unsigned size = immh >= 8 ? 3 : immh >= 4 ? 2 : immh >= 2 ? 1 : 0;
+        const unsigned esize = 8u << size;
+        const unsigned right = 2 * esize - immhb, left = immhb - esize;
+        const char* arr = kArrangement[size][q];
+        const auto plain = [&](const char* m, unsigned amount) {
+            if (size == 3 && !q) return unknown(i);
+            return make(i, m, v(rd, arr) + ", " + v(rn, arr) + ", " + uimm(amount));
+        };
+        switch (opcode) {
+        case 0x00: return plain(u ? "ushr" : "sshr", right);
+        case 0x02: return plain(u ? "usra" : "ssra", right);
+        case 0x04: return plain(u ? "urshr" : "srshr", right);
+        case 0x06: return plain(u ? "ursra" : "srsra", right);
+        case 0x08: if (u) return plain("sri", right); break;
+        case 0x0a: return plain(u ? "sli" : "shl", left);
+        case 0x0c: if (u) return plain("sqshlu", left); break;
+        case 0x0e: return plain(u ? "uqshl" : "sqshl", left);
+        case 0x10: case 0x11: case 0x12: case 0x13: {  // narrowing right shifts: the element size is the result's
+            if (size == 3) break;
+            static const char* const kNarrow[2][4] = {{"shrn", "rshrn", "sqshrn", "sqrshrn"}, {"sqshrun", "sqrshrun", "uqshrn", "uqrshrn"}};
+            i.mnemonic = std::string(kNarrow[u][opcode - 0x10]) + (q ? "2" : "");
+            i.operands = v(rd, arr) + ", " + v(rn, kArrangement[size + 1][1]) + ", " + uimm(right);
+            return i;
+        }
+        case 0x14:  // sshll / ushll (uxtl when the shift is 0)
+            if (size == 3) break;
+            i.mnemonic = std::string(u ? "ushll" : "sshll") + (q ? "2" : "");
+            i.operands = v(rd, kArrangement[size + 1][1]) + ", " + v(rn, arr) + ", " + uimm(left);
+            return i;
+        default: break;
+        }
+        return unknown(i);
+    }
+    // Advanced SIMD scalar two-register miscellaneous: int <-> float conversions in a vector register.
+    if ((w & 0xdf3e0c00) == 0x5e200800) {
+        const bool u = bit(w, 29);
+        const unsigned size = bits(w, 23, 22), opcode = bits(w, 16, 12);
+        const char s = (size & 1) ? 'd' : 's';
+        if (opcode == 0x1d && !(size & 2)) return make(i, u ? "ucvtf" : "scvtf", vreg(rd, s) + ", " + vreg(rn, s));
+        if (opcode == 0x1b && (size & 2)) return make(i, u ? "fcvtzu" : "fcvtzs", vreg(rd, s) + ", " + vreg(rn, s));
+        return unknown(i);
+    }
+    // Advanced SIMD scalar x indexed element: fmul d4, d0, v2.d[0].
+    if ((w & 0xdf000400) == 0x5f000000 && (bits(w, 23, 22) & 2)) {
+        const bool u = bit(w, 29), dbl = bit(w, 22);
+        const unsigned opcode = bits(w, 15, 12), h = bit(w, 11), l = bit(w, 21), mreg = (bit(w, 20) << 4) | rm;
+        const char* m = opcode == 9 ? (u ? "fmulx" : "fmul") : opcode == 1 && !u ? "fmla" : opcode == 5 && !u ? "fmls" : nullptr;
+        if (!m || (dbl && l)) return unknown(i);
+        const char e = dbl ? 'd' : 's';
+        const unsigned index = dbl ? h : (h << 1) | l;
+        return make(i, m, vreg(rd, e) + ", " + vreg(rn, e) + ", v" + std::to_string(mreg) + "." + e + "[" + std::to_string(index) + "]");
+    }
 
     // Advanced SIMD three same, floating point (opcode 11xxx).
     if ((w & 0x9f200400) == 0x0e200400 && bits(w, 15, 11) >= 0x18) {
@@ -760,6 +885,20 @@ Insn fp(Insn& i) {
         else if (opcode == 8 && !u) m = "mul";
         else if (opcode == 0 && u) m = "mla";
         else if (opcode == 4 && u) m = "mls";
+        // Long forms (smlal2 v8.4s, v2.8h, v0.h[1]): a wide result from the narrow half.
+        static const char* const kLong[2][16] = {
+            {nullptr, nullptr, "smlal", "sqdmlal", nullptr, nullptr, "smlsl", "sqdmlsl", nullptr, nullptr, "smull", "sqdmull", "sqdmulh", "sqrdmulh", nullptr, nullptr},
+            {nullptr, nullptr, "umlal", nullptr, nullptr, nullptr, "umlsl", nullptr, nullptr, nullptr, "umull", nullptr, nullptr, nullptr, nullptr, nullptr}};
+        if (!m && kLong[u][opcode] && (size == 1 || size == 2)) {
+            const bool same = opcode == 12 || opcode == 13;  // sqdmulh / sqrdmulh keep the element size
+            const unsigned index = size == 1 ? (h << 2) | (l << 1) | mbit : (h << 1) | l;
+            const unsigned mr = size == 1 ? rm & 15 : (mbit << 4) | rm;
+            const char* narrow = size == 1 ? (q ? "8h" : "4h") : (q ? "4s" : "2s");
+            const char* wide = same ? narrow : size == 1 ? "4s" : "2d";
+            i.mnemonic = std::string(kLong[u][opcode]) + (q && !same ? "2" : "");
+            i.operands = v(rd, wide) + ", " + v(rn, narrow) + ", v" + std::to_string(mr) + "." + (size == 1 ? "h" : "s") + "[" + std::to_string(index) + "]";
+            return i;
+        }
         if (!m) return unknown(i);
         std::string arr, elemReg;
         unsigned index, mreg;
@@ -804,6 +943,21 @@ Insn fp(Insn& i) {
             static const char kScalar[4] = {'b', 'h', 's', 'd'};
             const bool widen = opcode == 0x03;
             return make(i, m, vreg(rd, kScalar[size + (widen ? 1 : 0)]) + ", " + v(rn, kArr[size][q]));
+        }
+        // Narrowing moves: xtn / sqxtn / uqxtn / sqxtun, the "2" forms filling the upper half.
+        if (opcode == 0x12 || opcode == 0x14) {
+            if (size == 3) return unknown(i);
+            const char* m = opcode == 0x12 ? (u ? "sqxtun" : "xtn") : (u ? "uqxtn" : "sqxtn");
+            i.mnemonic = std::string(m) + (q ? "2" : "");
+            i.operands = v(rd, kArr[size][q]) + ", " + v(rn, kArrangement[size + 1][1]);
+            return i;
+        }
+        // Floating-point compares with zero.
+        if ((opcode == 0x0c || opcode == 0x0d || (opcode == 0x0e && !u)) && (size & 2)) {
+            const char* arr = (size & 1) ? (q ? "2d" : nullptr) : (q ? "4s" : "2s");
+            if (!arr) return unknown(i);
+            const char* m = opcode == 0x0c ? (u ? "fcmge" : "fcmgt") : opcode == 0x0d ? (u ? "fcmle" : "fcmeq") : "fcmlt";
+            return make(i, m, v(rd, arr) + ", " + v(rn, arr) + ", #0.0");
         }
         const bool fpSize = size & 2;  // FP ops encode sz in bit 22 with bit 23 selecting the op family
         const char* farr = (size & 1) ? (q ? "2d" : nullptr) : (q ? "4s" : "2s");
@@ -930,6 +1084,20 @@ Insn fp(Insn& i) {
         const unsigned ra = bits(w, 14, 10);
         return make(i, names[(bit(w, 21) << 1) | bit(w, 15)],
                     vreg(rd, sz) + ", " + vreg(rn, sz) + ", " + vreg(rm, sz) + ", " + vreg(ra, sz));
+    }
+    // fmov x, v.d[1] / fmov v.d[1], x: the upper half of a vector register (ftype 10, which has no scalar size).
+    if ((w & 0xfffffc00) == 0x9eae0000) return make(i, "fmov", reg(rd, true) + ", v" + std::to_string(rn) + ".d[1]");
+    if ((w & 0xfffffc00) == 0x9eaf0000) return make(i, "fmov", "v" + std::to_string(rd) + ".d[1], " + reg(rn, true));
+    // Advanced SIMD scalar pairwise: addp d0, v0.2d / faddp s3, v3.2s / fmaxp / fminp.
+    if ((w & 0xdf3e0c00) == 0x5e300800) {
+        const bool u = bit(w, 29);
+        const unsigned size = bits(w, 23, 22), opcode = bits(w, 16, 12);
+        if (!u && opcode == 0x1b && size == 3) return make(i, "addp", vreg(rd, 'd') + ", v" + std::to_string(rn) + ".2d");
+        const char* m = !u ? nullptr : opcode == 0x0d && !(size & 2) ? "faddp" : opcode == 0x0f ? ((size & 2) ? "fminp" : "fmaxp")
+                                    : opcode == 0x0c ? ((size & 2) ? "fminnmp" : "fmaxnmp") : nullptr;
+        if (!m) return unknown(i);
+        const bool dbl = size & 1;
+        return make(i, m, vreg(rd, dbl ? 'd' : 's') + ", v" + std::to_string(rn) + (dbl ? ".2d" : ".2s"));
     }
     if ((bits(w, 30, 24) != 0x1e) || !bit(w, 21) || bit(w, 29) || sz == '?') return unknown(i);
     const bool sf = bit(w, 31);

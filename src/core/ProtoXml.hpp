@@ -12,9 +12,9 @@ namespace protoxml {
 // types when the protobuf carries them (references, integers, booleans, floats), otherwise they are strings.
 bool toBinaryXml(const std::vector<uint8_t>& pb, std::vector<uint8_t>& axml, std::string& error);
 
-// An aapt2 protobuf resource table (`resources.pb`, a serialized ResourceTable) as a binary resources.arsc: the default
-// configuration of every string, integer, boolean, colour, float, reference and file entry, with its type and name.
-// Styles, arrays and plurals (compound values) and non-default configurations are left out.
+// An aapt2 protobuf resource table (`resources.pb`, a serialized ResourceTable) as a binary resources.arsc: every
+// entry with its type and name, in every configuration, including styles, arrays, plurals and attributes.
+// (Styleables are compile-time only and have no entry in an APK's table either.)
 bool toArsc(const std::vector<uint8_t>& pb, std::vector<uint8_t>& arsc, std::string& error);
 
 }  // namespace protoxml

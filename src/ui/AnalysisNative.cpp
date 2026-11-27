@@ -268,10 +268,14 @@ void AnalysisPanel::drawNativeListing(const NativeCode& nc) {
                 break;
             }
     }
-    // Address column only as wide as this library's addresses need.
+    // Columns only as wide as this listing needs, with two characters between them. The gap is measured as digits:
+    // a trailing space adds nothing to CalcTextSize here.
     const bool shortAddr = !listing_.empty() && listing_.back().insn.addr < 0x1000000;
-    const float addrW = ImGui::CalcTextSize(shortAddr ? "000000 " : "00000000 ").x;
-    const float mnemW = ImGui::CalcTextSize("fmaxnm ").x;
+    const float digit = ImGui::CalcTextSize("0").x;
+    const float addrW = digit * (shortAddr ? 8.f : 10.f);
+    size_t longest = 6;  // x86 and NEON names run long ("cvttsd2si", "vcvt.f32.s32")
+    for (const NativeCode::Line& l : listing_) longest = std::max(longest, std::min<size_t>(l.insn.mnemonic.size(), 14));
+    const float mnemW = digit * static_cast<float>(longest + 1);
     // Bookmarks and comments of this library, by address.
     Annotations& notes = workspace_.annotations();
     std::unordered_map<uint64_t, const Annotation*> commentAt, bookmarkAt;

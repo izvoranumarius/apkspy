@@ -18,7 +18,7 @@ public:
         uint32_t id = 0;
         std::string type;   // "string", "layout", "drawable", ...
         std::string name;   // entry key
-        std::string value;  // rendered default value ("" for complex entries)
+        std::string value;  // rendered default value; styles, arrays and plurals as a one-line summary
         bool complex = false;  // style / array / plurals (map entries)
         int configs = 0;       // number of configurations defining it
     };
@@ -32,7 +32,7 @@ public:
     // nothing about we return ""); empty when unknown.
     std::string reference(uint32_t id) const;
     // Rendered value of the default configuration, following references up
-    // to a few levels ("@string/a" -> "Text"). Empty when unknown/complex.
+    // to a few levels ("@string/a" -> "Text"). Empty when unknown or complex (see Item::value for those).
     std::string value(uint32_t id) const;
     bool lookup(uint32_t id, Item& out) const;
     // Entries filtered by type (exact, "" = all) and name/value substring.
@@ -51,12 +51,24 @@ private:
         bool defaultConfig = false;
         uint16_t configs = 0;
         uint32_t data = 0;
+        uint32_t bag = 0;  // complex entries: 1 + index into bags_ (0 = none)
+    };
+    struct Bag {
+        uint32_t parent = 0;
+        struct Value {
+            uint32_t name = 0;
+            uint8_t dataType = 0;
+            uint32_t data = 0;
+        };
+        std::vector<Value> values;
     };
     std::string render(uint8_t dataType, uint32_t data, int depth) const;
+    std::string renderBag(const Entry& e) const;
 
     std::string package_;
     std::vector<std::string> strings_;    // global value pool
     std::vector<std::string> typeNames_;  // per type id - 1
     std::vector<std::string> keys_;       // entry key pool
     std::unordered_map<uint32_t, Entry> entries_;
+    std::vector<Bag> bags_;
 };

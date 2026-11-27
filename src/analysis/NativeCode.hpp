@@ -72,19 +72,25 @@ public:
     std::vector<Line> disassemble(uint64_t start, uint64_t end, size_t maxInsns) const;
     std::vector<Line> disassembleFunction(const Function& f, size_t maxInsns) const;
 
-    // Basic blocks of a function. Branch tables (br) end a block with no
-    // successors: their targets are computed at run time.
+    // Basic blocks of a function. A compiler's jump table (bounds check, then br / tbb / jmp through a table) gets its
+    // targets as successors; other computed jumps end a block with no successors.
     struct BasicBlock {
         size_t firstLine = 0, lineCount = 0;  // into ControlFlow::lines
         std::vector<int> successors;          // block indices
         bool conditional = false;             // successors[0] is taken, [1] falls through
         bool exit = false;                    // return, trap, tail call or indirect jump
+        std::vector<std::pair<int64_t, int>> cases;  // jump table: index value -> block
     };
     struct ControlFlow {
         std::vector<Line> lines;
         std::vector<BasicBlock> blocks;
     };
     ControlFlow controlFlow(const Function& f, size_t maxInsns) const;
+    // The targets, in index order, of the jump table that line `at` of a listing dispatches through. `index` receives
+    // the register the bounds check compared (the switched value).
+    bool jumpTable(const std::vector<Line>& lines, size_t at, std::vector<uint64_t>& targets, std::string& index) const;
+    // Whether the indirect jump at line `at` is a call through a function pointer in tail position.
+    bool tailJump(const std::vector<Line>& lines, size_t at) const;
 
     std::vector<Ref> refsTo(uint64_t addr, size_t limit) const;
     std::vector<Ref> refsFrom(const Function& f, size_t limit) const;  // calls / data refs made by f

@@ -256,6 +256,7 @@ private:
     bool decompAuto_ = true;              // follow the selection
     bool decompRefresh_ = false;
     uint64_t decompSynced_ = UINT64_MAX;  // last listing address followed
+    uint64_t decompMappingVersion_ = 0;   // the mapping the Java output was named with
     bool decompScroll_ = false;
     int decompLine_ = -1;
     std::vector<std::string> decompNotes_;  // per line: what an encoded string literal decodes to ("" for none)

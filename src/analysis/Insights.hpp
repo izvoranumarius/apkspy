@@ -67,6 +67,33 @@ struct RuleHit {
 // the app layer resolves each matched signature to its callers.
 std::vector<RuleHit> runRules(const Inputs& in);
 
+// --- Sensitive logging ------------------------------------------------------
+// What is known about one call that writes to a log.
+struct LogCall {
+    bool messageConstant = false;      // the message argument is a fixed string
+    std::vector<std::string> constants;  // constant arguments of the call itself (tag, message)
+    std::vector<std::string> appended;   // constant text joined into strings just before the call
+    std::vector<std::string> calls;      // methods called just before it (signatures)
+    bool traced = false;                 // the method's data flow was followed
+    std::vector<std::string> flows;      // sensitive data found to reach the message
+};
+struct LogVerdict {
+    Severity severity = Severity::Info;
+    std::string reason;
+};
+// Judges whether the call can put something sensitive in the log: a hard-coded secret, data traced into the message
+// (`flows`), or - weaker - a credential or personal data named by the text and calls around it. A fixed message carries
+// no runtime data.
+LogVerdict judgeLog(const LogCall& call);
+// The sensitive thing a field, getter or key name stands for ("password", "token", "email", ...), "" when none.
+std::string sensitiveName(std::string_view name);
+struct LogFinding {
+    Severity severity = Severity::Info;
+    std::string reason;
+    std::string method;  // the method that logs
+    std::string callee;  // the log method it calls
+};
+
 // --- Obfuscation ------------------------------------------------------------
 struct Obfuscation {
     int appClasses = 0;   // classes outside well-known library packages
@@ -121,6 +148,7 @@ struct Result {
     std::vector<Detection> detections;
     std::vector<RuleHit> rules;
     Obfuscation obfuscation;
+    std::vector<LogFinding> logs;  // filled by the caller (needs the bytecode); worst first
 };
 Result scan(const Inputs& in);
 

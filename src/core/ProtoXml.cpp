@@ -1,7 +1,9 @@
 #include "core/ProtoXml.hpp"
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <map>
+#include <set>
 
 namespace protoxml {
 namespace {
@@ -123,12 +125,17 @@ bool parseElement(const uint8_t* p, size_t n, Element& e, int depth) {
                                 else if (pf.number == 7 && pf.wire == 0) at.type = 0x11, at.data = static_cast<uint32_t>(pf.value), at.typed = true;
                                 else if (pf.number == 8 && pf.wire == 0) at.type = 0x12, at.data = pf.value ? 0xffffffffu : 0u, at.typed = true;
                                 else if (pf.number == 3 && pf.wire == 5) at.type = 4, at.data = static_cast<uint32_t>(pf.value), at.typed = true;
+                                else if (pf.number == 13 && pf.wire == 0) at.type = 5, at.data = static_cast<uint32_t>(pf.value), at.typed = true;
+                                else if (pf.number == 14 && pf.wire == 0) at.type = 6, at.data = static_cast<uint32_t>(pf.value), at.typed = true;
                             }
                         }
                     }
                 }
             }
-            e.attrs.push_back(std::move(at));
+            const auto after = std::find_if(e.attrs.begin(), e.attrs.end(), [&](const Attr& o) {
+                return at.resourceId && (!o.resourceId || o.resourceId > at.resourceId);
+            });
+            e.attrs.insert(after, std::move(at));
         } else if (f.number == 5) {  // child: XmlNode
             std::vector<Field> node;
             if (!readFields(f.data, f.size, node)) return false;
@@ -337,16 +344,194 @@ std::vector<uint8_t> makePool(const std::vector<std::string>& strings) {
     return w.out;
 }
 
+// One Res_value: its type and data.
+struct ResValue {
+    uint8_t type = 0;
+    uint32_t data = 0;
+};
+// What a resource holds in one configuration: a simple value, or a bag (style, array, plurals, attr) with its parent.
+struct ResData {
+    bool complex = false;
+    ResValue value;
+    uint32_t parent = 0;
+    std::vector<std::pair<uint32_t, ResValue>> bag;
+};
+using ConfigBytes = std::vector<uint8_t>;  // a 64-byte ResTable_config
 struct ResEntry {
     std::string name;
-    uint8_t dataType = 0;
-    uint32_t data = 0;
-    bool value = false;
+    std::map<ConfigBytes, ResData> values;
 };
 struct ResType {
     std::string name;
     std::map<uint32_t, ResEntry> entries;
 };
+
+using Strings = std::function<uint32_t(const std::string&)>;
+
+// aapt2 `Reference`: the id it points at (field 2).
+uint32_t referenceId(const Field& f) {
+    std::vector<Field> v;
+    readFields(f.data, f.size, v);
+    for (const Field& x : v)
+        if (x.number == 2 && x.wire == 0) return static_cast<uint32_t>(x.value);
+    return 0u;
+}
+
+// aapt2 `Item` (a reference, a string, a file or a primitive) as a Res_value.
+bool parseItem(const Field& f, const Strings& global, ResValue& out) {
+    std::vector<Field> item;
+    if (!readFields(f.data, f.size, item)) return false;
+    bool have = false;
+    for (const Field& it : item) {
+        std::vector<Field> inner;
+        if (it.wire != 2 || !readFields(it.data, it.size, inner)) continue;
+        if (it.number == 1) {  // ref
+            out = {0x01, referenceId(it)}, have = true;
+        } else if (it.number == 6) {  // id: an @+id/ name, which holds "false"
+            out = {0x12, 0}, have = true;
+        } else if (it.number >= 2 && it.number <= 5) {  // str, raw_str, styled_str (plain text), file (its path)
+            for (const Field& r : inner)
+                if (r.number == 1 && r.wire == 2) out = {0x03, global(str(r))}, have = true;
+        } else if (it.number == 7) {  // prim
+            for (const Field& r : inner) {
+                const uint32_t v = static_cast<uint32_t>(r.value);
+                if (r.wire == 5 && r.number == 3) out = {0x04, v}, have = true;
+                if (r.wire == 2 && r.number == 1) out = {0x00, 0}, have = true;  // @null
+                if (r.wire == 2 && r.number == 2) out = {0x00, 1}, have = true;  // @empty
+                if (r.wire != 0) continue;
+                if (r.number == 6) out = {0x10, v}, have = true;
+                else if (r.number == 7) out = {0x11, v}, have = true;
+                else if (r.number == 8) out = {0x12, v ? 0xffffffffu : 0u}, have = true;
+                else if (r.number >= 9 && r.number <= 12) out = {static_cast<uint8_t>(0x1c + (r.number - 9)), v}, have = true;
+                else if (r.number == 13) out = {0x05, v}, have = true;
+                else if (r.number == 14) out = {0x06, v}, have = true;
+            }
+        }
+    }
+    return have;
+}
+
+// aapt2 `CompoundValue`: attr = 1, style = 2, styleable = 3 (not a resource of its own), array = 4, plural = 5.
+bool parseCompound(const Field& f, const Strings& global, ResData& out) {
+    std::vector<Field> kinds;
+    if (!readFields(f.data, f.size, kinds)) return false;
+    for (const Field& k : kinds) {
+        std::vector<Field> body;
+        if (k.wire != 2 || !readFields(k.data, k.size, body)) continue;
+        if (k.number == 3) return false;
+        out.complex = true;
+        uint32_t index = 0;
+        for (const Field& e : body) {
+            if (k.number == 1) {  // attr: format_flags = 1, symbol = 4 { name = 3, value = 4 }
+                if (e.number == 1 && e.wire == 0) out.bag.push_back({0x01000000u, {0x10, static_cast<uint32_t>(e.value)}});
+                if (e.number != 4 || e.wire != 2) continue;
+                std::vector<Field> sym;
+                readFields(e.data, e.size, sym);
+                uint32_t name = 0, value = 0;
+                for (const Field& s : sym) {
+                    if (s.number == 3 && s.wire == 2) name = referenceId(s);
+                    if (s.number == 4 && s.wire == 0) value = static_cast<uint32_t>(s.value);
+                }
+                out.bag.push_back({name, {0x10, value}});
+                continue;
+            }
+            if (k.number == 2 && e.number == 1 && e.wire == 2) {  // style parent
+                out.parent = referenceId(e);
+                continue;
+            }
+            const uint32_t entryField = k.number == 2 ? 3u : 1u;
+            if (e.number != entryField || e.wire != 2) continue;
+            std::vector<Field> en;
+            if (!readFields(e.data, e.size, en)) continue;
+            uint32_t key = 0, arity = 0;
+            ResValue value;
+            bool have = false;
+            for (const Field& x : en) {
+                if (k.number == 2) {  // Style.Entry: key = 3, item = 4
+                    if (x.number == 3 && x.wire == 2) key = referenceId(x);
+                    if (x.number == 4 && x.wire == 2) have = parseItem(x, global, value);
+                } else if (k.number == 4) {  // Array.Element: item = 3
+                    if (x.number == 3 && x.wire == 2) have = parseItem(x, global, value);
+                } else if (k.number == 5) {  // Plural.Entry: arity = 3, item = 4
+                    if (x.number == 3 && x.wire == 0) arity = static_cast<uint32_t>(x.value);
+                    if (x.number == 4 && x.wire == 2) have = parseItem(x, global, value);
+                }
+            }
+            if (!have) continue;
+            if (k.number == 4) key = 0x02000000u | index++;
+            if (k.number == 5) {  // ZERO..OTHER -> ATTR_ZERO..ATTR_MANY, ATTR_OTHER
+                static const uint32_t ids[6] = {0x01000005, 0x01000006, 0x01000007, 0x01000008, 0x01000009, 0x01000004};
+                key = ids[std::min(arity, 5u)];
+            }
+            out.bag.push_back({key, value});
+        }
+        if (k.number == 1 || k.number == 2)
+            std::stable_sort(out.bag.begin(), out.bag.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+        return true;
+    }
+    return false;
+}
+
+// aapt2 `Configuration` as the binary ResTable_config.
+ConfigBytes parseConfig(const uint8_t* data, size_t size) {
+    ConfigBytes c(64, 0);
+    c[0] = 64;
+    std::vector<Field> fields;
+    if (!readFields(data, size, fields)) return c;
+    const auto put16 = [&](size_t at, uint32_t v) { c[at] = static_cast<uint8_t>(v), c[at + 1] = static_cast<uint8_t>(v >> 8); };
+    for (const Field& f : fields) {
+        const uint32_t v = static_cast<uint32_t>(f.value);
+        if (f.number == 3 && f.wire == 2) {  // BCP 47 locale: language[-Script][-REGION]
+            const std::string tag = str(f);
+            size_t start = 0;
+            for (int part = 0; start <= tag.size(); ++part) {
+                const size_t end = std::min(tag.find('-', start), tag.size());
+                const std::string p = tag.substr(start, end - start);
+                const auto pack = [&](size_t at, char base) {  // two letters as they are, three packed in two bytes
+                    if (p.size() == 2) c[at] = static_cast<uint8_t>(p[0]), c[at + 1] = static_cast<uint8_t>(p[1]);
+                    if (p.size() == 3) {
+                        const unsigned a = (p[0] - base) & 31, b = (p[1] - base) & 31, d = (p[2] - base) & 31;
+                        c[at] = static_cast<uint8_t>(0x80 | (d << 2) | (b >> 3));
+                        c[at + 1] = static_cast<uint8_t>((b << 5) | a);
+                    }
+                };
+                if (part == 0) pack(8, 'a');
+                else if (p.size() == 4) std::memcpy(&c[36], p.data(), 4);
+                else if (p.size() == 2 || p.size() == 3) pack(10, '0');
+                start = end + 1;
+            }
+            continue;
+        }
+        if (f.wire != 0 || v == 0) continue;
+        switch (f.number) {
+        case 1: put16(4, v); break;                                    // mcc
+        case 2: put16(6, v); break;                                    // mnc
+        case 4: c[28] |= static_cast<uint8_t>(v << 6); break;          // layout direction
+        case 5: put16(20, v); break;                                   // screen width / height
+        case 6: put16(22, v); break;
+        case 7: put16(32, v); break;                                   // ... in dp
+        case 8: put16(34, v); break;
+        case 9: put16(30, v); break;                                   // smallest width dp
+        case 10: c[28] |= static_cast<uint8_t>(v & 15); break;         // screen size class
+        case 11: c[28] |= v == 1 ? 0x20 : 0x10; break;                 // long / notlong
+        case 12: c[48] |= v == 1 ? 2 : 1; break;                       // round / notround
+        case 13: c[49] |= v == 1 ? 2 : 1; break;                       // wide colour gamut
+        case 14: c[49] |= v == 1 ? 8 : 4; break;                       // hdr
+        case 15: c[12] = static_cast<uint8_t>(v); break;               // orientation
+        case 16: c[29] |= static_cast<uint8_t>(v & 15); break;         // ui mode type
+        case 17: c[29] |= v == 1 ? 0x20 : 0x10; break;                 // night / notnight
+        case 18: put16(14, v); break;                                  // density
+        case 19: c[13] = static_cast<uint8_t>(v); break;               // touchscreen
+        case 20: c[18] |= static_cast<uint8_t>(v & 3); break;          // keys hidden
+        case 21: c[16] = static_cast<uint8_t>(v); break;               // keyboard
+        case 22: c[18] |= static_cast<uint8_t>((v & 3) << 2); break;   // navigation hidden
+        case 23: c[17] = static_cast<uint8_t>(v); break;               // navigation
+        case 24: put16(24, v); break;                                  // sdk version
+        default: break;
+        }
+    }
+    return c;
+}
 
 }  // namespace
 
@@ -356,9 +541,9 @@ bool toArsc(const std::vector<uint8_t>& pb, std::vector<uint8_t>& arsc, std::str
         error = "not a protobuf ResourceTable";
         return false;
     }
-    std::vector<std::string> globals;           // value strings
+    std::vector<std::string> globals;  // value strings
     std::map<std::string, uint32_t> globalIdx;
-    const auto global = [&](const std::string& s) {
+    const Strings global = [&](const std::string& s) {
         auto it = globalIdx.find(s);
         if (it != globalIdx.end()) return it->second;
         const uint32_t i = static_cast<uint32_t>(globals.size());
@@ -390,75 +575,48 @@ bool toArsc(const std::vector<uint8_t>& pb, std::vector<uint8_t>& arsc, std::str
                 std::vector<Field> ty;
                 if (!readFields(pf.data, pf.size, ty)) continue;
                 uint32_t typeId = 0;
-                ResType rt;
+                std::string typeName;
                 std::vector<Field> entries;
                 for (const Field& tf : ty) {
                     if (tf.number == 1 && tf.wire == 2) typeId = id(tf);
-                    else if (tf.number == 2 && tf.wire == 2) rt.name = str(tf);
+                    else if (tf.number == 2 && tf.wire == 2) typeName = str(tf);
                     else if (tf.number == 3 && tf.wire == 2) entries.push_back(tf);
                 }
                 if (typeId == 0 || typeId > 255) continue;
+                ResType& type = types[typeId];
+                type.name = typeName;
                 for (const Field& ef : entries) {
                     std::vector<Field> en;
                     if (!readFields(ef.data, ef.size, en)) continue;
                     uint32_t entryId = 0;
                     bool haveId = false;
                     ResEntry re;
-                    bool chosenDefault = false;
                     for (const Field& x : en) {
                         if (x.number == 1 && x.wire == 2) entryId = id(x), haveId = true;
                         else if (x.number == 2 && x.wire == 2) re.name = str(x);
                         else if (x.number == 6 && x.wire == 2) {  // config_value
                             std::vector<Field> cv;
                             if (!readFields(x.data, x.size, cv)) continue;
-                            bool defaultConfig = true;
+                            ConfigBytes config = parseConfig(nullptr, 0);
                             const Field* valueField = nullptr;
                             for (const Field& c : cv) {
-                                if (c.number == 1 && c.wire == 2 && c.size > 0) defaultConfig = false;
+                                if (c.number == 1 && c.wire == 2) config = parseConfig(c.data, c.size);
                                 if (c.number == 2 && c.wire == 2) valueField = &c;
                             }
-                            if (!valueField || (re.value && (chosenDefault || !defaultConfig))) continue;
                             std::vector<Field> val;
-                            if (!readFields(valueField->data, valueField->size, val)) continue;
+                            if (!valueField || !readFields(valueField->data, valueField->size, val)) continue;
                             for (const Field& vf : val) {
-                                if (vf.number != 4 || vf.wire != 2) continue;  // item (compound values are skipped)
-                                std::vector<Field> item;
-                                if (!readFields(vf.data, vf.size, item)) continue;
-                                for (const Field& it : item) {
-                                    std::vector<Field> inner;
-                                    if (it.wire != 2 || !readFields(it.data, it.size, inner)) continue;
-                                    if (it.number == 1) {  // ref
-                                        for (const Field& r : inner)
-                                            if (r.number == 2 && r.wire == 0) re.dataType = 0x01, re.data = static_cast<uint32_t>(r.value), re.value = true;
-                                    } else if (it.number == 2 || it.number == 3) {  // str / raw_str
-                                        for (const Field& r : inner)
-                                            if (r.number == 1 && r.wire == 2) re.dataType = 0x03, re.data = global(str(r)), re.value = true;
-                                    } else if (it.number == 4) {  // styled_str: the plain text
-                                        for (const Field& r : inner)
-                                            if (r.number == 1 && r.wire == 2) re.dataType = 0x03, re.data = global(str(r)), re.value = true;
-                                    } else if (it.number == 5) {  // file: its path
-                                        for (const Field& r : inner)
-                                            if (r.number == 1 && r.wire == 2) re.dataType = 0x03, re.data = global(str(r)), re.value = true;
-                                    } else if (it.number == 7) {  // prim
-                                        for (const Field& r : inner) {
-                                            if (r.number == 6 && r.wire == 0) re.dataType = 0x10, re.data = static_cast<uint32_t>(r.value), re.value = true;
-                                            else if (r.number == 7 && r.wire == 0) re.dataType = 0x11, re.data = static_cast<uint32_t>(r.value), re.value = true;
-                                            else if (r.number == 8 && r.wire == 0) re.dataType = 0x12, re.data = r.value ? 0xffffffffu : 0u, re.value = true;
-                                            else if (r.number == 3 && r.wire == 5) re.dataType = 0x04, re.data = static_cast<uint32_t>(r.value), re.value = true;
-                                            else if (r.number == 9 && r.wire == 0) re.dataType = 0x1c, re.data = static_cast<uint32_t>(r.value), re.value = true;
-                                            else if (r.number == 10 && r.wire == 0) re.dataType = 0x1d, re.data = static_cast<uint32_t>(r.value), re.value = true;
-                                        }
-                                    }
-                                }
+                                ResData data;
+                                const bool ok = vf.wire != 2          ? false
+                                                : vf.number == 4      ? parseItem(vf, global, data.value)
+                                                : vf.number == 5      ? parseCompound(vf, global, data)
+                                                                      : false;
+                                if (ok) re.values[config] = std::move(data);
                             }
-                            if (re.value) chosenDefault = defaultConfig;
                         }
                     }
-                    if (haveId && !re.name.empty()) rt.entries[entryId] = std::move(re);
+                    if (haveId && entryId < 0x10000 && !re.name.empty() && !re.values.empty()) type.entries[entryId] = std::move(re);
                 }
-                ResType& slot = types[typeId];
-                slot.name = rt.name;
-                for (auto& e : rt.entries) slot.entries[e.first] = std::move(e.second);
             }
         }
     }
@@ -466,7 +624,7 @@ bool toArsc(const std::vector<uint8_t>& pb, std::vector<uint8_t>& arsc, std::str
         error = "the table has no package";
         return false;
     }
-    // Type and key pools, then the type chunks.
+    // Type and key pools, then for every type a spec and one chunk per configuration (the default one first).
     uint32_t maxType = 0;
     for (const auto& t : types) maxType = std::max(maxType, t.first);
     std::vector<std::string> typeNames(maxType), keys;
@@ -480,29 +638,47 @@ bool toArsc(const std::vector<uint8_t>& pb, std::vector<uint8_t>& arsc, std::str
         keyIdx[k] = i;
         return i;
     };
+    const ConfigBytes defaultConfig = parseConfig(nullptr, 0);
     Writer chunks;
+    const auto value = [&](const ResValue& v) { chunks.u16(8), chunks.out.push_back(0), chunks.out.push_back(v.type), chunks.u32(v.data); };
     for (const auto& [typeId, t] : types) {
-        uint32_t maxEntry = 0;
-        for (const auto& e : t.entries) maxEntry = std::max(maxEntry, e.first);
-        const uint32_t count = maxEntry + 1;
+        if (t.entries.empty()) continue;
+        const uint32_t count = t.entries.rbegin()->first + 1;
         // TypeSpec
         chunks.u16(0x0202), chunks.u16(16), chunks.u32(16 + 4 * count), chunks.out.push_back(static_cast<uint8_t>(typeId)), chunks.out.push_back(0), chunks.u16(0), chunks.u32(count);
         for (uint32_t i = 0; i < count; ++i) chunks.u32(0);
-        // Type (default configuration)
-        const size_t at = chunks.out.size();
-        chunks.u16(0x0201), chunks.u16(84), chunks.u32(0), chunks.out.push_back(static_cast<uint8_t>(typeId)), chunks.out.push_back(0), chunks.u16(0), chunks.u32(count);
-        chunks.u32(84 + 4 * count);  // entriesStart
-        chunks.u32(64);              // ResTable_config size, then zeros: the default configuration
-        for (int i = 0; i < 60; ++i) chunks.out.push_back(0);
-        const size_t offsetsAt = chunks.out.size();
-        for (uint32_t i = 0; i < count; ++i) chunks.u32(0xFFFFFFFFu);
-        const size_t entriesAt = chunks.out.size();
-        for (const auto& [entryId, e] : t.entries) {
-            chunks.put32(offsetsAt + 4 * entryId, static_cast<uint32_t>(chunks.out.size() - entriesAt));
-            chunks.u16(8), chunks.u16(0), chunks.u32(key(e.name));
-            chunks.u16(8), chunks.out.push_back(0), chunks.out.push_back(e.dataType), chunks.u32(e.data);
+        std::set<ConfigBytes> others;
+        for (const auto& e : t.entries)
+            for (const auto& v : e.second.values)
+                if (v.first != defaultConfig) others.insert(v.first);
+        std::vector<ConfigBytes> configs{defaultConfig};
+        configs.insert(configs.end(), others.begin(), others.end());
+        for (const ConfigBytes& config : configs) {
+            const size_t at = chunks.out.size();
+            chunks.u16(0x0201), chunks.u16(84), chunks.u32(0), chunks.out.push_back(static_cast<uint8_t>(typeId)), chunks.out.push_back(0), chunks.u16(0), chunks.u32(count);
+            chunks.u32(84 + 4 * count);  // entriesStart
+            chunks.out.insert(chunks.out.end(), config.begin(), config.end());
+            const size_t offsetsAt = chunks.out.size();
+            for (uint32_t i = 0; i < count; ++i) chunks.u32(0xFFFFFFFFu);
+            const size_t entriesAt = chunks.out.size();
+            for (const auto& [entryId, e] : t.entries) {
+                const auto found = e.values.find(config);
+                if (found == e.values.end()) continue;
+                const ResData& d = found->second;
+                chunks.put32(offsetsAt + 4 * entryId, static_cast<uint32_t>(chunks.out.size() - entriesAt));
+                if (!d.complex) {
+                    chunks.u16(8), chunks.u16(0), chunks.u32(key(e.name));
+                    value(d.value);
+                    continue;
+                }
+                chunks.u16(16), chunks.u16(1), chunks.u32(key(e.name)), chunks.u32(d.parent), chunks.u32(static_cast<uint32_t>(d.bag.size()));
+                for (const auto& [name, v] : d.bag) {
+                    chunks.u32(name);
+                    value(v);
+                }
+            }
+            chunks.put32(at + 4, static_cast<uint32_t>(chunks.out.size() - at));
         }
-        chunks.put32(at + 4, static_cast<uint32_t>(chunks.out.size() - at));
     }
     const std::vector<uint8_t> globalPool = makePool(globals), typePool = makePool(typeNames), keyPool = makePool(keys);
     Writer out;

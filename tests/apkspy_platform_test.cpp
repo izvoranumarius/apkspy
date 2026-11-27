@@ -32,6 +32,8 @@
 #include "analysis/Interpreter.hpp"
 #include "core/AxmlDecoder.hpp"
 #include "core/ProtoXml.hpp"
+#include "analysis/Mapping.hpp"
+#include "analysis/Insights.hpp"
 #include "core/ResourceTable.hpp"
 #include "analysis/AnalysisService.hpp"
 #include "analysis/Abi.hpp"
@@ -640,7 +642,8 @@ static void testArm64() {
     CHECK(arm64::decode(0xd61f0200, 0).flow == arm64::Flow::IndirectJump, "br is an indirect jump");
     const arm64::Insn adrp = arm64::decode(0x90000008, 0x1234);
     CHECK(adrp.pageReg == 8 && adrp.target == 0x1000, "adrp exposes its page register");
-    CHECK(!arm64::decode(0x0e20e000, 0).known, "unknown words become .inst");
+    CHECK(!arm64::decode(0x02000000, 0).known, "unallocated words become .inst");  // op0 = 0001
+    CHECK(arm64::decode(0x0e20e000, 0).mnemonic == "pmull", "pmull, a widening multiply");
 }
 
 // AArch64 shared object: f_entry (symbol) calls an unnamed function and forms
@@ -5128,7 +5131,10 @@ static void testNativeArchitectures() {
         const auto cfg = nc->controlFlow(*fn, 64);
         CHECK(!cfg.blocks.empty() && cfg.blocks.back().exit, (name + ": control-flow graph ends in a return").c_str());
         const auto decomp = decompiler::decompileNative(*nc, *fn);
-        CHECK(decomp.error.find("AArch64") != std::string::npos, (name + ": the C decompiler says it only does AArch64").c_str());
+        const std::string pseudo = decompiler::toText(decomp);
+        // The 32-bit x86 snippet loads the string into a register nothing reads (cdecl passes on the stack): dead code.
+        CHECK(decomp.error.empty() && pseudo.find("g(") != std::string::npos && (f.isa == NativeCode::Isa::X86 || pseudo.find("hello abi") != std::string::npos),
+              (name + ": the C decompiler shows the call and the string " + decomp.error + pseudo).c_str());
     }
     // AArch64 still works through the same code path.
     {
@@ -5179,6 +5185,12 @@ static std::string androidSdkBlas() {
     return {};
 }
 
+static std::string hexOf(int v) {
+    char b[16];
+    std::snprintf(b, sizeof b, "%x", v);
+    return b;
+}
+
 static void testRealLibraries() {
     std::printf("== real NDK libraries (all four ABIs) ==\n");
     const std::string blas = androidSdkBlas();
@@ -5218,6 +5230,48 @@ static void testRealLibraries() {
         bool foundString = false;
         for (const auto& s : nc->stringRefs("Illegal TransA", 10)) foundString = foundString || s.text.find("Illegal TransA setting") != std::string::npos;
         CHECK(foundString, (name + ": a string literal is found through the architecture's addressing pattern").c_str());
+        // The C decompiler on real compiler output: jump tables, vector arithmetic and ARM stack arguments.
+        const auto decompiled = [&](const char* function) {
+            const NativeCode::Function* fn = nc->findFunction(function);
+            return fn ? decompiler::toText(decompiler::decompileNative(*nc, *fn)) : std::string();
+        };
+        const std::string xerbla = decompiled("cblas_xerbla");
+        const char* selector = nc->isa() == NativeCode::Isa::Arm64 ? "switch (w21)" : nc->isa() == NativeCode::Isa::Arm32 ? "switch (r6)"
+                               : nc->isa() == NativeCode::Isa::X86 ? "switch (esi)" : "switch (rbp)";
+        CHECK(xerbla.find(selector) != std::string::npos && xerbla.find("case 8:") != std::string::npos,
+              (name + ": a jump table decompiles to a switch over the compared value").c_str());
+        if (nc->isa() == NativeCode::Isa::Arm32) {
+            const std::string sgemm = decompiled("cblas_sgemm");
+            CHECK(sgemm.find("int32_t stk_24") != std::string::npos && sgemm.find("int32_t stk_28") == std::string::npos,
+                  (name + ": the ten stack parameters of cblas_sgemm").c_str());
+            CHECK(sgemm.find("sgemm_(r0, r1, r2, r3, sp_0, sp_4, sp_8, sp_c, sp_10, sp_14, sp_18, sp_1c, sp_20)") != std::string::npos,
+                  (name + ": all thirteen arguments of the call to sgemm_").c_str());
+        }
+        // Stack parameters across routines: the reference BLAS entry points take every argument as a pointer, so the
+        // last one sits at a known offset (ARM: after r0-r3; i386: all on the stack).
+        if (nc->isa() == NativeCode::Isa::Arm32 || nc->isa() == NativeCode::Isa::X86) {
+            static const std::pair<const char*, int> routines[] = {{"sgemm_", 13}, {"dgemv_", 11}, {"zher2k_", 12}, {"ctrsm_", 11}, {"saxpy_", 6},
+                                                                   {"daxpy_", 6},  {"srot_", 7},   {"dsymv_", 10},  {"cgerc_", 9},  {"ztpsv_", 7},
+                                                                   {"sgbmv_", 13}, {"chpr2_", 8}};
+            size_t right = 0;
+            std::string wrong;
+            for (const auto& [routine, args] : routines) {
+                const std::string text = decompiled(routine);
+                const std::string header = text.substr(0, text.find('{'));
+                const bool arm = nc->isa() == NativeCode::Isa::Arm32;
+                const std::string last = arm ? "stk_" + hexOf((args - 5) * 4) : "fp_" + hexOf(8 + 4 * (args - 1));
+                const std::string beyond = arm ? "stk_" + hexOf((args - 4) * 4) : "fp_" + hexOf(8 + 4 * args);
+                if (header.find(last + ")") != std::string::npos && header.find(beyond) == std::string::npos) ++right;
+                else wrong += std::string(" ") + routine;
+            }
+            CHECK(right == std::size(routines), (name + ": every BLAS routine's stack parameters, up to its last argument;" + wrong).c_str());
+        }
+        if (nc->isa() == NativeCode::Isa::X86_64) {
+            const std::string sdot = decompiled("sdot_");
+            CHECK(sdot.find("__mulps") == std::string::npos && sdot.find("__addps") == std::string::npos && sdot.find("float4 xmm0") != std::string::npos &&
+                      sdot.find(") * (") != std::string::npos,
+                  (name + ": packed SSE arithmetic reads as operators").c_str());
+        }
         const auto* fn = nc->findFunction("cblas_caxpy");
         if (fn) {
             size_t bad = 0, total = 0;
@@ -5228,6 +5282,75 @@ static void testRealLibraries() {
             unknownOps = total == 0 || bad * (x.isa == NativeCode::Isa::Arm32 ? 3 : 20) > total;  // ARM32: VFP / NEON still print as raw words
             CHECK(!unknownOps, (name + ": cblas_caxpy decodes (under 5% unknown instructions)").c_str());
         }
+    }
+}
+
+// Encodings the decoders now name (checked against LLVM's disassembler), and real compiler output translated to C.
+static void testNativeTranslations() {
+    std::printf("== native decoders and C translations ==\n");
+    const auto a64 = [](uint32_t w) {
+        const arm64::Insn i = arm64::decode(w, 0);
+        return i.mnemonic + " " + i.operands;
+    };
+    CHECK(a64(0x4ddfc91a) == "ld1r {v26.4s}, [x8], #4", ("ld1r: " + a64(0x4ddfc91a)).c_str());
+    CHECK(a64(0x0d008363) == "st1 {v3.s}[0], [x27]", ("st1 lane: " + a64(0x0d008363)).c_str());
+    CHECK(a64(0x2f08a404) == "ushll v4.8h, v0.8b, #0", ("ushll: " + a64(0x2f08a404)).c_str());
+    CHECK(a64(0x2e20c0e0) == "umull v0.8h, v7.8b, v0.8b", ("umull: " + a64(0x2e20c0e0)).c_str());
+    CHECK(a64(0x4e813804) == "zip1 v4.4s, v0.4s, v1.4s", ("zip1: " + a64(0x4e813804)).c_str());
+    CHECK(a64(0x0f188d0a) == "rshrn v10.4h, v8.4s, #8", ("rshrn: " + a64(0x0f188d0a)).c_str());
+    CHECK(a64(0x0ea12800) == "xtn v0.2s, v0.2d", ("xtn: " + a64(0x0ea12800)).c_str());
+    CHECK(a64(0x9eae0003) == "fmov x3, v0.d[1]", ("fmov upper half: " + a64(0x9eae0003)).c_str());
+    const auto t32 = [](uint16_t h1, uint16_t h2) {
+        const uint8_t b[4] = {static_cast<uint8_t>(h1), static_cast<uint8_t>(h1 >> 8), static_cast<uint8_t>(h2), static_cast<uint8_t>(h2 >> 8)};
+        const arm32::Insn i = arm32::decode(b, 4, 0x1000, true);
+        return i.mnemonic + (i.operands.empty() ? "" : " " + i.operands);
+    };
+    CHECK(t32(0xF3BF, 0x8F5B) == "dmb ish", "Thumb dmb ish");
+    CHECK(t32(0xFB50, 0xF001) == "smmul r0, r0, r1", "Thumb smmul");
+    CHECK(t32(0xEE00, 0x1B90) == "vmov.32 d16[0], r1", ("Thumb vmov to a lane: " + t32(0xEE00, 0x1B90)).c_str());
+    CHECK(t32(0xE8D0, 0x3F5F) == "ldrexh r3, [r0]", "Thumb ldrexh");
+    CHECK(t32(0xEEF1, 0xFA6D) == "vneg.f32 s31, s27", ("vneg, not vsqrt: " + t32(0xEEF1, 0xFA6D)).c_str());
+
+    const std::string blas = androidSdkBlas();
+    if (blas.empty()) {
+        std::printf("  skipped the library part: no Android SDK renderscript libraries found\n");
+        return;
+    }
+    const auto load = [&](const std::string& path) -> std::shared_ptr<NativeCode> {
+        std::ifstream in(fs::path(path), std::ios::binary);
+        auto bytes = std::make_shared<std::vector<uint8_t>>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::string err;
+        auto elf = bytes->empty() ? nullptr : ElfFile::parse(bytes, fs::path(path).filename().string(), err);
+        return elf ? NativeCode::build(elf, nullptr, err) : nullptr;
+    };
+    const auto decompiled = [](const NativeCode& nc, const char* function) {
+        const NativeCode::Function* fn = nc.findFunction(function);
+        return fn ? decompiler::toText(decompiler::decompileNative(nc, *fn)) : std::string();
+    };
+    const std::string root = blas + "/..";
+    if (auto rs = load(root + "/packaged/arm64-v8a/libRSSupport.so")) {
+        const std::string blend = decompiled(*rs, "blend_line_SRC_IN");
+        CHECK(blend.find("= vmull_u8(") != std::string::npos && blend.find("vmull_high_u8(") != std::string::npos && blend.find("__umull") == std::string::npos,
+              "AArch64: widening multiplies are their arm_neon.h calls");
+        const std::string src = decompiled(*rs, "blend_line_SRC");
+        CHECK(src.find("= vld1q_u8_x4(x1)") != std::string::npos && src.find(".val[3]") != std::string::npos &&
+                  src.find("vst1q_u8_x4(x0, (uint8x16x4_t){{") != std::string::npos,
+              "AArch64: four-register loads and stores travel as an arm_neon.h struct");
+        CHECK(src.find("__ld1") == std::string::npos && src.find("__st1") == std::string::npos, "AArch64: no raw structure loads or stores");
+    }
+    if (auto rs = load(root + "/packaged/armeabi-v7a/libRSSupport.so")) {
+        const std::string kernel = decompiled(*rs, "android::renderscript::RsdCpuScriptIntrinsicBlend::kernel(const RsExpandKernelDriverInfo*, unsigned int, unsigned int, unsigned int)");
+        CHECK(kernel.find("switch (r3)") != std::string::npos && kernel.find("case 43:") != std::string::npos && kernel.find("goto *") == std::string::npos,
+              "ARM: a tbh table past a literal pool is a switch (the pool is data, not instructions)");
+        CHECK(kernel.find("d16 = vld1_lane_u32(r5, d16, 0)") != std::string::npos && kernel.find("{d16[0]}") == std::string::npos,
+              "ARM: a lane load is its arm_neon.h call, defining the register");
+    }
+    if (auto m = load(root + "/intermediates/x86/libm.so")) {
+        const std::string hypot = decompiled(*m, "hypotl");
+        CHECK(hypot.find("sqrt((") != std::string::npos && hypot.find("__fld") == std::string::npos && hypot.find("__fstp") == std::string::npos,
+              "i386: x87 stack code reads as expressions");
+        const std::string fabs = decompiled(*m, "fabs");
+        CHECK(fabs.rfind("// ", 0) == 0 && fabs.find("double fabs(") != std::string::npos, "i386: a function returning in st(0) returns double");
     }
 }
 
@@ -5330,7 +5453,28 @@ static std::vector<uint8_t> buildProtoResources() {
     const std::string stringType = pb::field(3, pb::field(1, pb::num(1, 1)) + pb::field(2, "string") + entry(0, "app_name", str) + entry(1, "home_label", ref));
     const std::string colorType = pb::field(3, pb::field(1, pb::num(1, 2)) + pb::field(2, "color") + entry(0, "brand", color));
     (void)idMsg;
-    const std::string package = pb::field(2, pb::field(1, pb::num(1, 0x7f)) + pb::field(2, "com.example.aab") + stringType + colorType);
+    // Compound values: an array, plurals and a style; and a string that also exists in French and in night mode.
+    const auto compound = [&](uint32_t id, const std::string& name, const std::string& value) {
+        const std::string configValue = pb::field(1, "") + pb::field(2, pb::field(5, value));
+        return pb::field(3, pb::field(1, pb::num(1, id)) + pb::field(2, name) + pb::field(6, configValue));
+    };
+    const auto text = [&](const std::string& t) { return pb::field(2, pb::field(1, t)); };  // Item.str
+    const std::string array = pb::field(4, pb::field(1, pb::field(3, text("red"))) + pb::field(1, pb::field(3, text("green"))));
+    const std::string plural = pb::field(5, pb::field(1, pb::num(3, 1) + pb::field(4, text("one file"))) +
+                                                pb::field(1, pb::num(3, 5) + pb::field(4, text("many files"))));
+    const std::string style = pb::field(2, pb::field(1, pb::num(2, 0x01030005u)) +
+                                               pb::field(3, pb::field(3, pb::num(2, 0x7f020000u)) + pb::field(4, text("bold"))));
+    const std::string arrayType = pb::field(3, pb::field(1, pb::num(1, 3)) + pb::field(2, "array") + compound(0, "colors", array));
+    const std::string pluralType = pb::field(3, pb::field(1, pb::num(1, 4)) + pb::field(2, "plurals") + compound(0, "files", plural));
+    const std::string styleType = pb::field(3, pb::field(1, pb::num(1, 5)) + pb::field(2, "style") + compound(0, "Title", style));
+    const auto inConfig = [&](const std::string& config, const std::string& t) {
+        return pb::field(6, pb::field(1, config) + pb::field(2, pb::field(4, text(t))));
+    };
+    const std::string greeting = pb::field(3, pb::field(1, pb::num(1, 0)) + pb::field(2, "greeting") + inConfig(pb::field(3, "fr-FR"), "bonjour") +
+                                                  inConfig("", "hello") + inConfig(pb::num(17, 1), "good evening"));
+    const std::string textType = pb::field(3, pb::field(1, pb::num(1, 6)) + pb::field(2, "text") + greeting);
+    const std::string package = pb::field(2, pb::field(1, pb::num(1, 0x7f)) + pb::field(2, "com.example.aab") + stringType + colorType + arrayType +
+                                                 pluralType + styleType + textType);
     return std::vector<uint8_t>(package.begin(), package.end());
 }
 
@@ -5361,6 +5505,11 @@ static void testAppBundle() {
             ResourceTable::Item item;
             CHECK(table->lookup(0x7f020000, item) && item.type == "color" && item.name == "brand" && item.value.find("112233") != std::string::npos, "colour resource");
             CHECK(table->find("string/app_name") == 0x7f010000, "lookup by name");
+            CHECK(table->lookup(0x7f030000, item) && item.complex && item.value == "[red, green]", ("array: " + item.value).c_str());
+            CHECK(table->lookup(0x7f040000, item) && item.value == "one: one file, other: many files", ("plurals: " + item.value).c_str());
+            CHECK(table->lookup(0x7f050000, item) && item.value.find("parent 0x01030005") == 0 &&
+                      item.value.find("@color/brand = bold") != std::string::npos, ("style: " + item.value).c_str());
+            CHECK(table->lookup(0x7f060000, item) && item.value == "hello" && item.configs == 3, "default configuration wins; three configurations");
         }
         CHECK(!protoxml::toArsc({}, arsc, err) && !protoxml::toArsc({0xff, 0xff}, arsc, err), "empty or malformed resource tables are refused");
     }
@@ -5537,6 +5686,135 @@ static std::vector<uint8_t> buildDecoderDex(std::string* expect1) {
     return d.b;
 }
 
+#include "emu_fixture.inc"
+
+// Java compiled by javac and d8: the interpreter against the host JVM, and the decompiler naming, nesting cleanup,
+// logging judgement and mapping export on ordinary compiler output.
+static void testCompiledFixture() {
+    std::printf("== compiled Java fixture ==\n");
+    auto bytes = std::make_shared<std::vector<uint8_t>>(kEmuFixtureDex, kEmuFixtureDex + sizeof kEmuFixtureDex);
+    std::string err;
+    auto dex = DexFile::parse(bytes, "fixture.dex", err);
+    CHECK(dex != nullptr, ("fixture dex parses " + err).c_str());
+    if (!dex) return;
+    std::atomic<bool> stop{false};
+    auto a = ApkAnalysis::build({dex}, stop);
+    CHECK(a != nullptr, "analysis builds");
+    if (!a) return;
+    for (const auto& row : kEmuExpected) {
+        const auto m = a->findMethodDefs("LEmuFix;", row[0]);
+        if (m.size() != 1) {
+            CHECK(false, row[0]);
+            continue;
+        }
+        const emu::Outcome r = emu::runStatic(*a, m.front(), {emu::Arg::string(row[1])});
+        CHECK(r.ok && r.text == row[2], (std::string(row[0]) + "(\"" + row[1] + "\") gives what the JVM gives, got '" + r.text + "' " + r.error).c_str());
+    }
+    if (const auto m = a->findMethodDefs("LEmuFix;", "uncaught"); m.size() == 1) {
+        const emu::Outcome r = emu::runStatic(*a, m.front(), {emu::Arg::string("now")});
+        CHECK(!r.ok && r.error.find("IllegalStateException: boom now") != std::string::npos, ("uncaught exception reported: " + r.error).c_str());
+    }
+
+    // Decompiler: mapping names, resource ids, flattened nesting.
+    const auto nested = a->findMethodDefs("LUiFix;", "nested");
+    const auto caller = a->findMethodDefs("LUiFix;", "caller");
+    CHECK(nested.size() == 1 && caller.size() == 1, "fixture methods");
+    if (nested.empty() || caller.empty()) return;
+    const mapping::Mapping map = mapping::parse("com.example.Screen -> UiFix:\n    int screenTitle -> title\n    int computeNested(int,int) -> nested\n");
+    std::vector<uint8_t> arsc;
+    CHECK(protoxml::toArsc(buildProtoResources(), arsc, err), "resources for the fixture");
+    const auto table = ResourceTable::parse(arsc, err);
+    const std::string named = decompiler::toText(decompiler::decompileMethod(*a, nested.front(), {&map, table.get()}));
+    CHECK(named.find("computeNested(int arg0, int arg1)") != std::string::npos && named.find("screenTitle") != std::string::npos,
+          ("mapping names the method and the field:\n" + named).c_str());
+    CHECK(named.find("R.string.app_name") != std::string::npos, "a resource id shows by name");
+    CHECK(named.find("&&") != std::string::npos && named.find("} else {") == std::string::npos, ("nested ifs joined, no else after return:\n" + named).c_str());
+    const std::string called = decompiler::toText(decompiler::decompileMethod(*a, caller.front(), {&map, nullptr}));
+    CHECK(called.find("computeNested(") != std::string::npos && called.find("screenTitle") != std::string::npos, "call sites use the original names");
+    const std::string plain = decompiler::toText(decompiler::decompileMethod(*a, nested.front()));
+    CHECK(plain.find("nested(") != std::string::npos && plain.find("0x7f010000") != std::string::npos, "without them the output keeps the app's names and numbers");
+
+    // Logging judgement.
+    std::map<std::string, insights::Severity> verdicts;
+    auto sites = a->logSites(100);
+    a->traceLogs(sites, insights::sensitiveName);
+    std::map<std::string, std::string> reasons;
+    for (const ApkAnalysis::LogSite& site : sites) {
+        if (site.method.find("LUiFix;->flow") == 0 || site.method.find("LUiFix;->sink") == 0 || site.method.find("LUiFix;->later") == 0 ||
+            site.method.find("LUiFix;->dump") == 0) {
+            const insights::LogVerdict v = insights::judgeLog({site.messageConstant, site.constants, site.appended, site.calls, site.traced, site.flows});
+            reasons[site.constants.empty() ? "?" : site.constants.front()] = std::string(insights::severityName(v.severity)) + ": " + v.reason;
+        }
+        if (site.method.find("LUiFix;->logs") != 0) continue;
+        const insights::LogVerdict v =
+            insights::judgeLog({site.messageConstant, site.constants, site.appended, site.calls, site.traced, site.flows});
+        verdicts[site.constants.empty() ? "?" : site.constants.front()] = v.severity;
+    }
+    CHECK(verdicts.size() == 4 && verdicts["net"] == insights::Severity::Info, "a fixed message carries no data");
+    CHECK(verdicts["auth"] == insights::Severity::High, "a logged token is high");
+    CHECK(verdicts["ui"] == insights::Severity::Low, "an ordinary runtime value is low");
+    CHECK(verdicts["pw"] == insights::Severity::Info, "a fixed message about passwords is not a leak");
+    // Data flow: through a renamed variable and string building, a preference key, a wrapper method; and not through length().
+    CHECK(reasons["a"].find("high: logs field secretValue") == 0, ("traced through an app getter: " + reasons["a"]).c_str());
+    CHECK(reasons["b"].find("high: logs the value stored as \"session_token\"") == 0, ("traced from a stored key: " + reasons["b"]).c_str());
+    CHECK(reasons["c"].find("low: ") == 0, ("a length is not the secret: " + reasons["c"]).c_str());
+    CHECK(reasons["w"].find("passed in by LUiFix;->flows") != std::string::npos, ("traced through a wrapper's parameter: " + reasons["w"]).c_str());
+    // Fields written in another method, a setter's parameter, a list a helper fills, a list kept in a field.
+    CHECK(reasons["d"].find("high: logs the device id, kept in field cached by LUiFix;->remember") == 0, ("traced through a field: " + reasons["d"]).c_str());
+    CHECK(reasons["e"].find("high: logs the IMEI, kept in field other by LUiFix;->storeImei") == 0, ("traced through a setter: " + reasons["e"]).c_str());
+    CHECK(reasons["f"].find("high: logs the IMSI") == 0, ("traced through a list filled by a helper: " + reasons["f"]).c_str());
+    CHECK(reasons["g"].find("high: logs the phone number, kept in field bag by LUiFix;->later") == 0, ("traced through a list in a field: " + reasons["g"]).c_str());
+
+    // Renames as a ProGuard mapping that reads back.
+    size_t matched = 0;
+    const std::string exported = a->renamesAsMapping({{"UiFix", "Screen"}, {"nested", "combine"}, {"title", "heading"}, {"nothing", "x"}}, &matched);
+    CHECK(matched == 3, "three renames name something in the app");
+    CHECK(exported.find("Screen -> UiFix:") != std::string::npos && exported.find("    int combine(int,int) -> nested") != std::string::npos &&
+              exported.find("    int heading -> title") != std::string::npos, ("mapping text:\n" + exported).c_str());
+    // A rename of a name that a loaded mapping.txt gave is exported against the app's own name.
+    const std::string again = a->renamesAsMapping({{"computeNested", "add"}, {"screenTitle", "total"}}, &matched, &map);
+    CHECK(matched == 2 && again.find("com.example.Screen -> UiFix:") != std::string::npos && again.find("    int add(int,int) -> nested") != std::string::npos &&
+              again.find("    int total -> title") != std::string::npos, ("renames over a mapping:\n" + again).c_str());
+    const mapping::Mapping back = mapping::parse(exported);
+    CHECK(back.errors == 0 && back.originalClass("UiFix") == "Screen" && back.originalMethod("UiFix", "nested", 0) == "combine", "it parses back");
+}
+
+static void testFlattenNesting() {
+    std::printf("== nesting cleanup ==\n");
+    const auto run = [](std::initializer_list<std::pair<int, const char*>> in) {
+        std::vector<decompiler::Line> lines;
+        for (const auto& [indent, text] : in) lines.push_back({text, indent, {}});
+        decompiler::flattenNesting(lines);
+        std::string out;
+        for (const auto& l : lines) out += std::string(static_cast<size_t>(l.indent), '.') + l.text + "|";
+        return out;
+    };
+    const std::string joined = run({{0, "if (x ? a : b) {"}, {1, "if (c || d) {"}, {2, "f();"}, {1, "}"}, {0, "}"}});
+    CHECK(joined == "if ((x ? a : b) && (c || d)) {|.f();|}|", joined.c_str());
+    const std::string guard = run({{0, "if (a) {"}, {1, "return;"}, {0, "} else {"}, {1, "f();"}, {0, "}"}});
+    CHECK(guard == "if (a) {|.return;|}|f();|", guard.c_str());
+    const std::string chain = run({{0, "if (a) {"}, {1, "f();"}, {0, "} else {"}, {1, "if (b) {"}, {2, "g();"}, {1, "}"}, {0, "}"}});
+    CHECK(chain == "if (a) {|.f();|} else if (b) {|.g();|}|", chain.c_str());
+    const char* kept = "if (a) {|.if (b) {|..f();|.}|.g();|}|";
+    const std::string same = run({{0, "if (a) {"}, {1, "if (b) {"}, {2, "f();"}, {1, "}"}, {1, "g();"}, {0, "}"}});
+    CHECK(same == kept, same.c_str());
+}
+
+static void testNeonRemainder() {
+    std::printf("== NEON shifts, conversions, element loads ==\n");
+    // Thumb encodings, checked against LLVM's disassembler.
+    const auto text = [](uint16_t h1, uint16_t h2) {
+        const uint8_t b[4] = {static_cast<uint8_t>(h1), static_cast<uint8_t>(h1 >> 8), static_cast<uint8_t>(h2), static_cast<uint8_t>(h2 >> 8)};
+        const arm32::Insn in = arm32::decode(b, 4, 0x1000, true);
+        return in.mnemonic + " " + in.operands;
+    };
+    CHECK(text(0xffcd, 0x613e) == "vsra.u8 d22, d30, #3", text(0xffcd, 0x613e).c_str());
+    CHECK(text(0xef88, 0x0a10).rfind("vmovl.s8 q0, d0", 0) == 0, text(0xef88, 0x0a10).c_str());
+    CHECK(text(0xffbb, 0x0640) == "vcvt.f32.s32 q0, q0", text(0xffbb, 0x0640).c_str());
+    CHECK(text(0xf9a0, 0x008f) == "vld1.8 {d0[4]}, [r0]", text(0xf9a0, 0x008f).c_str());
+    CHECK(text(0xf9a0, 0x0c0f) == "vld1.8 {d0[]}, [r0]", text(0xf9a0, 0x0c0f).c_str());
+}
+
 static void testStringDecoderEmulation() {
     std::printf("== running an app's string decoder ==\n");
     std::string expect1;
@@ -5565,8 +5843,8 @@ static void testStringDecoderEmulation() {
     const auto e = a->findMethodDefs("LDec;", "e");
     CHECK(e.size() == 1, "cipher routine found");
     if (!e.empty()) {
-        const emu::Outcome c = emu::runStatic(*a, e.front(), {emu::Arg::string("RSA/ECB/PKCS1Padding")});
-        CHECK(!c.ok && c.error.find("RSA/ECB/PKCS1Padding") != std::string::npos && c.error.find("not emulated") != std::string::npos,
+        const emu::Outcome c = emu::runStatic(*a, e.front(), {emu::Arg::string("ChaCha20/Poly1305/NoPadding")});
+        CHECK(!c.ok && c.error.find("ChaCha20/Poly1305/NoPadding") != std::string::npos && c.error.find("not emulated") != std::string::npos,
               "a cipher the interpreter does not have stops the run and names it");
     }
     // The crypto behind javax.crypto / MessageDigest, against published test vectors.
@@ -5605,7 +5883,7 @@ static void testStringDecoderEmulation() {
                             std::string(dec.begin(), dec.end()) == "secret!?x";
             CHECK(ok, (std::string(t) + " round-trips").c_str());
         }
-        CHECK(!emu::crypto::parse("RSA/ECB/PKCS1Padding").ok && !emu::crypto::parse("AES/GCM/NoPadding").ok, "unsupported transformations are not parsed");
+        CHECK(!emu::crypto::parse("ChaCha20/Poly1305/NoPadding").ok && !emu::crypto::parse("AES/GCM/PKCS5Padding").ok, "unsupported transformations are not parsed");
         CHECK(emu::crypto::digest("MD5", {'a', 'b', 'c'}, out) && toHex(out) == "900150983cd24fb0d6963f7d28e17f72", "MD5(abc)");
         CHECK(emu::crypto::digest("SHA-1", {'a', 'b', 'c'}, out) && toHex(out) == "a9993e364706816aba3e25717850c26c9cd0d89d", "SHA-1(abc)");
         CHECK(emu::crypto::digest("SHA-256", {'a', 'b', 'c'}, out) && toHex(out) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "SHA-256(abc)");
@@ -5864,6 +6142,65 @@ static int devNative(const std::string& path, const std::string& what, size_t co
             if (shown++ < 8) std::printf("  string at 0x%llx used at 0x%llx: %s\n", static_cast<unsigned long long>(s.addr), static_cast<unsigned long long>(s.from), s.text.substr(0, 70).c_str());
         return 0;
     }
+    if (what.rfind("c-grep:", 0) == 0) {  // the first functions whose C contains the text
+        int shown = 0;
+        for (const auto& f : nc->functions()) {
+            if (f.kind == NativeCode::FunctionKind::Plt) continue;
+            const std::string text = decompiler::toText(decompiler::decompileNative(*nc, f));
+            if (text.find(what.substr(7)) == std::string::npos || text.size() > 6000) continue;
+            std::puts(text.c_str());
+            if (++shown == 2) break;
+        }
+        return 0;
+    }
+    if (what == "c-asm") {  // the lines the C decompiler leaves as __asm / __name(...)
+        for (const auto& f : nc->functions()) {
+            if (f.kind == NativeCode::FunctionKind::Plt) continue;
+            const decompiler::Output out = decompiler::decompileNative(*nc, f);
+            for (const auto& l : out.lines)
+                if (l.text.find("__") != std::string::npos) std::printf("%s\t%s\n", f.name.c_str(), l.text.c_str());
+        }
+        return 0;
+    }
+    if (what == "decompile-all" || what.rfind("c:", 0) == 0) {  // the C decompiler: one function, or all of them
+        if (what != "decompile-all") {
+            const NativeCode::Function* f = nc->findFunction(what.substr(2));
+            if (!f) return 1;
+            const decompiler::Output out = decompiler::decompileNative(*nc, *f);
+            std::puts(out.error.empty() ? decompiler::toText(out).c_str() : out.error.c_str());
+            return 0;
+        }
+        size_t done = 0, failed = 0, lines = 0, raw = 0, gotos = 0, indirect = 0;
+        std::map<std::string, size_t> untranslated;
+        for (const auto& f : nc->functions()) {
+            if (f.kind == NativeCode::FunctionKind::Plt) continue;
+            const decompiler::Output out = decompiler::decompileNative(*nc, f);
+            if (!out.error.empty()) {
+                if (++failed < 6) std::printf("  %s: %s\n", f.name.c_str(), out.error.c_str());
+                continue;
+            }
+            ++done;
+            for (const auto& l : out.lines) {
+                ++lines;
+                if (l.text.find("goto ") != std::string::npos) ++gotos;
+                if (l.text.find("goto *") != std::string::npos) ++indirect;
+                const size_t at = l.text.find("__");
+                const size_t paren = at == std::string::npos ? at : l.text.find('(', at);
+                if (paren != std::string::npos) {
+                    std::string name = l.text.substr(at + 2, paren - at - 2);
+                    if (name == "asm") name = "asm." + l.text.substr(paren + 2, l.text.find_first_of(" \"", paren + 2) - paren - 2);
+                    if (name.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789.") == std::string::npos) ++raw, ++untranslated[name];
+                }
+            }
+        }
+        std::printf("decompiled %zu, failed %zu, lines %zu, untranslated %zu, gotos %zu, indirect %zu\n", done, failed, lines, raw, gotos, indirect);
+        std::vector<std::pair<size_t, std::string>> top;
+        for (const auto& [n, c] : untranslated) top.push_back({c, n});
+        std::sort(top.rbegin(), top.rend());
+        for (size_t i = 0; i < top.size() && i < 200; ++i) std::printf("  %s %zu", top[i].second.c_str(), top[i].first);
+        std::printf("\n");
+        return 0;
+    }
     const NativeCode::Function* f = nc->findFunction(what);
     if (!f) {
         std::printf("no such function\n");
@@ -6021,9 +6358,13 @@ int main(int argc, char** argv) {
     testAbiCompatibility();
     testNativeArchitectures();
     testRealLibraries();
+    testNativeTranslations();
     testArmFloatingPointAndFrida();
     testAppBundle();
     testStringDecoderEmulation();
+    testCompiledFixture();
+    testNeonRemainder();
+    testFlattenNesting();
     testJniRegistrations();
     testBundle();
     testDexContainer();

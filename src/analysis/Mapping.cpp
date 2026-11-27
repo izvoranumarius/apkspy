@@ -151,6 +151,21 @@ std::string Mapping::originalMethod(std::string_view obfClass, std::string_view 
     return out;
 }
 
+std::string Mapping::originalMember(std::string_view javaClass, const std::string& obf, const std::string& signature, bool method) const {
+    const auto found = byObfuscated.find(std::string(javaClass));
+    if (found == byObfuscated.end()) return {};
+    const auto [begin, end] = found->second.members.equal_range(obf);
+    for (auto it = begin; it != end; ++it) {
+        const Member& m = it->second;
+        if (m.method != method || m.original.find('.') != std::string::npos) continue;  // inlined from elsewhere
+        if (method ? m.signature.size() >= signature.size() &&
+                         m.signature.compare(m.signature.size() - signature.size(), signature.size(), signature) == 0
+                   : m.signature.rfind(signature, 0) == 0)
+            return m.original;
+    }
+    return {};
+}
+
 int Mapping::originalLine(std::string_view obfClass, std::string_view obf, int line) const {
     const auto it = byObfuscated.find(std::string(obfClass));
     if (it == byObfuscated.end() || line <= 0) return line;

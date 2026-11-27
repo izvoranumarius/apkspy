@@ -38,6 +38,9 @@ struct Mapping {
     // Original method name for `obf` in class `obfClass` at obfuscated line
     // `line` (0 = any); several candidates are joined with '|'.
     std::string originalMethod(std::string_view obfClass, std::string_view obf, int line) const;
+    // The original name of member `obf` that class `javaClass` itself declares, "" when unmapped. `signature` is what
+    // the entry must match, as a mapping file writes it: "type " for a field, "(argument,types)" for a method.
+    std::string originalMember(std::string_view javaClass, const std::string& obf, const std::string& signature, bool method) const;
     // Original line for an obfuscated line inside a method's range (or `line`).
     int originalLine(std::string_view obfClass, std::string_view obf, int line) const;
 };

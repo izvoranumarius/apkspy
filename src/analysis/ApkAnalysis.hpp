@@ -1,11 +1,13 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 #include "analysis/DexFile.hpp"
+#include "analysis/Mapping.hpp"
 
 // Whole-APK bytecode analysis over every classesN.dex: class table,
 // cross-references (calls, field reads/writes, string and type uses),
@@ -112,6 +114,24 @@ public:
     };
     std::vector<ConstArgCall> constantArguments(const MethodDef& m) const;
 
+    // Calls that write to a log (android.util.Log, println, print), with what surrounds each: the constant arguments,
+    // the constant text appended to strings and the methods called since the previous log call.
+    struct LogSite {
+        CodeRef ref;
+        std::string method;  // signature of the method that logs
+        std::string callee;
+        bool messageConstant = false;
+        std::vector<std::string> constants, appended, calls;
+        // Filled by traceLogs(): whether the method's data flow was followed, and what sensitive data reaches the
+        // message ("the IMEI", "field password", "getAuthToken()", "..., passed in by Lx;->y()V").
+        bool traced = false;
+        std::vector<std::string> flows;
+    };
+    std::vector<LogSite> logSites(size_t limit) const;
+    // `classify(name)` returns what sensitive thing a field, getter or key name stands for, "" when nothing.
+    using Classifier = std::function<std::string(std::string_view name)>;
+    void traceLogs(std::vector<LogSite>& sites, const Classifier& classify) const;
+
     // Control-flow graph of one method.
     struct BasicBlock {
         uint32_t startPc = 0;
@@ -155,6 +175,13 @@ public:
     std::string disassemble(const MethodDef& m) const;
     std::string disassembleClass(const ClassEntry& c) const;
     std::string disassembleClass(const ClassEntry& c, const dalvik::ListingOptions& opt) const;
+
+    // The user's symbol renames (name in the app -> new name) as a ProGuard mapping.txt: "original -> obfuscated",
+    // where the original side carries the new names. A rename applies to every class, method and field of that name,
+    // as it does in the decompiler. `matched` receives the number of renames that name something the app defines.
+    // With a loaded mapping, a rename may also be of a name that mapping gave: it is exported against the app's name.
+    std::string renamesAsMapping(const std::vector<std::pair<std::string, std::string>>& symbols, size_t* matched = nullptr,
+                                 const mapping::Mapping* loaded = nullptr) const;
 
 private:
     struct Xref {

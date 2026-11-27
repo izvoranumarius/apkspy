@@ -81,7 +81,8 @@ void AnalysisPanel::drawDecompiler() {
     }
 
     Annotations& notes = workspace_.annotations();
-    const bool stale = kind != decompKind_ || key != decompKey_ || owner != decompOwner_;
+    const bool stale = kind != decompKind_ || key != decompKey_ || owner != decompOwner_ ||
+                       (kind == 1 && decompMappingVersion_ != workspace_.mappingVersion());  // a mapping was loaded or cleared
     if (kind != 0 && ((stale && (decompAuto_ || decompKind_ == 0)) || decompRefresh_)) {
         decompLoc_ = Annotation{};
         decompLoc_.kind = Annotation::Kind::Rename;
@@ -95,7 +96,9 @@ void AnalysisPanel::drawDecompiler() {
             decompSymLoc_ = decompLoc_;
             decompSymLoc_.addr = 0;  // the whole library
         } else {
-            decompRaw_ = decompiler::decompileMethod(*analysis, selMethod_);
+            const auto resources = workspace_.resources(currentGroup_);
+            decompRaw_ = decompiler::decompileMethod(*analysis, selMethod_, {workspace_.mapping(), resources.get()});
+            decompMappingVersion_ = workspace_.mappingVersion();
             decompTitle_ = analysis->methodSignature(selMethod_);
             decompLoc_.target = Annotation::Target::Method;
             decompLoc_.group = currentGroup_;
@@ -394,7 +397,7 @@ void AnalysisPanel::drawDecompiler() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Decompile the current selection again");
     ImGui::SameLine();
     const std::string tokenKey = decompToken_.empty() ? std::string() : decompiler::keyOfShown(decomp_, decompToken_, native);
-    const char* engine = native ? "built-in (AArch64 -> C)" : "built-in (Dalvik -> Java)";
+    const char* engine = native ? "built-in (native -> C)" : "built-in (Dalvik -> Java)";
     const float engineW = ImGui::CalcTextSize(engine).x;
     const float right = ImGui::GetWindowContentRegionMax().x;
     // The hint gets the room left of the engine label (which goes first when space runs out).

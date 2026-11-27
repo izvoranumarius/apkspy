@@ -9,10 +9,14 @@
 // `String decode(String)` / `String d(int)` helpers obfuscators generate) on constant arguments, without a device.
 //
 // It executes the method's bytecode, the class's static initialiser (the keys and tables those routines read) and
-// the app methods it calls. Library calls are limited to a fixed list (String, StringBuilder, Integer, Character,
-// Math, System.arraycopy, array clone, Base64); anything else - javax.crypto, reflection, I/O, exceptions - stops the
-// run with an error that names it, so nothing outside the interpreter ever executes. Runs are bounded in steps,
-// call depth and memory.
+// the app methods it calls, with try / catch / throw, and reflection over the app's static methods and the supported
+// library calls. Objects of the app's own classes work: constructors, instance fields and virtual / interface / super
+// calls. Floating point follows Java (NaN comparisons, saturating conversions, Float / Double text). Library calls are
+// limited to a fixed list (String, StringBuilder, the boxes, Math, Integer / Long / Float / Double / Character helpers,
+// java.util lists, maps and sets with HashMap's iteration order, Arrays, System.arraycopy, array clone, Base64,
+// javax.crypto ciphers including AES-GCM and RSA (PKCS#1, OAEP), MessageDigest); anything else - I/O, other library
+// classes - stops the run with an error that names it, so nothing outside the interpreter ever executes. Runs are
+// bounded in steps, call depth and memory.
 namespace emu {
 
 struct Arg {
@@ -29,7 +33,7 @@ struct Outcome {
     bool ok = false;
     std::string text;         // the returned String (UTF-8), the integer as text, or the bytes as hex
     bool isString = false;
-    std::string error;        // why it stopped ("javax/crypto/Cipher is not emulated", "step limit", ...)
+    std::string error;        // why it stopped ("the call ... is not emulated", "step limit", an uncaught exception)
     uint64_t steps = 0;
 };
 

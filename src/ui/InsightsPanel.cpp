@@ -1,4 +1,5 @@
 #include "ui/InsightsPanel.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -57,6 +58,25 @@ void InsightsPanel::runScan() {
     strings_ = std::move(in.strings);
     endpoints_ = insights::endpoints(strings_);
     decoded_ = insights::decodeStrings(strings_);
+    // Log calls judged by the data followed into them and what surrounds them, worst first (on a worker).
+    result_.logs.clear();
+    logRefs_.clear();
+    {
+        std::shared_ptr<const ApkAnalysis> analysis = analysis_;
+        logJob_ = std::async(std::launch::async, [analysis] {
+            LogRows found;
+            std::vector<ApkAnalysis::LogSite> sites = analysis->logSites(20000);
+            analysis->traceLogs(sites, insights::sensitiveName);
+            for (ApkAnalysis::LogSite& site : sites) {
+                const insights::LogVerdict verdict = insights::judgeLog({site.messageConstant, std::move(site.constants), std::move(site.appended),
+                                                                         std::move(site.calls), site.traced, std::move(site.flows)});
+                if (verdict.severity == insights::Severity::Info) continue;
+                found.push_back({{verdict.severity, verdict.reason, std::move(site.method), std::move(site.callee)}, site.ref});
+            }
+            std::stable_sort(found.begin(), found.end(), [](const auto& x, const auto& y) { return x.first.severity > y.first.severity; });
+            return found;
+        });
+    }
     callers_.clear();
     constArgs_.clear();
 
@@ -380,7 +400,53 @@ void InsightsPanel::drawDecoded() {
     }
 }
 
+void InsightsPanel::collectLogs(bool wait) {
+    if (!logJob_.valid() || (!wait && logJob_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)) return;
+    LogRows found = logJob_.get();
+    result_.logs.clear();
+    logRefs_.clear();
+    for (auto& f : found) {
+        result_.logs.push_back(std::move(f.first));
+        logRefs_.push_back(f.second);
+    }
+}
+
+void InsightsPanel::drawSensitiveLogs() {
+    collectLogs(false);
+    if (logJob_.valid()) {
+        ImGui::TextDisabled("Tracing log calls: following data through fields, collections and callers...");
+        ImGui::Separator();
+        return;
+    }
+    size_t high = 0, medium = 0;
+    for (const auto& f : result_.logs) {
+        high += f.severity == insights::Severity::High ? 1 : 0;
+        medium += f.severity == insights::Severity::Medium ? 1 : 0;
+    }
+    if (result_.logs.empty()) return;
+    char header[128];
+    std::snprintf(header, sizeof header, "Log calls with runtime data: %zu high, %zu medium, %zu other###logs", high, medium,
+                  result_.logs.size() - high - medium);
+    if (!ImGui::CollapsingHeader(header)) return;
+    ImGui::TextDisabled("\"traced\": the data was followed into the message. Others are judged from the names around the call.");
+    ImGuiListClipper clipper;
+    clipper.Begin(static_cast<int>(result_.logs.size()));
+    while (clipper.Step())
+        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+            const auto& f = result_.logs[static_cast<size_t>(i)];
+            ImGui::PushID(i);
+            ImGui::TextColored(severityColor(f.severity), "[%s]", insights::severityName(f.severity));
+            ImGui::SameLine();
+            const std::string label = f.reason + "  -  " + f.method;
+            if (ImGui::Selectable(label.c_str())) openRef(logRefs_[static_cast<size_t>(i)]);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s\nOpen the smali listing at this call", f.method.c_str(), f.callee.c_str());
+            ImGui::PopID();
+        }
+    ImGui::Separator();
+}
+
 void InsightsPanel::drawRules() {
+    drawSensitiveLogs();
     if (result_.rules.empty()) {
         ImGui::TextDisabled("No rule matched.");
         return;
@@ -594,6 +660,7 @@ void InsightsPanel::drawRetrace() {
 }
 
 void InsightsPanel::saveExport(const std::string& file) {
+    collectLogs(true);  // the export includes the traced log calls
     std::string text;
     const std::string name = group_.empty() ? "app.apk" : group_;
     if (exportKind_ == ExportKind::Json) text = insights::toJson(result_, name);

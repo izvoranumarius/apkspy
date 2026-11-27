@@ -199,6 +199,7 @@ public:
         ++mappingVersion_;
     }
     const mapping::Mapping* mapping() const { return mapping_.get(); }
+    std::shared_ptr<const mapping::Mapping> mappingShared() const { return mapping_; }  // for work off the UI thread
     uint64_t mappingVersion() const { return mappingVersion_; }
 
     // Listing options for `group`: app resource ids are named from its resources.arsc.

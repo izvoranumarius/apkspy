@@ -1090,6 +1090,129 @@ Result scan(const Inputs& in) {
     return r;
 }
 
+namespace {
+
+// "getAuthToken_v2" -> {"get", "auth", "token", "v", "2"}
+std::vector<std::string> words(std::string_view s) {
+    std::vector<std::string> out;
+    std::string word;
+    const auto end = [&] {
+        if (!word.empty()) out.push_back(word);
+        word.clear();
+    };
+    for (size_t i = 0; i < s.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        if (!std::isalnum(c)) {
+            end();
+            continue;
+        }
+        if (!word.empty()) {
+            const unsigned char p = static_cast<unsigned char>(s[i - 1]);
+            const bool upperAfterLower = std::isupper(c) && std::islower(p);
+            const bool endOfAcronym = std::isupper(c) && std::isupper(p) && i + 1 < s.size() && std::islower(static_cast<unsigned char>(s[i + 1]));
+            if (upperAfterLower || endOfAcronym || (std::isdigit(c) != 0) != (std::isdigit(p) != 0)) end();
+        }
+        word.push_back(static_cast<char>(std::tolower(c)));
+    }
+    end();
+    return out;
+}
+
+// The sensitive thing a text names ("" when none); `credential` tells secrets from personal data.
+std::string sensitiveWord(std::string_view text, bool& credential) {
+    static const char* const secrets[] = {"password", "passwd", "pwd", "passcode", "passphrase", "secret", "token", "apikey", "privatekey",
+                                          "authorization", "bearer", "cookie", "sessionid", "session", "credential", "credentials",
+                                          "otp", "pin", "cvv", "cvc", "creditcard", "cardnumber", "iban", "ssn", "jwt", "refreshtoken",
+                                          "accesstoken", "clientsecret"};
+    static const char* const personal[] = {"email", "msisdn", "imei", "imsi", "phonenumber", "phone", "latitude", "longitude", "location",
+                                           "username", "birthday", "birthdate", "dob", "deviceid", "androidid", "macaddress", "passport"};
+    const std::vector<std::string> w = words(text);
+    // Single words and adjacent pairs ("api" "key", "session" "id").
+    for (int rank = 0; rank < 2; ++rank)
+        for (size_t i = 0; i < w.size(); ++i) {
+            const std::string pair = i + 1 < w.size() ? w[i] + w[i + 1] : std::string();
+            const auto found = [&](const char* k) { return w[i] == k || pair == k || w[i] == std::string(k) + "s"; };
+            if (rank == 0)
+                for (const char* k : secrets)
+                    if (found(k)) {
+                        credential = true;
+                        return k;
+                    }
+            if (rank == 1)
+                for (const char* k : personal)
+                    if (found(k)) {
+                        credential = false;
+                        return k;
+                    }
+        }
+    return {};
+}
+
+}  // namespace
+
+std::string sensitiveName(std::string_view name) {
+    bool credential = false;
+    return sensitiveWord(name, credential);
+}
+
+LogVerdict judgeLog(const LogCall& call) {
+    if (!findSecrets(call.constants).empty()) return {Severity::High, "writes a hard-coded secret to the log"};
+    bool credential = false;
+    std::string word;
+    const auto look = [&](const std::vector<std::string>& texts) {
+        for (const std::string& t : texts) {
+            bool c = false;
+            const std::string w = sensitiveWord(t, c);
+            if (!w.empty() && (word.empty() || (c && !credential))) word = w, credential = c;
+        }
+    };
+    look(call.constants);
+    if (call.messageConstant) {
+        if (word.empty()) return {Severity::Info, "fixed message: no runtime data"};
+        return {Severity::Info, "mentions \"" + word + "\" in a fixed message: no runtime data"};
+    }
+    // Data followed into the message says the most.
+    if (!call.flows.empty()) {
+        Severity worst = Severity::Medium;
+        const std::string* shown = &call.flows.front();
+        for (const std::string& flow : call.flows) {
+            bool c = false;
+            const std::string named = sensitiveWord(flow.substr(0, std::min(flow.find(", passed in by "), flow.find(", kept in field "))), c);
+            const bool platform = flow.rfind("the ", 0) == 0 && flow.rfind("the value stored as", 0) != 0;
+            if ((c || platform || flow.rfind("cookies", 0) == 0) && worst != Severity::High) worst = Severity::High, shown = &flow;
+        }
+        return {worst, "logs " + *shown + " (traced)"};
+    }
+    // A call that reads something sensitive, just before the log.
+    static const std::pair<const char*, const char*> sources[] = {
+        {";->getDeviceId(", "the device id"},          {";->getImei(", "the IMEI"},
+        {";->getSubscriberId(", "the IMSI"},           {";->getSimSerialNumber(", "the SIM serial number"},
+        {";->getLine1Number(", "the phone number"},    {";->getLatitude(", "the location"},
+        {";->getLongitude(", "the location"},          {";->getAccounts", "the device accounts"},
+        {";->getCookie(", "cookies"},                  {"Landroid/provider/Settings$Secure;->getString(", "a secure setting (often the Android id)"},
+        {"Landroid/content/ClipboardManager;->getPrimaryClip(", "the clipboard"},
+    };
+    for (const std::string& callee : call.calls)
+        for (const auto& [pattern, what] : sources)
+            if (callee.find(pattern) != std::string::npos)
+                return {call.traced ? Severity::Low : Severity::High, std::string("logs a runtime value after reading ") + what +
+                                                                         (call.traced ? " (not traced into the message)" : "")};
+    look(call.appended);
+    // Getters named after the data: "...;->getAuthToken()Ljava/lang/String;"
+    std::vector<std::string> getters;
+    for (const std::string& callee : call.calls) {
+        const size_t arrow = callee.find(";->");
+        if (arrow == std::string::npos) continue;
+        const std::string name = callee.substr(arrow + 3, callee.find('(', arrow) - arrow - 3);
+        if (name.rfind("get", 0) == 0) getters.push_back(name.substr(3));
+    }
+    look(getters);
+    if (word.empty()) return {Severity::Low, "logs a runtime value"};
+    // Only a name nearby: when the data flow was followed and led nowhere, this is a hint to look, not a finding.
+    if (call.traced) return {credential ? Severity::Medium : Severity::Low, "logs a runtime value next to \"" + word + "\" (not traced into the message)"};
+    return {credential ? Severity::High : Severity::Medium, "logs a runtime value next to \"" + word + "\""};
+}
+
 std::string toJson(const Result& r, std::string_view apkName) {
     std::string o = "{\n  \"apk\": " + q(apkName) + ",\n";
     char buf[128];
@@ -1127,7 +1250,16 @@ std::string toJson(const Result& r, std::string_view apkName) {
         for (size_t k = 0; k < h.matched.size(); ++k) o += (k ? ", " : "") + q(h.matched[k]);
         o += "]}";
     }
-    o += r.rules.empty() ? "]\n}\n" : "\n  ]\n}\n";
+    o += r.rules.empty() ? "],\n" : "\n  ],\n";
+    o += "  \"sensitiveLogs\": [";
+    size_t logs = 0;
+    for (const LogFinding& f : r.logs) {
+        if (f.severity == Severity::Info) continue;
+        o += (logs++ ? ",\n    " : "\n    ");
+        o += "{\"severity\": " + q(severityName(f.severity)) + ", \"reason\": " + q(f.reason) + ", \"method\": " + q(f.method) +
+             ", \"callee\": " + q(f.callee) + "}";
+    }
+    o += logs ? "\n  ]\n}\n" : "]\n}\n";
     return o;
 }
 
@@ -1154,6 +1286,11 @@ std::string toSarif(const Result& r, std::string_view apkName) {
         const size_t n = std::min<size_t>(h.matched.size(), 20);
         if (n == 0) items.push_back({h.id, level(h.severity), h.detail, ""});
         for (size_t k = 0; k < n; ++k) items.push_back({h.id, level(h.severity), h.title + ": " + h.detail, h.matched[k]});
+    }
+    for (const LogFinding& f : r.logs) {
+        if (f.severity < Severity::Medium) continue;
+        rule("sensitive-logging", "Sensitive data may reach the log (MASVS-STORAGE-2)");
+        items.push_back({"sensitive-logging", level(f.severity), f.reason, f.method});
     }
     for (const Detection& d : r.detections)
         if (d.kind == "Packer") {

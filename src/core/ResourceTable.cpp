@@ -13,6 +13,7 @@ constexpr uint16_t kPackage = 0x0200;
 constexpr uint16_t kType = 0x0201;
 constexpr uint16_t kTypeSpec = 0x0202;
 constexpr size_t kMaxStrings = 4u << 20;
+constexpr size_t kMaxBagValues = 1u << 21;  // across the whole table
 
 struct Reader {
     const std::vector<uint8_t>& d;
@@ -113,6 +114,7 @@ std::shared_ptr<const ResourceTable> ResourceTable::parse(const std::vector<uint
         return nullptr;
     }
     auto t = std::make_shared<ResourceTable>();
+    size_t bagValues = 0;
     const size_t tableEnd = std::min<size_t>(data.size(), r.u32(4));
     size_t pos = r.u16(2);
     while (pos + 8 <= tableEnd) {
@@ -188,6 +190,19 @@ std::shared_ptr<const ResourceTable> ResourceTable::parse(const std::vector<uint
                         entry.defaultConfig = isDefault;
                         const uint32_t id = (pkgId << 24) | (static_cast<uint32_t>(typeId) << 16) | entryIndex;
                         auto it = t->entries_.find(id);
+                        // The bag is read only for the value that is kept (the default configuration, or the first one).
+                        if (entry.complex && esize >= 16 && r.in(ep, 16) && (it == t->entries_.end() || (isDefault && !it->second.defaultConfig))) {
+                            Bag bag;
+                            bag.parent = r.u32(ep + 8);
+                            const uint32_t count = r.u32(ep + 12);
+                            for (uint32_t k = 0; k < count && k < 4096 && bagValues < kMaxBagValues; ++k, ++bagValues) {
+                                const size_t at = ep + esize + static_cast<size_t>(k) * 12;
+                                if (!r.in(at, 12) || at + 12 > c + csize) break;
+                                bag.values.push_back({r.u32(at), r.u8(at + 7), r.u32(at + 8)});
+                            }
+                            t->bags_.push_back(std::move(bag));
+                            entry.bag = static_cast<uint32_t>(t->bags_.size());
+                        }
                         if (it == t->entries_.end()) {
                             entry.configs = 1;
                             t->entries_.emplace(id, entry);
@@ -254,6 +269,47 @@ std::string ResourceTable::render(uint8_t type, uint32_t data, int depth) const 
     }
 }
 
+// "[a, b]" for an array, "one: x, other: y" for plurals, "parent @style/Base { @attr/x = v, ... }" for a style.
+std::string ResourceTable::renderBag(const Entry& e) const {
+    if (!e.bag || e.bag > bags_.size()) return {};
+    const Bag& bag = bags_[e.bag - 1];
+    const std::string type = e.typeIndex < typeNames_.size() ? typeNames_[e.typeIndex] : std::string();
+    static const char* const quantities[6] = {"other", "zero", "one", "two", "few", "many"};
+    const bool plural = type == "plurals", style = type == "style";
+    const bool array = !plural && !style && !bag.values.empty() && (bag.values.front().name >> 16) == 0x0200;
+    std::string out;
+    for (const Bag::Value& v : bag.values) {
+        if (out.size() > 400) {
+            out += ", ...";
+            break;
+        }
+        if (!out.empty()) out += ", ";
+        const std::string text = render(v.dataType, v.data, 1);
+        if (array) {
+            out += text;
+        } else if (plural && v.name >= 0x01000004 && v.name <= 0x01000009) {
+            out += std::string(quantities[v.name - 0x01000004]) + ": " + text;
+        } else {
+            std::string key = type == "attr" && v.name == 0x01000000 ? std::string("format") : reference(v.name);
+            if (key.empty()) {
+                char buf[16];
+                std::snprintf(buf, sizeof buf, "0x%08X", v.name);
+                key = buf;
+            }
+            out += key + " = " + text;
+        }
+    }
+    if (array) return "[" + out + "]";
+    if (plural) return out;
+    std::string parent = bag.parent ? reference(bag.parent) : std::string();
+    if (bag.parent && parent.empty()) {
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "0x%08X", bag.parent);
+        parent = buf;
+    }
+    return (parent.empty() ? std::string() : "parent " + parent + " ") + "{ " + out + " }";
+}
+
 std::string ResourceTable::reference(uint32_t id) const {
     auto it = entries_.find(id);
     if (it == entries_.end()) return {};
@@ -279,7 +335,7 @@ bool ResourceTable::lookup(uint32_t id, Item& out) const {
     out.name = e.key < keys_.size() ? keys_[e.key] : std::string();
     out.complex = e.complex;
     out.configs = e.configs;
-    out.value = e.complex ? std::string() : render(e.dataType, e.data, 0);
+    out.value = e.complex ? renderBag(e) : render(e.dataType, e.data, 0);
     return true;
 }
 

@@ -1802,7 +1802,7 @@ void AnalysisPanel::drawResources(Root& apk) {
                     ImGui::TextUnformatted(it.name.c_str());
                 }
                 ImGui::TableNextColumn();
-                if (it.complex) ImGui::TextDisabled("(style / array)");
+                if (it.complex && it.value.empty()) ImGui::TextDisabled("(style / array)");
                 else {
                     std::string v = it.value.size() > 200 ? it.value.substr(0, 200) + "..." : it.value;
                     for (char& c : v)

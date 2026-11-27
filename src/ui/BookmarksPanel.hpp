@@ -31,4 +31,6 @@ private:
     std::vector<int> rows_;  // annotation ids, sorted by location
     ui::CommentPopup popup_;
     FileBrowser exportBrowser_;
+    FileBrowser mappingBrowser_;
+    std::string mappingGroup_;  // the APK whose symbol renames are being exported
 };

@@ -5,11 +5,13 @@
 #include <utility>
 #include <vector>
 #include "analysis/ApkAnalysis.hpp"
+#include "analysis/Mapping.hpp"
 #include "analysis/NativeCode.hpp"
+#include "core/ResourceTable.hpp"
 
 // Built-in decompilers for the Decompiler panel (the Ghidra / r2dec pane of
-// Cutter): Java-like code for a Dalvik method and C-like code for an AArch64
-// function. Both translate instructions to statements over registers, fold
+// Cutter): Java-like code for a Dalvik method and C-like code for a native
+// function (AArch64, ARM / Thumb, x86, x86-64). Both translate instructions to statements over registers, fold
 // single-use temporaries into expressions, drop dead definitions, and then
 // structure the control-flow graph into if / else, while, switch and break /
 // continue, falling back to labelled gotos where the graph is not structured.
@@ -52,7 +54,16 @@ struct Output {
     std::vector<std::pair<std::string, std::string>> renamedSymbols;  // applied symbol renames: shown -> original
 };
 
-Output decompileMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m);
+// What the Dalvik output can be named with, both optional: a ProGuard / R8 mapping (classes, methods and fields show
+// their original names) and the APK's resource table (a constant that is a resource id shows as R.type.name).
+struct Naming {
+    const mapping::Mapping* mapping = nullptr;
+    const ResourceTable* resources = nullptr;
+};
+Output decompileMethod(const ApkAnalysis& a, const ApkAnalysis::MethodDef& m, const Naming& naming = {});
+// Flattens needless nesting in structured output: "else { if ... }" becomes "else if", an "if" that only wraps another
+// "if" joins its condition with &&, and the "else" after a branch that returns / throws / breaks / continues goes.
+void flattenNesting(std::vector<Line>& lines);
 Output decompileNative(const NativeCode& nc, const NativeCode::Function& f);
 
 // Plain text (4-space indentation), for copying.

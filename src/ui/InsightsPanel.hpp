@@ -35,6 +35,7 @@ private:
     void drawEndpoints();
     void drawDecoded();
     void drawRules();
+    void drawSensitiveLogs();
     void drawManifest();
     void drawRetrace();
     // `callee`: the called signature, to show the call's constant arguments.
@@ -57,6 +58,12 @@ private:
     std::string netsecFile_;  // the entry the config was read from
     std::vector<insights::EndpointHost> endpoints_;
     std::vector<insights::DecodedString> decoded_;
+    std::vector<ApkAnalysis::CodeRef> logRefs_;  // parallel to result_.logs
+    // Log calls are traced on a worker (following data through fields and callers takes a moment); the rows land in
+    // result_.logs when it finishes.
+    using LogRows = std::vector<std::pair<insights::LogFinding, ApkAnalysis::CodeRef>>;
+    std::future<LogRows> logJob_;
+    void collectLogs(bool wait);
     // Strings decoded by running the app's own routines (emulator): a worker, then the rows.
     std::future<std::pair<std::vector<emu::Decrypted>, emu::SweepStats>> emuJob_;
     std::shared_ptr<std::atomic<bool>> emuStop_;

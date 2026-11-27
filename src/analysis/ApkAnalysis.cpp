@@ -41,7 +41,7 @@ bool writesFirstRegister(uint8_t op) {
 bool isWideWrite(uint8_t op) {
     return op == 0x04 || op == 0x05 || op == 0x06 || op == 0x0b || (op >= 0x16 && op <= 0x19) || op == 0x45 ||
            op == 0x53 || op == 0x61 || op == 0x7d || op == 0x7e || op == 0x80 || op == 0x81 || op == 0x83 ||
-           op == 0x84 || op == 0x86 || op == 0x88 || op == 0x89 || op == 0x8b || op == 0x8c ||
+           op == 0x86 || op == 0x88 || op == 0x89 || op == 0x8b ||
            (op >= 0x9b && op <= 0xa5) || (op >= 0xab && op <= 0xaf) || (op >= 0xbb && op <= 0xc5) ||
            (op >= 0xcb && op <= 0xcf);
 }
@@ -190,6 +190,609 @@ std::vector<const ApkAnalysis::ClassEntry*> ApkAnalysis::searchClasses(std::stri
         if (n.empty() || tex::ciFind(classDescriptor(c), n) != std::string_view::npos) out.push_back(&c);
     }
     return out;
+}
+
+std::string ApkAnalysis::renamesAsMapping(const std::vector<std::pair<std::string, std::string>>& symbols, size_t* matched,
+                                          const mapping::Mapping* loaded) const {
+    const std::map<std::string, std::string> renames(symbols.begin(), symbols.end());
+    std::set<std::string> used;
+    // The user's name for something shown as `shown` (the loaded mapping's name) and defined as `app`, else nullptr.
+    const auto renamed = [&](const std::string& shown, const std::string& app) -> const std::string* {
+        for (const std::string* key : {&shown, &app}) {
+            const auto it = renames.find(*key);
+            if (it == renames.end() || it->second.empty()) continue;
+            used.insert(*key);
+            return &it->second;
+        }
+        return nullptr;
+    };
+    // The dotted class name as the user sees it, renamed parts replaced: a simple name, or the pieces around '$'.
+    const auto className = [&](const std::string& java) {
+        const std::string base = loaded ? loaded->originalClass(java) : java;
+        const size_t dot = base.find_last_of('.');
+        const std::string package = dot == std::string::npos ? std::string() : base.substr(0, dot + 1);
+        const std::string simple = base.substr(package.size());
+        const std::string appSimple = java.substr(java.find_last_of('.') + 1);
+        if (const std::string* whole = renamed(simple, appSimple)) return package + *whole;
+        std::string out;
+        size_t start = 0;
+        while (true) {
+            const size_t dollar = simple.find('$', start);
+            const std::string part = simple.substr(start, dollar == std::string::npos ? std::string::npos : dollar - start);
+            const std::string* r = renamed(part, part);
+            out += r ? *r : part;
+            if (dollar == std::string::npos) break;
+            out += '$';
+            start = dollar + 1;
+        }
+        return package + out;
+    };
+    // A type as a mapping file writes it ("int", "java.lang.String[]"): once with the new names, once as the loaded
+    // mapping has it (to look members up).
+    const auto typeName = [&](std::string_view descriptor, bool newNames) {
+        size_t dimensions = 0;
+        while (!descriptor.empty() && descriptor.front() == '[') descriptor.remove_prefix(1), ++dimensions;
+        std::string name = DexFile::descriptorToJava(descriptor);
+        if (!descriptor.empty() && descriptor.front() == 'L') name = newNames ? className(name) : loaded ? loaded->originalClass(name) : name;
+        for (size_t i = 0; i < dimensions; ++i) name += "[]";
+        return name;
+    };
+
+    std::string out;
+    for (const ClassEntry& c : classes_) {
+        const DexFile& dex = *dexes_[c.dex];
+        const std::string java = DexFile::descriptorToJava(classDescriptor(c));
+        const std::string original = className(java);
+        std::string members;
+        std::set<std::string> seen;
+        DexFile::ClassData data;
+        if (dex.classData(classDef(c), data)) {
+            for (const DexFile::EncodedField& f : data.fields) {
+                const std::string name(dex.fieldName(f.fieldIdx));
+                const std::string_view type = dex.typeDescriptor(dex.fieldType(f.fieldIdx));
+                std::string shown = loaded ? loaded->originalMember(java, name, typeName(type, false) + " ", false) : std::string();
+                if (shown.empty()) shown = name;
+                if (const std::string* r = renamed(shown, name)) {
+                    const std::string line = "    " + typeName(type, true) + " " + *r + " -> " + name + "\n";
+                    if (seen.insert(line).second) members += line;
+                }
+            }
+            for (const DexFile::EncodedMethod& m : data.methods) {
+                const std::string name(dex.methodName(m.methodIdx));
+                if (name.empty() || name.front() == '<') continue;
+                const uint32_t proto = dex.methodProto(m.methodIdx);
+                std::string args, mappedArgs;
+                for (uint32_t p : dex.protoParameters(proto)) {
+                    args += (args.empty() ? "" : ",") + typeName(dex.typeDescriptor(p), true);
+                    mappedArgs += (mappedArgs.empty() ? "" : ",") + typeName(dex.typeDescriptor(p), false);
+                }
+                std::string shown = loaded ? loaded->originalMember(java, name, "(" + mappedArgs + ")", true) : std::string();
+                if (shown.empty()) shown = name;
+                const std::string* r = renamed(shown, name);
+                if (!r) continue;
+                const std::string line = "    " + typeName(dex.typeDescriptor(dex.protoReturnType(proto)), true) + " " + *r + "(" + args +
+                                         ") -> " + name + "\n";
+                if (seen.insert(line).second) members += line;
+            }
+        }
+        const std::string before = loaded ? loaded->originalClass(java) : java;
+        if (original != before || !members.empty()) out += original + " -> " + java + ":\n" + members;
+    }
+    if (matched) *matched = used.size();
+    if (out.empty()) return out;
+    return "# Names chosen in ApkSpy. Variable renames and native-library names have no place in this format.\n" + out;
+}
+
+std::vector<ApkAnalysis::LogSite> ApkAnalysis::logSites(size_t limit) const {
+    static const std::pair<const char*, const char*> logs[] = {
+        {"Landroid/util/Log;", "d"}, {"Landroid/util/Log;", "v"},   {"Landroid/util/Log;", "i"},       {"Landroid/util/Log;", "w"},
+        {"Landroid/util/Log;", "e"}, {"Landroid/util/Log;", "wtf"}, {"Ljava/io/PrintStream;", "println"}, {"Ljava/io/PrintStream;", "print"}};
+    const auto isLog = [](const std::string& callee) {
+        for (const auto& [cls, name] : logs)
+            if (callee.rfind(std::string(cls) + "->" + name + "(", 0) == 0) return true;
+        return false;
+    };
+    std::set<std::pair<uint16_t, uint32_t>> methods;  // (dex, method index) that call one of them
+    for (const auto& [cls, name] : logs)
+        for (const XrefHit& hit : callersOf(cls, name, {}, limit)) methods.insert({hit.from.dex, hit.from.method});
+
+    std::vector<LogSite> out;
+    for (const auto& [dexIndex, methodIdx] : methods) {
+        if (out.size() >= limit) break;
+        std::string cls, name, proto;
+        const std::string signature = methodSignature(CodeRef{dexIndex, methodIdx, 0});
+        if (!splitMethodRef(signature, cls, name, proto)) continue;
+        for (const MethodDef& def : findMethodDefs(cls, name, proto)) {
+            if (def.dex != dexIndex) continue;
+            std::map<uint32_t, std::vector<std::pair<int, std::string>>> args;
+            for (ConstArgCall& call : constantArguments(def)) {
+                for (auto& a : call.args)  // string constants come quoted, as the listing shows them
+                    if (a.second.size() >= 2 && a.second.front() == '"' && a.second.back() == '"') a.second = a.second.substr(1, a.second.size() - 2);
+                args[call.pc] = std::move(call.args);
+            }
+            std::vector<std::string> appended, calls;
+            for (const Callee& c : calleesOf(def)) {
+                const auto constant = args.find(c.pc);
+                if (!isLog(c.signature)) {
+                    if (constant != args.end() && c.signature.find("Ljava/lang/String") == 0)
+                        for (const auto& a : constant->second) appended.push_back(a.second);
+                    else if (constant != args.end() && c.signature.find(";->append(") != std::string::npos)
+                        for (const auto& a : constant->second) appended.push_back(a.second);
+                    calls.push_back(c.signature);
+                    continue;
+                }
+                LogSite site;
+                site.ref = {dexIndex, methodIdx, c.pc};
+                site.method = signature;
+                site.callee = c.signature;
+                // The message is the second argument of Log.x(tag, message) and of println(message) after its receiver.
+                const bool oneString = c.signature.find(";->print") != std::string::npos;
+                const bool noMessage = c.signature.find("println()V") != std::string::npos;
+                if (constant != args.end())
+                    for (const auto& a : constant->second) {
+                        if (a.first == 0 && oneString) continue;  // the stream itself
+                        site.constants.push_back(a.second);
+                        if (a.first == 1) site.messageConstant = true;
+                    }
+                if (noMessage) site.messageConstant = true;
+                site.appended = std::move(appended);
+                site.calls = std::move(calls);
+                appended.clear();
+                calls.clear();
+                out.push_back(std::move(site));
+                if (out.size() >= limit) break;
+            }
+            break;
+        }
+    }
+    return out;
+}
+
+namespace {
+
+// Follows values that name something sensitive through one method's registers: a forward data-flow pass over its
+// control-flow graph. App methods are summarised by what they can return and what they put into the objects they are
+// given (a list or map passed in); a logged parameter is looked up at the method's callers. A field read brings what
+// the app's code stores in that field anywhere (directly, or by adding to the collection the field holds), with the
+// stored parameters looked up at the storing method's callers. Native code and reflection are not followed.
+class Taint {
+public:
+    using Labels = std::set<std::string>;
+    static constexpr const char* kParameter = "\x01";  // "\x01<n>": whatever the n-th declared argument register holds
+    static constexpr uint32_t kParameterObject = 0x80000000u;  // object number of the n-th argument: this + n
+
+    Taint(const ApkAnalysis& a, const ApkAnalysis::Classifier& classify) : A(a), classify_(classify) {}
+
+    struct Result {
+        std::map<uint32_t, Labels> arguments;  // invoke pc -> labels of the message argument(s) asked for
+        Labels returned;
+        std::map<uint32_t, Labels> intoParameters;  // argument register n -> what was put into the object passed there
+        std::map<std::string, Labels> intoFields;   // "Lcls;->name" -> what was stored in the field or its object
+    };
+    struct Summary {
+        Labels returned;
+        std::map<uint32_t, Labels> intoParameters;
+    };
+
+    bool defOf(uint16_t dexIndex, uint32_t methodIdx, ApkAnalysis::MethodDef& out) const {
+        std::string cls, name, proto;
+        if (!ApkAnalysis::splitMethodRef(A.methodSignature(ApkAnalysis::CodeRef{dexIndex, methodIdx, 0}), cls, name, proto)) return false;
+        for (const ApkAnalysis::MethodDef& d : A.findMethodDefs(cls, name, proto))
+            if (d.dex == dexIndex) {
+                out = d;
+                return true;
+            }
+        return false;
+    }
+
+    // What the callers of `signature` pass as argument register `position`, each with `suffix(caller)` appended.
+    Labels fromCallers(const std::string& signature, int position, const std::function<std::string(const std::string&)>& suffix, int depth) {
+        Labels out;
+        std::string cls, name, proto;
+        if (!ApkAnalysis::splitMethodRef(signature, cls, name, proto) || ++callerLookups_ > 3000) return out;
+        size_t looked = 0;
+        for (const ApkAnalysis::XrefHit& hit : A.callersOf(cls, name, proto, 40)) {
+            ApkAnalysis::MethodDef caller;
+            if (!defOf(hit.from.dex, hit.from.method, caller) || ++looked > 20) continue;
+            const Result c = run(
+                caller, [&](uint32_t pc, const std::string&) { return pc == hit.from.pc ? std::vector<int>{position} : std::vector<int>(); }, depth + 1);
+            const auto at = c.arguments.find(hit.from.pc);
+            if (at == c.arguments.end()) continue;
+            for (const std::string& l : at->second)
+                if (!l.empty() && l[0] != kParameter[0]) out.insert(l + suffix(A.methodSignature(hit.from)));
+        }
+        return out;
+    }
+
+    // `wanted(callee signature)` gives the argument positions to record at an invoke (empty: none).
+    Result run(const ApkAnalysis::MethodDef& m, const std::function<std::vector<int>(uint32_t pc, const std::string&)>& wanted, int depth) {
+        Result result;
+        const DexFile& dex = *A.dexes()[m.dex];
+        DexFile::CodeItem code;
+        if (!m.method.codeOff || !dex.codeItem(m.method.codeOff, code) || code.insnsSize > 20000 || code.registers > 1024) return result;
+        const std::vector<ApkAnalysis::BasicBlock> blocks = A.controlFlowGraph(m);
+        if (blocks.empty() || blocks.size() > 2000) return result;
+        Result* const outer = result_;
+        result_ = &result;
+        struct Restore {
+            Result*& at;
+            Result* value;
+            ~Restore() { at = value; }
+        } restore{result_, outer};
+        State entry;
+        for (uint32_t i = 0; i < code.ins; ++i) {
+            entry.labels[code.registers - code.ins + i] = {kParameter + std::to_string(i)};
+            entry.object[code.registers - code.ins + i] = kParameterObject + i;
+        }
+        std::vector<State> in(blocks.size());
+        std::vector<char> queued(blocks.size(), 0), reached(blocks.size(), 0);
+        in[0] = entry;
+        reached[0] = 1;
+        std::vector<size_t> work{0};
+        queued[0] = 1;
+        for (size_t steps = 0; !work.empty() && steps < blocks.size() * 8 + 32; ++steps) {
+            const size_t b = work.back();
+            work.pop_back();
+            queued[b] = 0;
+            State state = in[b];
+            Labels last;  // what the pending move-result receives
+            for (uint32_t pc = blocks[b].startPc; pc < blocks[b].endPc && pc < code.insnsSize;) {
+                const dalvik::Insn insn = dalvik::decode(code, pc);
+                pc += std::max<uint32_t>(insn.size, 1);
+                if (insn.valid && !insn.payload) step(dex, insn, state, last, wanted, result, depth);
+            }
+            const auto flow = [&](uint32_t to) {
+                if (to >= blocks.size()) return;
+                bool changed = false;
+                if (!reached[to]) in[to] = state, reached[to] = 1, changed = true;  // the first path brings everything it knows
+                else changed = merge(in[to], state);
+                if (changed && !queued[to]) queued[to] = 1, work.push_back(to);
+            };
+            for (uint32_t s : blocks[b].successors) flow(s);
+            for (uint32_t h : blocks[b].exceptional) flow(h);
+        }
+        return result;
+    }
+
+    // What `m` can return and put into its arguments' objects: sensitive names, and parameters it passes through.
+    const Summary& summary(const ApkAnalysis::MethodDef& m, int depth) {
+        const std::pair<uint16_t, uint32_t> key{m.dex, m.method.methodIdx};
+        const auto found = summaries_.find(key);
+        if (found != summaries_.end()) return found->second;
+        static const Summary none;
+        if (depth >= 3 || analysed_ >= 4000) return none;  // too deep here; a shallower call may still look
+        ++analysed_;
+        summaries_[key];  // recursion sees an empty summary
+        Result r = run(m, [](uint32_t, const std::string&) { return std::vector<int>(); }, depth + 1);
+        summaries_[key] = Summary{std::move(r.returned), std::move(r.intoParameters)};
+        return summaries_[key];
+    }
+
+    // What the app stores in field `cls->name` anywhere: written to it, or put into the object it holds.
+    const Labels& stored(const std::string& cls, const std::string& name, int depth) {
+        const std::string key = cls + "->" + name;
+        static const Labels none;
+        const auto found = fields_.find(key);
+        if (found != fields_.end()) return found->second;
+        if (depth >= 2 || fieldLookups_ > 3000) return none;  // too deep here; a shallower read may still look
+        ++fieldLookups_;
+        fields_[key];  // recursion sees nothing stored
+        Labels out;
+        std::set<std::pair<uint16_t, uint32_t>> seen;
+        size_t methods = 0;
+        for (const ApkAnalysis::XrefHit& hit : A.fieldAccesses(cls, name, 80)) {
+            if (!seen.insert({hit.from.dex, hit.from.method}).second || ++methods > 24) continue;
+            ApkAnalysis::MethodDef def;
+            if (!defOf(hit.from.dex, hit.from.method, def)) continue;
+            const Result r = run(def, [](uint32_t, const std::string&) { return std::vector<int>(); }, depth + 1);
+            const auto it = r.intoFields.find(key);
+            if (it == r.intoFields.end()) continue;
+            const std::string writer = A.methodSignature(hit.from);
+            const auto suffix = [&](const std::string& by) { return ", kept in field " + name + " by " + by; };
+            for (const std::string& label : it->second) {
+                if (label.empty()) continue;
+                if (label[0] != kParameter[0]) {
+                    add(out, {label.find(", kept in field ") == std::string::npos ? label + suffix(writer) : label});
+                } else {  // the method stores what it is given: what do its callers pass?
+                    add(out, fromCallers(writer, std::atoi(label.c_str() + 1), suffix, depth + 1));
+                }
+            }
+        }
+        fields_[key] = std::move(out);
+        return fields_[key];
+    }
+
+private:
+    struct State {
+        std::map<uint32_t, Labels> labels;
+        std::map<uint32_t, std::string> text;  // registers holding a known string constant
+        std::map<uint32_t, uint32_t> object;   // registers known to hold the same object share a number
+        std::map<uint32_t, std::string> from;  // registers holding the object read from an app field ("Lcls;->name")
+    };
+
+    // The object in `reg` now holds `labels`: so does every register referring to it, the argument it came in as and
+    // the field it was read from.
+    void taint(State& st, uint32_t reg, const Labels& labels) {
+        if (labels.empty()) return;
+        add(st.labels[reg], labels);
+        const auto field = st.from.find(reg);
+        if (field != st.from.end() && result_) add(result_->intoFields[field->second], labels);
+        const auto id = st.object.find(reg);
+        if (id == st.object.end()) return;
+        if (id->second >= kParameterObject && result_) add(result_->intoParameters[id->second - kParameterObject], labels);
+        for (const auto& [other, number] : st.object) {
+            if (number != id->second || other == reg) continue;
+            add(st.labels[other], labels);
+            const auto alias = st.from.find(other);
+            if (alias != st.from.end() && result_) add(result_->intoFields[alias->second], labels);
+        }
+    }
+
+    static bool add(Labels& to, const Labels& from) {
+        bool changed = false;
+        for (const std::string& l : from)
+            if (to.size() < 8 && to.insert(l).second) changed = true;
+        return changed;
+    }
+
+    static bool merge(State& to, const State& from) {
+        bool changed = false;
+        for (const auto& [reg, labels] : from.labels) changed = add(to.labels[reg], labels) || changed;
+        for (auto it = to.text.begin(); it != to.text.end();) {  // a constant survives only when every path agrees
+            const auto other = from.text.find(it->first);
+            if (other == from.text.end() || other->second != it->second) it = to.text.erase(it), changed = true;
+            else ++it;
+        }
+        for (auto it = to.object.begin(); it != to.object.end();) {
+            const auto other = from.object.find(it->first);
+            if (other == from.object.end() || other->second != it->second) it = to.object.erase(it), changed = true;
+            else ++it;
+        }
+        for (auto it = to.from.begin(); it != to.from.end();) {
+            const auto other = from.from.find(it->first);
+            if (other == from.from.end() || other->second != it->second) it = to.from.erase(it), changed = true;
+            else ++it;
+        }
+        return changed;
+    }
+
+    std::string sensitive(std::string_view name) const { return classify_ ? classify_(name) : std::string(); }
+
+    void step(const DexFile& dex, const dalvik::Insn& in, State& st, Labels& last,
+              const std::function<std::vector<int>(uint32_t, const std::string&)>& wanted, Result& result, int depth) {
+        const uint8_t op = in.opcode;
+        const auto& info = dalvik::opInfo(op);
+        const auto labelsOf = [&](uint32_t r) {
+            const auto it = st.labels.find(r);
+            return it == st.labels.end() ? Labels() : it->second;
+        };
+        const auto set = [&](uint32_t r, Labels l) {
+            st.text.erase(r);
+            st.object.erase(r);
+            st.from.erase(r);
+            if (l.empty()) st.labels.erase(r);
+            else st.labels[r] = std::move(l);
+        };
+        if (info.flow == dalvik::Flow::Invoke && info.ref == dalvik::RefKind::Method && in.index < dex.methodCount()) {
+            std::vector<uint32_t> regs;
+            for (uint32_t k = 0; k < in.regCount; ++k) regs.push_back(in.range ? in.regs[0] + k : in.regs[k]);
+            const std::string sig = dex.methodSignature(in.index);
+            for (int position : wanted(in.pc, sig))
+                if (position >= 0 && static_cast<size_t>(position) < regs.size()) add(result.arguments[in.pc], labelsOf(regs[static_cast<size_t>(position)]));
+            call(dex, in, sig, regs, st, last, depth);
+            return;
+        }
+        if (op == 0x24 || op == 0x25) {  // filled-new-array
+            last.clear();
+            for (uint32_t k = 0; k < in.regCount; ++k) add(last, labelsOf(in.range ? in.regs[0] + k : in.regs[k]));
+            return;
+        }
+        const uint32_t a = in.regCount ? in.regs[0] : 0;
+        if (op >= 0x01 && op <= 0x09) {
+            const uint32_t b = in.regs[1];
+            const auto text = st.text.find(b);
+            const bool known = text != st.text.end();
+            const std::string value = known ? text->second : std::string();
+            const auto object = st.object.find(b);
+            const uint32_t number = object != st.object.end() ? object->second : 0;
+            const auto field = st.from.find(b);
+            const std::string source = field != st.from.end() ? field->second : std::string();
+            set(a, labelsOf(b));
+            if (known) st.text[a] = value;
+            if (number) st.object[a] = number;
+            if (!source.empty()) st.from[a] = source;
+        } else if (op >= 0x0a && op <= 0x0c) {
+            set(a, last);
+            if (lastObject_) st.object[a] = lastObject_;
+            lastObject_ = 0;
+        } else if (op == 0x0f || op == 0x10 || op == 0x11) {
+            add(result.returned, labelsOf(a));
+        } else if (op == 0x1a || op == 0x1b) {
+            set(a, {});
+            st.text[a] = dex.string(in.index);
+        } else if ((op >= 0x12 && op <= 0x19) || op == 0x1c) {
+            set(a, {});
+        } else if (op == 0x22 || op == 0x23) {  // a new object
+            set(a, {});
+            st.object[a] = in.pc + 1;
+        } else if (op >= 0x44 && op <= 0x4a) {  // aget
+            set(a, labelsOf(in.regs[1]));
+        } else if (op >= 0x4b && op <= 0x51) {  // aput: the array now holds it
+            taint(st, in.regs[1], labelsOf(a));
+        } else if ((op >= 0x52 && op <= 0x58) || (op >= 0x60 && op <= 0x66)) {  // iget / sget
+            Labels l;
+            std::string key;
+            if (in.index < dex.fieldCount()) {
+                const std::string_view type = dex.typeDescriptor(dex.fieldType(in.index));
+                const std::string name(dex.fieldName(in.index));
+                // Only data-carrying fields: a View called "passwordInput" is not the password.
+                // Not int: resource and styleable indices ("Fragment_android_id") are ints named after what they index.
+                const bool data = type == "Ljava/lang/String;" || type == "[C" || type == "[B" || type == "J" || type == "D" ||
+                                  type == "Ljava/lang/CharSequence;";
+                if (data && !sensitive(name).empty()) l.insert("field " + name);
+                const std::string cls(dex.typeDescriptor(dex.fieldClass(in.index)));
+                // What the app stores there, for fields that can carry data: text, bytes, collections, JSON, bundles.
+                const bool carrier = data || type == "Ljava/lang/Object;" || startsWith(type, "Ljava/util/") ||
+                                     startsWith(type, "Lorg/json/") || type == "Landroid/os/Bundle;" || type == "[Ljava/lang/String;";
+                if (carrier && A.findClass(cls)) {
+                    key = cls + "->" + name;
+                    add(l, stored(cls, name, depth));
+                }
+            }
+            set(a, std::move(l));
+            if (!key.empty()) st.from[a] = key;
+        } else if ((op >= 0x59 && op <= 0x5f) || (op >= 0x67 && op <= 0x6d)) {  // iput / sput
+            if (in.index < dex.fieldCount() && result_) {
+                const std::string cls(dex.typeDescriptor(dex.fieldClass(in.index)));
+                if (A.findClass(cls)) add(result_->intoFields[cls + "->" + std::string(dex.fieldName(in.index))], labelsOf(a));
+            }
+        } else if (info.flow == dalvik::Flow::Normal && in.regCount > 0 && ((op >= 0x7b && op <= 0xe2) || op == 0x20 || op == 0x21)) {
+            Labels l;
+            for (uint32_t k = in.regCount >= 3 || op < 0xb0 || op > 0xcf ? 1 : 0; k < in.regCount; ++k) add(l, labelsOf(in.regs[k]));
+            set(a, std::move(l));
+        } else if (op == 0x0d) {
+            set(a, {});
+        }
+    }
+
+    void call(const DexFile& dex, const dalvik::Insn& in, const std::string& sig, const std::vector<uint32_t>& regs, State& st, Labels& last,
+              int depth) {
+        const uint8_t op = in.opcode;
+        const bool isStatic = op == 0x71 || op == 0x77;
+        const std::string cls(dex.typeDescriptor(dex.methodClass(in.index)));
+        const std::string name(dex.methodName(in.index));
+        const auto labelsOf = [&](uint32_t r) {
+            const auto it = st.labels.find(r);
+            return it == st.labels.end() ? Labels() : it->second;
+        };
+        const auto textOf = [&](size_t k) {
+            if (k >= regs.size()) return std::string();
+            const auto it = st.text.find(regs[k]);
+            return it == st.text.end() ? std::string() : it->second;
+        };
+        const std::string proto = dex.protoDescriptor(dex.methodProto(in.index));
+        const bool returnsValue = proto.back() != 'V';
+        last.clear();
+        lastObject_ = 0;
+
+        // Platform sources.
+        static const std::pair<const char*, const char*> sources[] = {
+            {";->getDeviceId(", "the device id"},    {";->getImei(", "the IMEI"},
+            {";->getSubscriberId(", "the IMSI"},     {";->getSimSerialNumber(", "the SIM serial number"},
+            {";->getLine1Number(", "the phone number"}, {";->getLatitude(", "the location latitude"},
+            {";->getLongitude(", "the location longitude"}, {";->getAccounts(", "the device accounts"},
+            {";->getAccountsByType(", "the device accounts"}, {"Landroid/webkit/CookieManager;->getCookie(", "cookies"},
+            {"Landroid/content/ClipboardManager;->getPrimaryClip(", "the clipboard"}};
+        for (const auto& [pattern, what] : sources)
+            if (sig.find(pattern) != std::string::npos) {
+                last.insert(what);
+                return;
+            }
+        // Values looked up by a telling key: preferences, intent extras, bundles, JSON, maps.
+        if (returnsValue && !isStatic && regs.size() >= 2 && (name.rfind("get", 0) == 0 || name.rfind("opt", 0) == 0)) {
+            const std::string key = textOf(1);
+            if (!key.empty() && !sensitive(key).empty()) last.insert("the value stored as \"" + key + "\"");
+        }
+        // Getters named after the data.
+        if (returnsValue && name.size() > 3 && name.rfind("get", 0) == 0 && proto.back() == ';') {
+            const std::string what = sensitive(name.substr(3));
+            // "getLocation" is mostly a place on screen or in a file: only the platform's Location counts.
+            if (!what.empty() && (what != "location" || proto.find(")Landroid/location/Location;") != std::string::npos))
+                last.insert(name + "()");
+        }
+
+        const bool app = A.findClass(cls) != nullptr;
+        if (app) {
+            const auto defs = A.findMethodDefs(cls, name, proto);
+            // A summary's labels in the caller's terms: an argument passed through becomes what the caller passed.
+            const auto resolve = [&](const Labels& labels) {
+                Labels out;
+                for (const std::string& label : labels) {
+                    if (!label.empty() && label[0] == kParameter[0]) {
+                        const size_t k = static_cast<size_t>(std::atoi(label.c_str() + 1));
+                        if (k < regs.size()) add(out, labelsOf(regs[k]));
+                    } else {
+                        add(out, {label});
+                    }
+                }
+                return out;
+            };
+            for (const auto& d : defs) {
+                if (!d.method.codeOff) continue;
+                const Summary s = summary(d, depth);  // a copy: summaries of other methods may be added meanwhile
+                add(last, resolve(s.returned));
+                for (const auto& [k, labels] : s.intoParameters)  // e.g. a helper that adds the IMEI to the list it is given
+                    if (k < regs.size()) taint(st, regs[k], resolve(labels));
+                break;
+            }
+            if (defs.empty() || name == "<init>")
+                for (size_t k = 1; !isStatic && k < regs.size(); ++k) taint(st, regs[0], labelsOf(regs[k]));
+            return;
+        }
+        // Library calls: what goes in can come out, and objects collect what they are given (StringBuilder, List, Map).
+        Labels all;
+        for (uint32_t r : regs) add(all, labelsOf(r));
+        static const char* const swallow[] = {"length", "isEmpty", "equals", "hashCode", "size", "indexOf", "contains", "startsWith",
+                                              "endsWith", "compareTo", "matches"};
+        const bool measured = std::find_if(std::begin(swallow), std::end(swallow), [&](const char* s) { return name == s; }) != std::end(swallow);
+        if (returnsValue && !measured) add(last, all);
+        static const char* const store[] = {"put", "add", "append", "insert", "offer", "push", "set", "write"};
+        const bool stores = name == "<init>" ||
+                            std::find_if(std::begin(store), std::end(store), [&](const char* s) { return name.rfind(s, 0) == 0; }) != std::end(store);
+        if (!isStatic && !regs.empty() && !measured && stores) {
+            for (size_t k = 1; k < regs.size(); ++k) taint(st, regs[0], labelsOf(regs[k]));
+            if (name == "append") {  // returns the builder itself
+                add(last, labelsOf(regs[0]));
+                const auto object = st.object.find(regs[0]);
+                if (object != st.object.end()) lastObject_ = object->second;
+            }
+        }
+    }
+
+    const ApkAnalysis& A;
+    const ApkAnalysis::Classifier& classify_;
+    std::map<std::pair<uint16_t, uint32_t>, Summary> summaries_;
+    std::map<std::string, Labels> fields_;  // stored(): field -> what the app puts there
+    Result* result_ = nullptr;              // the run in progress
+    int analysed_ = 0, fieldLookups_ = 0, callerLookups_ = 0;
+    uint32_t lastObject_ = 0;  // the object the pending move-result refers to
+};
+
+}  // namespace
+
+void ApkAnalysis::traceLogs(std::vector<LogSite>& sites, const Classifier& classify) const {
+    Taint taint(*this, classify);
+    // Message positions of the log calls: Log.x(tag, message[, throwable]); print(ln)(message) after the stream.
+    const auto isLog = [](const std::string& callee) {
+        return callee.rfind("Landroid/util/Log;->", 0) == 0 || callee.rfind("Ljava/io/PrintStream;->print", 0) == 0;
+    };
+    std::map<std::pair<uint16_t, uint32_t>, std::vector<size_t>> byMethod;
+    for (size_t i = 0; i < sites.size(); ++i) byMethod[{sites[i].ref.dex, sites[i].ref.method}].push_back(i);
+
+    for (const auto& [key, indices] : byMethod) {
+        MethodDef def;
+        if (!taint.defOf(key.first, key.second, def)) continue;
+        const Taint::Result r = taint.run(
+            def, [&](uint32_t, const std::string& callee) { return isLog(callee) ? std::vector<int>{1, 2} : std::vector<int>(); }, 0);
+        for (size_t i : indices) {
+            LogSite& site = sites[i];
+            site.traced = true;
+            const auto found = r.arguments.find(site.ref.pc);
+            if (found == r.arguments.end()) continue;
+            for (const std::string& label : found->second) {
+                if (label.empty() || label[0] != Taint::kParameter[0]) {
+                    site.flows.push_back(label);
+                    continue;
+                }
+                // The message came in as a parameter: what do the callers pass?
+                for (const std::string& l : taint.fromCallers(site.method, std::atoi(label.c_str() + 1),
+                                                              [](const std::string& by) { return ", passed in by " + by; }, 0))
+                    site.flows.push_back(l);
+            }
+            std::sort(site.flows.begin(), site.flows.end());
+            site.flows.erase(std::unique(site.flows.begin(), site.flows.end()), site.flows.end());
+        }
+    }
 }
 
 std::vector<ApkAnalysis::MethodDef> ApkAnalysis::methodsOf(const ClassEntry& c) const {
